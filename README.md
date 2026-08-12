@@ -170,4 +170,8 @@ Early days — the architecture is still settling, so the most useful contributi
 
 ## License
 
-**Not yet licensed.** Until a LICENSE file lands, default copyright applies and this code carries no usage grant. The choice is between AGPL-3.0 and MIT and will be made before v0.1.
+[MIT](LICENSE).
+
+Permissive on purpose. AliasDeck's main artifact is a CLI that people install on
+their work machines, and a copyleft licence would put it behind a legal review
+at exactly the companies where a shared alias set is most useful.

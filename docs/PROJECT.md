@@ -781,7 +781,7 @@ Settled as of 2026-08-12:
 | Native apply backend | Required |
 | Chezmoi | Optional apply backend, interface only in MVP |
 | MCP | Post-MVP |
-| License | AGPL-3.0 or MIT — decide before public launch |
+| License | **MIT** — the CLI is installed on work machines, and copyleft would put it behind corporate legal review where the tool is most useful |
 
 ---
 
