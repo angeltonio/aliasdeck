@@ -75,7 +75,10 @@ alias dps='docker ps'
 
 ```powershell
 # PowerShell — Set-Alias cannot hold a command string, so a function is generated
-function dps { docker ps @args }
+function dps {
+    $__aliasdeck_cmd = 'docker ps'
+    & ([scriptblock]::Create($__aliasdeck_cmd)) @args
+}
 ```
 
 That last line is the whole point. A dotfile manager cannot do this for you, because it does not know that `docker ps` is a command rather than a line of text.

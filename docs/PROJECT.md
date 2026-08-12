@@ -53,7 +53,7 @@ command: docker ps
 shells: [zsh, bash, powershell]
 ```
 
-and knows that this renders as `alias dps='docker ps'` in zsh but must become `function dps { docker ps @args }` in PowerShell, because `Set-Alias` cannot express it.
+and knows that this renders as `alias dps='docker ps'` in zsh but must become a generated function in PowerShell, because `Set-Alias` cannot hold an arbitrary command string. See §6.3 for the exact form, which is less obvious than it looks.
 
 The other structural difference is **targeting**. Dotfile managers target by machine, through hostname conditionals in templates. AliasDeck targets by **profile** — "Development", "Homelab", "Work" — which is how people actually think about their machines.
 
@@ -251,7 +251,10 @@ alias dps='docker ps'
 PowerShell output — `Set-Alias` cannot hold an arbitrary command string, so a function is generated:
 
 ```powershell
-function dps { docker ps @args }
+function dps {
+    $__aliasdeck_cmd = 'docker ps'
+    & ([scriptblock]::Create($__aliasdeck_cmd)) @args
+}
 ```
 
 Renderer interface:
@@ -296,6 +299,30 @@ The web UI's preview calls the same code that writes the file. No duplication, n
 This is only possible because server and CLI share a language, and it is the primary reason the backend is Go rather than TypeScript (section 9.1).
 
 **The CLI's render is authoritative.** Server-side preview is a UI convenience and is never written to a device.
+
+
+### 6.3 Why PowerShell does not inline the command
+
+The obvious form, `function dps { docker ps @args }`, is unsafe and was the
+documented design until it was tested against a real PowerShell.
+
+In POSIX the command body sits inside a quoted string, so escaping one
+character makes it inert. In that inlined PowerShell form nothing is quoted at
+all: the command is raw code inside a function block. A command containing `}`
+closes the block early, and whatever follows executes **when the file is
+sourced** — before the user has typed the alias.
+
+Verified against PowerShell 7.6.4: an alias whose command contained `}` ran an
+injected `New-Item` at source time.
+
+Wrapping the command in a single-quoted string restores the property POSIX
+already had — **the command is data at definition time and code at call time**,
+exactly like `alias x='...'`, which runs nothing when sourced. `scriptblock::Create`
+compiles it only when the function is invoked, which is what the user asked for.
+
+The escaping rule follows from the quoting: single-quote the command and double
+every embedded `'`. Same shape as the POSIX renderer's `'` → `'\''`, different
+mechanism.
 
 ---
 
