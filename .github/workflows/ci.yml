@@ -118,5 +118,5 @@ jobs:
       # found here rather than half way through publishing a tag.
       - uses: goreleaser/goreleaser-action@v6
         with:
-          version: latest
+          version: "~> v2"
           args: check

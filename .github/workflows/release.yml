@@ -32,7 +32,7 @@ jobs:
 
       - uses: goreleaser/goreleaser-action@v6
         with:
-          version: latest
+          version: "~> v2"
           args: release --clean
         env:
           # Publishes the GitHub release in this repository.
