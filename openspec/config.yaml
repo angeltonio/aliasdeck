@@ -1,7 +1,13 @@
 schema: spec-driven
 
 context: |
-  Tech stack: Go 1.25.11 (asdf-pinned), stdlib only, no external deps yet.
+  Tech stack: Go 1.25.11 (asdf-pinned). Stdlib only through Milestone 1;
+  Milestone 2 introduces the first runtime deps: github.com/spf13/cobra
+  v1.10.2 and go.yaml.in/yaml/v3 v3.0.5. Do NOT use gopkg.in/yaml.v3 —
+  go-yaml/yaml was archived in April 2025 and is frozen at v3.0.1.
+  Never resolve config paths with os.UserConfigDir(): it returns
+  ~/Library/Application Support on macOS, contradicting the ~/.config/aliasdeck
+  path promised in docs/PROJECT.md 3.4.
   Module: github.com/angeltonio/aliasdeck (single module monorepo).
   Architecture: cross-shell command compiler. Neutral alias -> ShellRenderer
   interface -> shell-specific syntax (zsh, bash; PowerShell later).
