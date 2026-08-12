@@ -34,15 +34,15 @@ Unit 4 and Unit 6 are the largest (~530 and ~730 lines respectively); split furt
 
 ## Phase 1: Config Foundation
 
-- [ ] 1.1 `go.mod`/`go.sum`: add `github.com/spf13/cobra v1.10.2`, `go.yaml.in/yaml/v3 v3.0.5` (design D10); `go mod tidy`
-- [ ] 1.2 RED `internal/config/paths_test.go`: `$ALIASDECK_HOME` → `$XDG_CONFIG_HOME/aliasdeck` → `~/.config/aliasdeck`; assert `os.UserConfigDir` is never called
-- [ ] 1.3 GREEN `internal/config/paths.go`: `Base()`, per-file paths, `~`/`$HOME` expansion
-- [ ] 1.4 RED `internal/config/aliases_test.go`: `enabled` omitted/`true`/`false`, unknown field rejected, wrong `version`, >1MiB input, undeclared `profiles:` entry (SC reqs 1-4; proposal risk #1)
-- [ ] 1.5 GREEN `internal/config/aliases.go`: DTO with `Enabled *bool`, `profiles:`→`ProfileIDs`, `ID` from `Name`, `KnownFields(true)`, 1MiB cap, `ProfileWarnings`
-- [ ] 1.6 RED `internal/config/device_test.go`: valid `config.yaml`, unknown `backend` value rejected
-- [ ] 1.7 GREEN `internal/config/device.go`: `Device`/`config.yaml` schema, `Load`/`Write`, backend enum (SC req 5)
-- [ ] 1.8 RED `internal/config/detect_test.go`: platform/shell precedence incl. `config.yaml` override, unsupported shell, `Provenance` string
-- [ ] 1.9 GREEN `internal/config/detect.go`: platform/shell/rc detection (SC req 6; design §Paths)
+- [x] 1.1 `go.mod`/`go.sum`: add `github.com/spf13/cobra v1.10.2`, `go.yaml.in/yaml/v3 v3.0.5` (design D10); `go mod tidy`
+- [x] 1.2 RED `internal/config/paths_test.go`: `$ALIASDECK_HOME` → `$XDG_CONFIG_HOME/aliasdeck` → `~/.config/aliasdeck`; assert `os.UserConfigDir` is never called
+- [x] 1.3 GREEN `internal/config/paths.go`: `Base()`, per-file paths, `~`/`$HOME` expansion
+- [x] 1.4 RED `internal/config/aliases_test.go`: `enabled` omitted/`true`/`false`, unknown field rejected, wrong `version`, >1MiB input, undeclared `profiles:` entry (SC reqs 1-4; proposal risk #1)
+- [x] 1.5 GREEN `internal/config/aliases.go`: DTO with `Enabled *bool`, `profiles:`→`ProfileIDs`, `ID` from `Name`, `KnownFields(true)`, 1MiB cap, `ProfileWarnings`
+- [x] 1.6 RED `internal/config/device_test.go`: valid `config.yaml`, unknown `backend` value rejected
+- [x] 1.7 GREEN `internal/config/device.go`: `Device`/`config.yaml` schema, `Load`/`Write`, backend enum (SC req 5)
+- [x] 1.8 RED `internal/config/detect_test.go`: platform/shell precedence incl. `config.yaml` override, unsupported shell, `Provenance` string
+- [x] 1.9 GREEN `internal/config/detect.go`: platform/shell/rc detection (SC req 6; design §Paths)
 
 ## Phase 2: Source, Apply, State
 
