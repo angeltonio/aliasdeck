@@ -121,7 +121,7 @@ The server transmits **data**. The client produces **shell syntax**. This is sim
 - Platform, shell and profile targeting
 - Rendering for zsh, bash and PowerShell
 - Safe generated file plus shell bootstrap management
-- `init`, `sync`, `status`, `list`, `doctor`, `edit`
+- `init`, `sync`, `status`, `list`, `doctor`, `edit`, `uninstall`
 
 No server. No database. No account.
 
@@ -470,9 +470,12 @@ The original draft proposed NestJS for the API and Go for the CLI. That split is
 ### 9.2 CLI
 
 - Go, `cobra` for command structure
+- `go.yaml.in/yaml/v3` for YAML parsing (`aliases.yaml`, `config.yaml`) — not `gopkg.in/yaml.v3`, which go-yaml archived in April 2025 and froze at v3.0.1
 - Owns `internal/renderers`, `internal/validate` and the `ConfigSource` implementations
 - Static binary per platform/architecture
 - Packaging: Homebrew, Scoop, `.deb`/`.rpm`, tarball
+
+Milestone 1 (the renderer core: `internal/domain`, `internal/renderers`, `internal/validate`) is stdlib-only by design — it is imported by both the CLI and a future server, so it stays free of choices either side would have to inherit. `cobra` and `go.yaml.in/yaml/v3` above are AliasDeck's first two runtime dependencies, both introduced in Milestone 2 once an actual CLI needed flag parsing and config parsing.
 
 ### 9.3 Server
 
@@ -537,6 +540,8 @@ Chezmoi is never required. It sits behind an apply-time interface in the CLI:
 
 ```go
 type SyncBackend interface {
+    Name() string
+    OutputPath(dev Device) (string, error)
     Apply(ctx context.Context, cfg ResolvedConfig, rendered string) error
 }
 ```

@@ -148,6 +148,32 @@ func TestForUnsupportedShell(t *testing.T) {
 	}
 }
 
+// TestPosixRendererShell confirms each registered posixRenderer reports the
+// shell it was constructed for. status and doctor both call Shell() through
+// the Renderer interface to label their output, so a renderer that lied
+// about its own identity would misattribute every message it produces.
+func TestPosixRendererShell(t *testing.T) {
+	tests := []struct {
+		name  string
+		shell domain.Shell
+	}{
+		{name: "zsh", shell: domain.ShellZsh},
+		{name: "bash", shell: domain.ShellBash},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r, err := For(tt.shell)
+			if err != nil {
+				t.Fatalf("For(%q): %v", tt.shell, err)
+			}
+			if got := r.Shell(); got != tt.shell {
+				t.Errorf("Shell() = %q, want %q", got, tt.shell)
+			}
+		})
+	}
+}
+
 func TestSupported(t *testing.T) {
 	got := Supported()
 	want := []domain.Shell{domain.ShellZsh, domain.ShellBash}

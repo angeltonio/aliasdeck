@@ -17,17 +17,22 @@ Every command MUST exit `0` on success and a non-zero code on any failure (parse
 
 ### Requirement: init Creates Config and Prompts Before Bootstrap
 
-`init` MUST create `config.yaml` and `aliases.yaml` when absent, detect platform/shell, and MUST prompt for consent before editing any rc file. `--no-bootstrap` MUST skip that edit entirely.
+`init` MUST create `config.yaml` and `aliases.yaml` when absent, detect platform/shell, and MUST prompt for consent before editing any rc file. `--no-bootstrap` MUST skip that edit entirely. `--yes`/`-f` MUST consent to the edit without prompting. Independently of any flag, the prompt itself MUST be skipped — defaulting to declined, the same outcome as an unanswered interactive prompt — whenever stdin is not a terminal, since a pipe that never delivers a line would otherwise block forever under `curl … | sh`, a container build, or CI.
 
 #### Scenario: First run on a clean device
 - GIVEN no existing AliasDeck config
 - WHEN `aliasdeck init` runs interactively
 - THEN both config files are created and the user is prompted before the rc file is edited
 
-#### Scenario: Non-interactive install
-- GIVEN `aliasdeck init --no-bootstrap`
+#### Scenario: Non-interactive install, no consent given
+- GIVEN `aliasdeck init --no-bootstrap`, or `aliasdeck init` with stdin not attached to a terminal and no `--yes`
 - WHEN it runs
 - THEN config files are created, no rc file is touched, and the command prints how to add the bootstrap line manually
+
+#### Scenario: Non-interactive install with explicit consent
+- GIVEN `aliasdeck init --yes`
+- WHEN it runs
+- THEN config files are created and the bootstrap line is added without ever printing or waiting on a prompt
 
 ### Requirement: sync Runs the Full Pipeline
 

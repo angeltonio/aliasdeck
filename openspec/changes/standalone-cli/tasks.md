@@ -34,64 +34,64 @@ Unit 4 and Unit 6 are the largest (~530 and ~730 lines respectively); split furt
 
 ## Phase 1: Config Foundation
 
-- [ ] 1.1 `go.mod`/`go.sum`: add `github.com/spf13/cobra v1.10.2`, `go.yaml.in/yaml/v3 v3.0.5` (design D10); `go mod tidy`
-- [ ] 1.2 RED `internal/config/paths_test.go`: `$ALIASDECK_HOME` → `$XDG_CONFIG_HOME/aliasdeck` → `~/.config/aliasdeck`; assert `os.UserConfigDir` is never called
-- [ ] 1.3 GREEN `internal/config/paths.go`: `Base()`, per-file paths, `~`/`$HOME` expansion
-- [ ] 1.4 RED `internal/config/aliases_test.go`: `enabled` omitted/`true`/`false`, unknown field rejected, wrong `version`, >1MiB input, undeclared `profiles:` entry (SC reqs 1-4; proposal risk #1)
-- [ ] 1.5 GREEN `internal/config/aliases.go`: DTO with `Enabled *bool`, `profiles:`→`ProfileIDs`, `ID` from `Name`, `KnownFields(true)`, 1MiB cap, `ProfileWarnings`
-- [ ] 1.6 RED `internal/config/device_test.go`: valid `config.yaml`, unknown `backend` value rejected
-- [ ] 1.7 GREEN `internal/config/device.go`: `Device`/`config.yaml` schema, `Load`/`Write`, backend enum (SC req 5)
-- [ ] 1.8 RED `internal/config/detect_test.go`: platform/shell precedence incl. `config.yaml` override, unsupported shell, `Provenance` string
-- [ ] 1.9 GREEN `internal/config/detect.go`: platform/shell/rc detection (SC req 6; design §Paths)
+- [x] 1.1 `go.mod`/`go.sum`: add `github.com/spf13/cobra v1.10.2`, `go.yaml.in/yaml/v3 v3.0.5` (design D10); `go mod tidy`
+- [x] 1.2 RED `internal/config/paths_test.go`: `$ALIASDECK_HOME` → `$XDG_CONFIG_HOME/aliasdeck` → `~/.config/aliasdeck`; assert `os.UserConfigDir` is never called
+- [x] 1.3 GREEN `internal/config/paths.go`: `Base()`, per-file paths, `~`/`$HOME` expansion
+- [x] 1.4 RED `internal/config/aliases_test.go`: `enabled` omitted/`true`/`false`, unknown field rejected, wrong `version`, >1MiB input, undeclared `profiles:` entry (SC reqs 1-4; proposal risk #1)
+- [x] 1.5 GREEN `internal/config/aliases.go`: DTO with `Enabled *bool`, `profiles:`→`ProfileIDs`, `ID` from `Name`, `KnownFields(true)`, 1MiB cap, `ProfileWarnings`
+- [x] 1.6 RED `internal/config/device_test.go`: valid `config.yaml`, unknown `backend` value rejected
+- [x] 1.7 GREEN `internal/config/device.go`: `Device`/`config.yaml` schema, `Load`/`Write`, backend enum (SC req 5)
+- [x] 1.8 RED `internal/config/detect_test.go`: platform/shell precedence incl. `config.yaml` override, unsupported shell, `Provenance` string
+- [x] 1.9 GREEN `internal/config/detect.go`: platform/shell/rc detection (SC req 6; design §Paths)
 
 ## Phase 2: Source, Apply, State
 
-- [ ] 2.1 RED `internal/source/file_test.go`: configured path only (no merge/fallback), resolve error not partially applied, hostile alias name/oversized command filtered before render (CS reqs 1-4; threat matrix "Hostile aliases.yaml")
-- [ ] 2.2 GREEN `internal/source/source.go`, `file.go`: `ConfigSource`, `Descriptor`, `FileSource.Resolve` → `validate.FilterValid` → `renderers.Render`
-- [ ] 2.3 RED `internal/apply/atomic_test.go`: temp+rename, mode, symlink/directory destination refused, temp cleanup on failure (NA req 1; threat matrix "Output path")
-- [ ] 2.4 GREEN `internal/apply/atomic.go`: atomic write helper
-- [ ] 2.5 RED `internal/apply/bootstrap_test.go`: rc fixtures (trailing-newline/none/empty/pre-existing block/user-edited block), idempotent add, exact-byte removal, symlinked rc preserved, marker text inside hostile rc not corrupted (NA reqs 2-4; threat matrix "rc file mutation")
-- [ ] 2.6 GREEN `internal/apply/bootstrap.go`: marker block add/remove, `filepath.EvalSymlinks`
-- [ ] 2.7 RED `internal/apply/native_test.go`: `NativeBackend.Apply` happy path, `backend: chezmoi` hard error, no partial writes
-- [ ] 2.8 GREEN `internal/apply/backend.go`, `native.go`: `SyncBackend{Name,OutputPath,Apply}`, `NativeBackend`, `ChezmoiBackend` stub (NA reqs 5-6)
-- [ ] 2.9 RED `internal/state/state_test.go`: round-trip, corrupt/missing JSON tolerated
-- [ ] 2.10 GREEN `internal/state/state.go`: `State`, `Bootstrap`, `Load`/`Save` at `0600` (SS req 1)
+- [x] 2.1 RED `internal/source/file_test.go`: configured path only (no merge/fallback), resolve error not partially applied, hostile alias name/oversized command filtered before render (CS reqs 1-4; threat matrix "Hostile aliases.yaml")
+- [x] 2.2 GREEN `internal/source/source.go`, `file.go`: `ConfigSource`, `Descriptor`, `FileSource.Resolve` → `validate.FilterValid` → `renderers.Render`
+- [x] 2.3 RED `internal/apply/atomic_test.go`: temp+rename, mode, symlink/directory destination refused, temp cleanup on failure (NA req 1; threat matrix "Output path")
+- [x] 2.4 GREEN `internal/apply/atomic.go`: atomic write helper
+- [x] 2.5 RED `internal/apply/bootstrap_test.go`: rc fixtures (trailing-newline/none/empty/pre-existing block/user-edited block), idempotent add, exact-byte removal, symlinked rc preserved, marker text inside hostile rc not corrupted (NA reqs 2-4; threat matrix "rc file mutation")
+- [x] 2.6 GREEN `internal/apply/bootstrap.go`: marker block add/remove, `filepath.EvalSymlinks`
+- [x] 2.7 RED `internal/apply/native_test.go`: `NativeBackend.Apply` happy path, `backend: chezmoi` hard error, no partial writes
+- [x] 2.8 GREEN `internal/apply/backend.go`, `native.go`: `SyncBackend{Name,OutputPath,Apply}`, `NativeBackend`, `ChezmoiBackend` stub (NA reqs 5-6)
+- [x] 2.9 RED `internal/state/state_test.go`: round-trip, corrupt/missing JSON tolerated
+- [x] 2.10 GREEN `internal/state/state.go`: `State`, `Bootstrap`, `Load`/`Save` at `0600` (SS req 1)
 
 ## Phase 3: App Use Cases & CLI Wiring
 
-- [ ] 3.1 RED `internal/app/sync_test.go`: full pipeline order, no-op skip on matching revision+hash, forced rewrite on disk-hash mismatch, deterministic render hash (SS reqs 2-3)
-- [ ] 3.2 GREEN `internal/app/sync.go`: resolve→validate→render→apply→state, `Env` injection
-- [ ] 3.3 RED `internal/app/init_test.go`: creates both config files, prompts before bootstrap, `--no-bootstrap` skip
-- [ ] 3.4 GREEN `internal/app/init.go`
-- [ ] 3.5 RED `internal/app/{status,list,doctor}_test.go`: active-source reporting, device-scoped listing, hostile-entry + undeclared-profile diagnostics, `doctor` writes nothing
-- [ ] 3.6 GREEN `internal/app/status.go`, `list.go`, `doctor.go`
-- [ ] 3.7 RED `internal/app/edit_test.go`: `$EDITOR="x; rm -rf ."` must not execute, `code -w` passes through, no sync side effect (threat matrix "Editor subprocess")
-- [ ] 3.8 GREEN `internal/app/edit.go`: `exec.Command` with split argv, never `sh -c`
-- [ ] 3.9 RED `internal/app/uninstall_test.go`: byte-identical rc restore, `--yes` vs interactive prompt
-- [ ] 3.10 GREEN `internal/app/uninstall.go`
-- [ ] 3.11 GREEN `cmd/aliasdeck/main.go`, `root.go`, `{init,sync,status,list,doctor,edit,uninstall}.go`: Cobra wiring, exit-code map (exit 0-4)
-- [ ] 3.12 Integration `internal/app`: `init`→`sync`→second `sync` (no write)→`uninstall` (byte-identical rc) on `t.TempDir()` HOME
+- [x] 3.1 RED `internal/app/sync_test.go`: full pipeline order, no-op skip on matching revision+hash, forced rewrite on disk-hash mismatch, deterministic render hash (SS reqs 2-3)
+- [x] 3.2 GREEN `internal/app/sync.go`: resolve→validate→render→apply→state, `Env` injection
+- [x] 3.3 RED `internal/app/init_test.go`: creates both config files, prompts before bootstrap, `--no-bootstrap` skip
+- [x] 3.4 GREEN `internal/app/init.go`
+- [x] 3.5 RED `internal/app/{status,list,doctor}_test.go`: active-source reporting, device-scoped listing, hostile-entry + undeclared-profile diagnostics, `doctor` writes nothing
+- [x] 3.6 GREEN `internal/app/status.go`, `list.go`, `doctor.go`
+- [x] 3.7 RED `internal/app/edit_test.go`: `$EDITOR="x; rm -rf ."` must not execute, `code -w` passes through, no sync side effect (threat matrix "Editor subprocess")
+- [x] 3.8 GREEN `internal/app/edit.go`: `exec.Command` with split argv, never `sh -c`
+- [x] 3.9 RED `internal/app/uninstall_test.go`: byte-identical rc restore, `--yes` vs interactive prompt
+- [x] 3.10 GREEN `internal/app/uninstall.go`
+- [x] 3.11 GREEN `cmd/aliasdeck/main.go`, `root.go`, `{init,sync,status,list,doctor,edit,uninstall}.go`: Cobra wiring, exit-code map (exit 0-4)
+- [x] 3.12 Integration `internal/app`: `init`→`sync`→second `sync` (no write)→`uninstall` (byte-identical rc) on `t.TempDir()` HOME
 
 ## Phase 4: Milestone-1-Adjacent Verification (no production edits)
 
-- [ ] 4.1 Add table case to `internal/renderers/posix_test.go` covering `posixRenderer.Shell()` (0% coverage today) — test-only, no golden/production change
-- [ ] 4.2 Run `make golden`; confirm zero diff in `internal/renderers/testdata` (golden files stay untouched, per design)
-- [ ] 4.3 Run existing real bash/zsh injection test unmodified; add a new integration test (skipped under `-short`) asserting the Milestone-2 generated file sources cleanly in real `bash` and `zsh`
-- [ ] 4.4 Decide and document CRLF rc-file handling scope for `uninstall`: add a CRLF fixture case to 2.5; either pass byte-identical or add an explicit "LF-only in v0.1" note plus a `doctor` warning
+- [x] 4.1 Add table case to `internal/renderers/posix_test.go` covering `posixRenderer.Shell()` (0% coverage today) — test-only, no golden/production change
+- [x] 4.2 Run `make golden`; confirm zero diff in `internal/renderers/testdata` (golden files stay untouched, per design)
+- [x] 4.3 Run existing real bash/zsh injection test unmodified; add a new integration test (skipped under `-short`) asserting the Milestone-2 generated file sources cleanly in real `bash` and `zsh`
+- [x] 4.4 CRLF rc-file handling: `internal/apply/roundtrip_test.go`'s `TestBootstrapRoundTripOnRealisticRCFiles/windows_line_endings` case already proves byte-identical add-then-remove round-tripping on a CRLF rc file. CRLF is supported, not scoped out — no `doctor` warning or "LF-only" note needed.
 
 ## Phase 5: Release Tooling
 
-- [ ] 5.1 Create `.goreleaser.yaml`: darwin/linux, amd64/arm64, `CGO_ENABLED=0`, homebrew-tap target (RD reqs 1-2)
-- [ ] 5.2 Create `scripts/install.sh`: OS/arch detection, download+install, clean non-zero exit on unsupported platform (RD req 3)
-- [ ] 5.3 Confirm `homebrew-tap` repository prerequisite is documented (proposal Dependencies) before tagging
+- [x] 5.1 Create `.goreleaser.yaml`: darwin/linux, amd64/arm64, `CGO_ENABLED=0`, homebrew-tap target (RD reqs 1-2)
+- [x] 5.2 Create `scripts/install.sh`: OS/arch detection, download+install, clean non-zero exit on unsupported platform (RD req 3)
+- [x] 5.3 `homebrew-tap` repository prerequisite is documented in `proposal.md` ("Dependencies") and now also as a prominent blocking comment at the top of `.goreleaser.yaml` itself — the artifact a maintainer opens right before tagging a release.
 
 ## Phase 6: Docs & Config Sync
 
-- [ ] 6.1 `docs/PROJECT.md` §11: add `Name() string` and `OutputPath(dev domain.Device) (string, error)` to the `SyncBackend` code block (design D9)
-- [ ] 6.2 `docs/PROJECT.md` §9: retract "stdlib only"; list `cobra` and `go.yaml.in/yaml/v3` as first runtime deps
-- [ ] 6.3 `openspec/config.yaml` `context`: replace "stdlib only, no external deps yet" with the actual dependency list
-- [ ] 6.4 `README.md`: replace "not usable yet" status banner/table with real `init`/`sync` usage
-- [ ] 6.5 Run `make check` and `make cover`: confirm new packages ≥70% coverage, Milestone 1 coverage unchanged
+- [x] 6.1 `docs/PROJECT.md` §11: add `Name() string` and `OutputPath(dev domain.Device) (string, error)` to the `SyncBackend` code block (design D9)
+- [x] 6.2 `docs/PROJECT.md` §9: retract "stdlib only"; list `cobra` and `go.yaml.in/yaml/v3` as first runtime deps
+- [x] 6.3 `openspec/config.yaml` `context`: already lists `cobra` and `go.yaml.in/yaml/v3` plus the `os.UserConfigDir` prohibition — verified, no change needed.
+- [x] 6.4 `README.md`: replace "not usable yet" status banner/table with real `init`/`sync`/`status`/`list` usage, honestly noting no tagged release/tap/install-script exists yet
+- [x] 6.5 Run `make check` and `make cover`: confirm new packages ≥70% coverage, Milestone 1 coverage unchanged
 
 ## Parallelization Notes
 

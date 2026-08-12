@@ -8,22 +8,36 @@ It is not a dotfile manager. Dotfile managers copy files; AliasDeck understands 
 
 ---
 
-## ⚠️ Status: early development — not usable yet
+## Status: usable from source — no packaged release yet
 
-**There is no installable binary.** Do not expect `brew install` to work; the Homebrew tap does not exist.
-
-What is built today is the core that everything else depends on:
+The standalone CLI works: `init`, `sync`, `status`, `list`, `doctor`, `edit` and `uninstall` are all implemented and tested against real bash and zsh. **There is no tagged release, no Homebrew tap and no install-script endpoint yet.** `brew install aliasdeck` and `curl … | sh` will not work until v0.1 is tagged and published — build from source in the meantime.
 
 | Component | State |
 | --- | --- |
 | Domain model and resolution | ✅ Done |
 | Validation (name/command/description safety) | ✅ Done |
 | zsh + bash renderers | ✅ Done |
+| Standalone CLI (`init`, `sync`, `status`, `list`, `doctor`, `edit`, `uninstall`) | ✅ Done — build from source |
+| Packaged release (Homebrew tap, install script) | ⬜ Next |
 | PowerShell renderer | ⬜ Planned |
-| CLI (`init`, `sync`, `status`, …) | ⬜ Next |
 | Server + web UI | ⬜ Later |
 
-You can read the code, run the tests and follow along. You cannot manage your aliases with it. Watch the repo if you want to know when v0.1 lands.
+Build it and try it:
+
+```bash
+git clone https://github.com/angeltonio/aliasdeck
+cd aliasdeck
+go build -o aliasdeck ./cmd/aliasdeck
+
+./aliasdeck init      # creates ~/.config/aliasdeck/{config,aliases}.yaml, detects platform/shell,
+                      # asks before adding a one-line bootstrap to your shell rc file
+./aliasdeck edit      # opens aliases.yaml in $EDITOR — add your own aliases here
+./aliasdeck sync      # renders and writes the generated file for your shell
+./aliasdeck status    # active source, device identity, up-to-date check
+./aliasdeck list      # aliases that apply to this device, and why others are skipped
+```
+
+Reload your shell (or `source` the printed bootstrap line) and your aliases are live. `aliasdeck uninstall` reverses all of it, byte-identically.
 
 ---
 
@@ -88,9 +102,9 @@ Chezmoi is excellent and AliasDeck does not replace it. They solve different pro
 
 ---
 
-## Two ways it will work
+## Two ways to use it
 
-**Standalone** — one CLI, one `aliases.yaml`. No server, no account, no database. This is the primary way to use AliasDeck and the first thing being built.
+**Standalone** — one CLI, one `aliases.yaml`. No server, no account, no database. This is the primary way to use AliasDeck, and it works today — build from source, see the Status section above.
 
 ```bash
 aliasdeck init
@@ -128,7 +142,7 @@ These are the choices that shape everything else. The reasoning lives in [`docs/
 | Version | Scope |
 | --- | --- |
 | — | Renderer core, validation, golden tests ✅ |
-| **v0.1** | Standalone CLI · zsh + bash · macOS + Linux |
+| **v0.1** | Standalone CLI · zsh + bash · macOS + Linux — implemented, tagged release pending |
 | v0.2 | PowerShell + Windows · Git-hosted config |
 | v0.3 | Self-hosted server · devices, profiles, REST API |
 | v0.4 | Web UI with live rendered preview |
@@ -138,12 +152,13 @@ These are the choices that shape everything else. The reasoning lives in [`docs/
 
 ## Building from source
 
-Requires Go 1.25 or newer. There is no binary to build yet — this runs the library and its tests.
+Requires Go 1.25 or newer.
 
 ```bash
 git clone https://github.com/angeltonio/aliasdeck
 cd aliasdeck
-make check     # format, vet, test
+make check              # format, vet, test
+go build -o aliasdeck ./cmd/aliasdeck
 ```
 
 Useful targets:
@@ -153,6 +168,8 @@ make test      # tests only
 make cover     # per-package coverage
 make golden    # regenerate renderer golden files, then read the diff
 ```
+
+There is no tagged release yet, so `scripts/install.sh` and the Homebrew tap referenced in `.goreleaser.yaml` are not live — building from source above is the only way to install AliasDeck today.
 
 ### A note on the tests
 

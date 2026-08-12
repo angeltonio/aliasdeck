@@ -11,8 +11,11 @@ context: |
   Module: github.com/angeltonio/aliasdeck (single module monorepo).
   Architecture: cross-shell command compiler. Neutral alias -> ShellRenderer
   interface -> shell-specific syntax (zsh, bash; PowerShell later).
-  Layout: internal/domain, internal/renderers, internal/validate. cmd/ absent
-  (library-only, Milestone 1 complete per docs/PROJECT.md).
+  Layout: internal/{domain,renderers,validate} from Milestone 1, plus
+  internal/{config,source,apply,state,app} and cmd/aliasdeck from Milestone 2.
+  The pipeline is config -> source -> validate -> renderers -> apply -> state,
+  with internal/app holding one use case per command and cmd/aliasdeck limited
+  to Cobra wiring and exit codes.
   Testing: table-driven unit tests, golden files for renderer output, real-shell
   (bash/zsh) injection integration test. 162 cases, domain 70.4%/renderers
   89.1%/validate 87.7% coverage.
@@ -65,5 +68,12 @@ rules:
     test_command: "go test ./..."
     build_command: "go vet ./... && gofmt -l ."
     coverage_threshold: 70
+    # cmd/ is exempt. It holds Cobra flag declarations and the mapping from
+    # errors to exit codes; the behaviour it exposes is tested in internal/app,
+    # where it can be exercised without a process boundary. Chasing 70% here
+    # would mean tests that assert flags were registered, which pins the
+    # wiring without checking anything a user experiences.
+    coverage_exempt:
+      - cmd/aliasdeck
   archive:
     - Warn before merging destructive deltas
