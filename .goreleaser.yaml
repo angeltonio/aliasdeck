@@ -1,0 +1,88 @@
+# GoReleaser configuration for AliasDeck (PROJECT.md §9.5, §16 Milestone 2).
+#
+# RELEASE PREREQUISITE — READ BEFORE TAGGING v0.1
+#
+# The `brews:` block below publishes a formula to angeltonio/homebrew-tap.
+# That repository does not exist yet (proposal.md "Dependencies"). Running
+# `goreleaser release` before it is created will fail at the Homebrew
+# publish step after binaries and the GitHub release are already created,
+# which is a confusing half-finished state to debug from a CI log.
+#
+# Before pushing the first `v0.1.x` tag:
+#   1. Create the `angeltonio/homebrew-tap` GitHub repository (empty is
+#      fine; GoReleaser creates the `Formula/` directory and commits to it).
+#   2. Grant the token GoReleaser runs with (GITHUB_TOKEN or a PAT set as
+#      GORELEASER_TAP_TOKEN) push access to that repository.
+# Until both are true, do not tag a release — run `goreleaser release
+# --snapshot --clean` locally instead to sanity-check the build without
+# publishing anything.
+
+version: 2
+
+project_name: aliasdeck
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: aliasdeck
+    main: ./cmd/aliasdeck
+    binary: aliasdeck
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    # -s -w strips the symbol table and DWARF debug info; there is no
+    # main.version var to inject yet (cmd/aliasdeck reports its version via
+    # internal/app.Version instead), so ldflags stays minimal rather than
+    # referencing a symbol that does not exist.
+    ldflags:
+      - -s -w
+
+archives:
+  - id: aliasdeck
+    ids:
+      - aliasdeck
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    formats:
+      - tar.gz
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+brews:
+  - name: aliasdeck
+    ids:
+      - aliasdeck
+    repository:
+      owner: angeltonio
+      name: homebrew-tap
+      branch: main
+    directory: Formula
+    homepage: "https://github.com/angeltonio/aliasdeck"
+    description: "Your commands. Every machine. Compiles neutral aliases into shell-specific syntax."
+    license: "MIT"
+    install: |
+      bin.install "aliasdeck"
+    test: |
+      system "#{bin}/aliasdeck", "--help"
+
+release:
+  github:
+    owner: angeltonio
+    name: aliasdeck
+  prerelease: auto
