@@ -2,11 +2,16 @@
 
 ## 1. Vision
 
-AliasDeck is a self-hosted control plane for managing shell aliases, reusable commands and related terminal configuration across multiple computers.
+AliasDeck is a portable command layer for people who work across several machines and operating systems.
 
-The user should be able to create or modify an alias once in a web interface and synchronize it to selected machines without manually editing `.zshrc`, `.bashrc`, PowerShell profiles or similar files.
+It manages shell aliases, reusable commands and related terminal configuration from a single source of truth, and renders them into the correct syntax for each shell on each machine.
 
-The long-term vision is broader than a simple alias manager: AliasDeck should become a portable command layer for developers, homelab users and power users who work across several machines and operating systems.
+It works in two modes:
+
+- **Standalone** — a single CLI reading a local or Git-hosted `aliases.yaml`. No server, no UI, no database.
+- **Control plane** — a self-hosted server with a web UI and an API, managing many devices and profiles centrally.
+
+Both modes use the same binary, the same renderers and the same validation. The server is an upgrade, never a prerequisite.
 
 Tagline:
 
@@ -29,30 +34,56 @@ This creates several problems:
 2. Changes need to be copied manually.
 3. Shell syntax differs between Bash/Zsh/Fish/PowerShell.
 4. It is difficult to decide which aliases belong on which machines.
-5. Dotfile tools solve synchronization, but they do not provide a purpose-built graphical control plane for aliases and commands.
+5. Dotfile tools solve file synchronization, but they do not understand what an alias *is*.
 6. Managing aliases from an AI assistant or MCP client is difficult when the source of truth is an arbitrary local file.
 
-AliasDeck solves this by introducing a centralized source of truth and a lightweight local agent.
+### 2.1 Positioning — why not just use a dotfile manager?
+
+Chezmoi, yadm and similar tools are excellent and AliasDeck does not try to replace them.
+
+**They manage files. AliasDeck manages commands.**
+
+A dotfile manager treats `~/.zshrc` as text to be templated and copied. It has no concept of an alias, so cross-shell support is the user's problem: to support an alias in both zsh and PowerShell you hand-write templates with conditionals, and you own the escaping.
+
+AliasDeck treats the alias as a first-class entity:
+
+```yaml
+name: dps
+command: docker ps
+shells: [zsh, bash, powershell]
+```
+
+and knows that this renders as `alias dps='docker ps'` in zsh but must become `function dps { docker ps @args }` in PowerShell, because `Set-Alias` cannot express it.
+
+The other structural difference is **targeting**. Dotfile managers target by machine, through hostname conditionals in templates. AliasDeck targets by **profile** — "Development", "Homelab", "Work" — which is how people actually think about their machines.
+
+The two tools compose: AliasDeck can write into a Chezmoi-managed source directory, or its `aliases.yaml` can simply live in an existing dotfiles repository.
+
+**AliasDeck is a cross-shell command compiler.** Synchronization is a feature, not the product.
 
 ---
 
 ## 3. Product principles
 
-### 3.1 Self-hosted first
+### 3.1 Local-first
 
-AliasDeck must run easily with Docker Compose and should not require a hosted SaaS service.
+The CLI must be fully useful with no server, no account and no network beyond fetching its own config. Installation is `brew install aliasdeck` followed by `aliasdeck init`.
 
-### 3.2 Native first, integrations second
+This is not a degraded mode. It is the primary entry point, and it is what the project builds first.
 
-The AliasDeck CLI must be capable of synchronizing aliases without Chezmoi or another dotfile manager.
+### 3.2 Self-hosted second, and easy
 
-Chezmoi should be supported as an optional backend/adapter for users who already use it.
+When a user does want the control plane, the reference deployment is a **single static binary** serving the API and web UI, storing data in SQLite. Docker is a convenience, not a requirement.
 
-### 3.3 Non-destructive
+Installation friction is the main adoption risk for self-hosted software. A three-service Compose stack is a worse first experience than `./aliasdeck serve`.
 
-AliasDeck should avoid taking ownership of an entire `.zshrc` or `.bashrc` file.
+### 3.3 Native first, integrations second
 
-Instead it should preferably manage a dedicated generated file, for example:
+The CLI must synchronize aliases without Chezmoi or any other dotfile manager. Chezmoi is an optional apply backend for users who already use it.
+
+### 3.4 Non-destructive
+
+AliasDeck never takes ownership of `.zshrc` or `.bashrc`. It manages a dedicated generated file:
 
 ```text
 ~/.config/aliasdeck/aliases.zsh
@@ -60,94 +91,82 @@ Instead it should preferably manage a dedicated generated file, for example:
 ~/.config/aliasdeck/aliases.ps1
 ```
 
-The user's shell config only needs a small bootstrap entry such as:
+The user's shell config only needs a small bootstrap entry:
 
 ```bash
 [ -f "$HOME/.config/aliasdeck/aliases.zsh" ] && source "$HOME/.config/aliasdeck/aliases.zsh"
 ```
 
-This makes installation and removal safe.
+This makes installation and removal safe and reversible.
 
-### 3.4 Cross-platform model
+### 3.5 Cross-platform by rendering, not by branching
 
-Aliases should be stored in a neutral representation whenever possible and rendered into shell-specific syntax by adapters.
+Aliases are stored in a neutral representation and rendered into shell-specific syntax by adapters. See section 6.
 
-### 3.5 API-first
+### 3.6 API-first
 
-Everything available in the UI should eventually be available through the API and CLI.
+Everything available in the UI is available through the API and CLI. This makes MCP/AI integration a thin layer rather than a rewrite.
 
-This makes future MCP/AI integration straightforward.
+### 3.7 The server never ships shell code
+
+The server transmits **data**. The client produces **shell syntax**. This is simultaneously a security boundary, a versioning boundary and the reason standalone mode is nearly free. See sections 6.1 and 7.
 
 ---
 
-## 4. MVP
+## 4. Scope
 
-The first usable version should include:
+### 4.1 Standalone CLI — the first shippable product
 
-### Server
+- `aliases.yaml` as source of truth (local file or Git repository)
+- Platform, shell and profile targeting
+- Rendering for zsh, bash and PowerShell
+- Safe generated file plus shell bootstrap management
+- `init`, `sync`, `status`, `list`, `doctor`, `edit`
+
+No server. No database. No account.
+
+### 4.2 Control plane — the upgrade
+
+**Server**
 
 - Authentication
-- CRUD for aliases
-- CRUD for devices
-- Profiles/groups
-- Device targeting
-- Platform targeting
-- API tokens
+- CRUD for aliases, devices and profiles
+- Device and platform targeting
+- Device API tokens
 - Sync endpoint
-- Basic audit timestamps
+- Audit timestamps
 
-### Web UI
+**Web UI**
 
-- Login
-- Dashboard
-- Alias list
-- Create/edit/delete alias
-- Search and filtering
-- Tags/groups
-- Device list
-- Device detail
+- Login, dashboard
+- Alias list, create/edit/delete
+- Search, filtering, tags and groups
+- Device list and detail
 - Profile management
 - Sync status
+- Live preview of rendered output, per shell
 
-### CLI
+### 4.3 Sync model
 
-Commands:
-
-```bash
-aliasdeck login <server-url>
-aliasdeck logout
-aliasdeck register
-aliasdeck sync
-aliasdeck status
-aliasdeck list
-aliasdeck doctor
-```
-
-Initial supported environments:
-
-- macOS + zsh
-- Linux + bash
-- Linux + zsh
-- Windows + PowerShell
-
-### Sync
-
-MVP synchronization can be pull-based:
+Pull-based. No daemon, no background service, no inbound ports on the user's machine.
 
 ```text
-AliasDeck Server
+ConfigSource  (file | git | server)
       │
-      │ GET /api/v1/sync
+      │  neutral configuration + revision
       ▼
 AliasDeck CLI
       │
       ├── detect platform
       ├── detect shell
-      ├── render aliases
-      └── write generated file
+      ├── resolve against device profiles
+      ├── validate alias names and payload
+      ├── render (local renderer package)
+      ├── write generated file atomically (tmp + rename)
+      └── record local state (revision, hash, timestamp)
 ```
 
-Automatic background sync can be added later.
+Automatic background sync is deliberately deferred. A daemon means three service mechanisms (launchd, systemd, Task Scheduler), three failure modes and three support burdens. See section 13.
 
 ---
 
@@ -155,73 +174,62 @@ Automatic background sync can be added later.
 
 ### Alias
 
-Suggested fields:
-
-```ts
-interface Alias {
-  id: string;
-  name: string;
-  command: string;
-  description?: string;
-  enabled: boolean;
-  tags: string[];
-  platforms: Platform[];
-  shells: Shell[];
-  profileIds: string[];
-  deviceIds?: string[];
-  createdAt: Date;
-  updatedAt: Date;
+```go
+type Alias struct {
+    ID          string     `json:"id"`
+    Name        string     `json:"name"`
+    Command     string     `json:"command"`
+    Description string     `json:"description,omitempty"`
+    Enabled     bool       `json:"enabled"`
+    Tags        []string   `json:"tags"`
+    Platforms   []Platform `json:"platforms"`
+    Shells      []Shell    `json:"shells"`
+    ProfileIDs  []string   `json:"profileIds"`
+    DeviceIDs   []string   `json:"deviceIds,omitempty"`
+    CreatedAt   time.Time  `json:"createdAt"`
+    UpdatedAt   time.Time  `json:"updatedAt"`
 }
 ```
 
-Example:
-
-```yaml
-name: dcu
-command: docker compose up -d
-description: Start Docker Compose stack
-platforms:
-  - macos
-  - linux
-shells:
-  - zsh
-  - bash
-tags:
-  - docker
-profiles:
-  - development
-```
+In standalone mode `ID` is derived from `Name`, and `DeviceIDs` is unused — the file *is* the device's scope.
 
 ### Device
 
-```ts
-interface Device {
-  id: string;
-  name: string;
-  hostname: string;
-  platform: 'macos' | 'linux' | 'windows';
-  shell: 'zsh' | 'bash' | 'powershell';
-  architecture?: string;
-  profileIds: string[];
-  lastSeenAt?: Date;
-  lastSyncAt?: Date;
-  clientVersion?: string;
+```go
+type Device struct {
+    ID            string     `json:"id"`
+    Name          string     `json:"name"`
+    Hostname      string     `json:"hostname"`
+    Platform      Platform   `json:"platform"`      // macos | linux | windows
+    Shell         Shell      `json:"shell"`         // zsh | bash | powershell
+    Architecture  string     `json:"architecture,omitempty"`
+    ProfileIDs    []string   `json:"profileIds"`
+    LastSeenAt    *time.Time `json:"lastSeenAt,omitempty"`
+    LastSyncAt    *time.Time `json:"lastSyncAt,omitempty"`
+    ClientVersion string     `json:"clientVersion,omitempty"`
 }
 ```
 
+In standalone mode the device is local and self-described by `config.yaml`; it is never registered anywhere.
+
 ### Profile
 
-Profiles group configuration by purpose rather than machine.
+Profiles group configuration by purpose rather than by machine: Development, Homelab, Work, Docker, Kubernetes. A device subscribes to multiple profiles.
 
-Examples:
+Profiles exist in both modes. They are the targeting primitive.
 
-- Development
-- Homelab
-- Work
-- Docker
-- Kubernetes
+### ResolvedConfig
 
-A device can subscribe to multiple profiles.
+The output of resolution and the input to rendering. This is the contract every `ConfigSource` must satisfy.
+
+```go
+type ResolvedConfig struct {
+    Revision  string    // content hash or server revision
+    Device    Device
+    Aliases   []Alias   // already filtered by platform, shell and profile
+    GeneratedAt time.Time
+}
+```
 
 ---
 
@@ -240,267 +248,386 @@ Bash/Zsh output:
 alias dps='docker ps'
 ```
 
-PowerShell output:
-
-For simple aliases, PowerShell's native `Set-Alias` does not support arbitrary command strings well, so AliasDeck should generate functions where necessary:
+PowerShell output — `Set-Alias` cannot hold an arbitrary command string, so a function is generated:
 
 ```powershell
 function dps { docker ps @args }
 ```
 
-This renderer abstraction is important because not every shell feature maps one-to-one.
+Renderer interface:
 
-Proposed interface:
-
-```ts
-interface ShellRenderer {
-  supports(shell: Shell): boolean;
-  render(config: ResolvedConfig): string;
+```go
+type ShellRenderer interface {
+    Supports(shell Shell) bool
+    Render(cfg ResolvedConfig) (string, error)
 }
 ```
 
----
+### 6.1 Where rendering happens — DECIDED: in the client
 
-## 7. Architecture
+**The source returns a neutral resolved configuration. The CLI renders it into shell syntax.**
 
-Recommended high-level architecture:
+Three reasons, in order of weight:
+
+**1. Version skew is guaranteed, not hypothetical.**
+
+AliasDeck is a public, self-hosted project. Users install a server once and update it rarely, while updating the CLI through Homebrew or Scoop regularly. The versions *will* diverge.
+
+If the server rendered, adding a new shell (fish, nushell) would require every user to upgrade their server first. The roadmap becomes hostage to the oldest deployed server. With client-side rendering, an updated CLI gains fish support against a year-old server, because that server never needed to know what fish is.
+
+**2. Quoting and escaping is the attack surface.**
+
+Escaping rules are shell-specific. The component that knows the target shell must be the component that escapes. If the server sent pre-rendered shell text, a compromised or buggy server would write arbitrary shell code into every connected machine. Sending structured data means the client validates and escapes before touching disk.
+
+**3. It makes standalone mode nearly free.**
+
+If rendering lives in the client, the server is just one possible supplier of `ResolvedConfig`. A local file is another. This single decision is what allows sections 3.1 and 7 to exist at almost no additional cost.
+
+### 6.2 The shared renderer package
+
+Renderers live in a package imported by **both** the server and the CLI:
 
 ```text
-                  ┌───────────────────────┐
-                  │      AliasDeck        │
-                  │       Web UI          │
-                  └───────────┬───────────┘
-                              │
-                              ▼
-                  ┌───────────────────────┐
-                  │      AliasDeck API    │
-                  │                       │
-                  │ aliases               │
-                  │ profiles              │
-                  │ devices               │
-                  │ auth/tokens           │
-                  └───────────┬───────────┘
-                              │
-                       PostgreSQL/SQLite
-                              │
-              HTTPS           │
-        ┌─────────────────────┴─────────────────────┐
-        │                     │                     │
-        ▼                     ▼                     ▼
-  macOS CLI               Linux CLI            Windows CLI
-     zsh                  bash / zsh            PowerShell
-        │                     │                     │
-        ▼                     ▼                     ▼
- generated config        generated config       generated config
+internal/renderers/    →  CLI (authoritative write) + API (UI preview)
+```
+
+The web UI's preview calls the same code that writes the file. No duplication, no drift between what the UI shows and what lands on disk.
+
+This is only possible because server and CLI share a language, and it is the primary reason the backend is Go rather than TypeScript (section 9.1).
+
+**The CLI's render is authoritative.** Server-side preview is a UI convenience and is never written to a device.
+
+---
+
+## 7. Configuration sources
+
+The CLI does not know or care where configuration comes from. It depends on one interface:
+
+```go
+type ConfigSource interface {
+    Resolve(ctx context.Context, dev Device) (ResolvedConfig, error)
+}
+```
+
+Implementations:
+
+| Source | Origin | Mode |
+| --- | --- | --- |
+| `FileSource` | local `aliases.yaml` | standalone |
+| `GitSource` | `aliases.yaml` in a Git repository | standalone |
+| `ServerSource` | `GET /api/v1/sync` | control plane |
+
+`FileSource` and `GitSource` resolve locally: read, filter by the device's platform, shell and profiles, hash the result. `ServerSource` delegates that same resolution to the server and receives the result.
+
+Everything downstream — validation, rendering, atomic write, state recording — is identical.
+
+### 7.1 One source per device — hard rule
+
+A device is bound to exactly one source, declared explicitly in its config. There is no merging, no fallback chain and no automatic reconciliation between local and remote configuration.
+
+Two sources of truth that silently merge is a bottomless pit of conflict-resolution bugs, and it makes `aliasdeck doctor` unable to answer the only question that matters: *where did this alias come from?*
+
+`aliasdeck status` always reports the active source.
+
+Switching sources is an explicit, single command:
+
+```bash
+aliasdeck config set source.type server
+```
+
+### 7.2 `aliases.yaml`
+
+The standalone source of truth. Designed to be readable, diffable and comfortable inside an existing dotfiles repository.
+
+```yaml
+version: 1
+
+profiles:
+  - development
+  - homelab
+
+aliases:
+  - name: dcu
+    command: docker compose up -d
+    description: Start Docker Compose stack
+    platforms: [macos, linux]
+    shells: [zsh, bash]
+    tags: [docker]
+    profiles: [development]
+
+  - name: dps
+    command: docker ps
+    shells: [zsh, bash, powershell]
+    profiles: [development, homelab]
+
+  - name: pve
+    command: ssh root@proxmox.local
+    platforms: [macos, linux]
+    shells: [zsh]
+    profiles: [homelab]
+```
+
+Omitted `platforms` or `shells` means "all supported". Omitted `profiles` means "always active".
+
+### 7.3 `config.yaml`
+
+Per-device configuration at `~/.config/aliasdeck/config.yaml`. This file is local, never synchronized, and defines the device's identity and its source.
+
+```yaml
+version: 1
+
+device:
+  name: macbook
+  profiles: [development, homelab]
+
+source:
+  type: file            # file | git | server
+  path: ~/dotfiles/aliases.yaml
+
+backend: native         # native | chezmoi
+```
+
+Server mode replaces the `source` block:
+
+```yaml
+source:
+  type: server
+  url: https://aliases.example.com
+  # token stored separately at 0600, never in this file
 ```
 
 ---
 
-## 8. Suggested stack
+## 8. Architecture
 
-The exact stack can evolve, but an initial implementation could use:
-
-### Monorepo
-
-- pnpm workspaces
-- Turborepo optional
-
-### API
-
-- NestJS
-- Prisma
-- PostgreSQL for production
-- SQLite allowed for very small/self-hosted deployments if abstraction remains clean
-- REST API initially
-- OpenAPI documentation
-
-### Web
-
-- Next.js
-- React
-- Tailwind CSS
-- shadcn/ui
-
-### CLI
-
-Two reasonable options:
-
-1. TypeScript/Node.js for maximum code sharing with the API.
-2. Go for an extremely portable single binary.
-
-Preferred long-term choice: **Go**, because the agent should be trivial to distribute to macOS/Linux/Windows and should not require a Node runtime.
-
-For MVP, TypeScript is acceptable if development speed matters more than distribution.
-
-### Deployment
-
-Docker Compose:
+### 8.1 Standalone
 
 ```text
-aliasdeck-web
-aliasdeck-api
-postgres
+  aliases.yaml  ──►  FileSource / GitSource
+                            │
+                            ▼
+                     ┌──────────────┐
+                     │ aliasdeck    │
+                     │   resolve    │
+                     │   validate   │
+                     │   render     │
+                     │   write      │
+                     └──────┬───────┘
+                            ▼
+                  ~/.config/aliasdeck/aliases.zsh
 ```
 
-A single-image deployment can be considered later.
+### 8.2 Control plane
+
+```text
+                  ┌──────────────────────────────────────┐
+                  │      aliasdeck serve                 │
+                  │      (single static binary)          │
+                  │                                      │
+                  │  ┌────────────────────────────────┐  │
+                  │  │  embedded web UI (embed.FS)    │  │
+                  │  ├────────────────────────────────┤  │
+                  │  │  HTTP API                      │  │
+                  │  │  aliases / profiles / devices  │  │
+                  │  │  auth / tokens / sync          │  │
+                  │  ├────────────────────────────────┤  │
+                  │  │  internal/renderers (preview)  │  │
+                  │  └────────────────────────────────┘  │
+                  └──────────────────┬───────────────────┘
+                                     │
+                            SQLite (default)
+                            PostgreSQL (optional)
+                                     │
+                     HTTPS · neutral JSON · no shell code
+        ┌────────────────────────────┼────────────────────────────┐
+        ▼                            ▼                            ▼
+   macOS CLI                    Linux CLI                   Windows CLI
+      zsh                       bash / zsh                  PowerShell
+        │                            │                            │
+        └──── internal/renderers ────┴──── internal/renderers ─────┘
+                          (authoritative render)
+        │                            │                            │
+        ▼                            ▼                            ▼
+ generated config             generated config            generated config
+```
+
+Server and CLI compile from the same module and share renderers, domain types and validation.
 
 ---
 
-## 9. Proposed repository structure
+## 9. Stack
+
+### 9.1 Language: Go, everywhere
+
+The original draft proposed NestJS for the API and Go for the CLI. That split is rejected:
+
+1. **Renderer duplication.** With a TypeScript API, renderers must exist twice — TS for UI preview, Go for the CLI — or preview is dropped. Two implementations of escaping logic is two sets of escaping bugs.
+2. **Distribution.** Local-first and self-hosted-first both want a single binary with no runtime dependency. Go delivers that; Node does not.
+3. **Contributor surface.** One language, one toolchain, one test command for a public project.
+
+**What this costs:** slower CRUD development than Prisma + NestJS, and the loss of shared types between API and web. The latter is recovered by generating a TypeScript client from the OpenAPI spec, which was needed anyway.
+
+### 9.2 CLI
+
+- Go, `cobra` for command structure
+- Owns `internal/renderers`, `internal/validate` and the `ConfigSource` implementations
+- Static binary per platform/architecture
+- Packaging: Homebrew, Scoop, `.deb`/`.rpm`, tarball
+
+### 9.3 Server
+
+- Go, current stable release
+- Routing: stdlib `net/http` with method-aware patterns (Go 1.22+); `chi` acceptable if middleware ergonomics justify the dependency
+- Persistence: SQLite by default, PostgreSQL optional behind a repository interface
+- SQLite driver: **`modernc.org/sqlite` (pure Go, no cgo)** — required so `CGO_ENABLED=0` cross-compilation to darwin/linux/windows on amd64/arm64 stays trivial. A cgo-dependent driver such as `mattn/go-sqlite3` would compromise the release pipeline
+- Queries: `sqlc` for type-safe generated code; no ORM
+- Migrations: `goose` or `golang-migrate`, embedded and applied on startup
+- API: REST under `/api/v1`, documented with OpenAPI
+
+### 9.4 Web
+
+- **Vite + React** (not Next.js), TypeScript, Tailwind CSS, shadcn/ui
+- Built to static assets, embedded into the Go binary via `embed.FS`
+
+**Why not Next.js:** Next earns its complexity through SSR, routing and server components, all of which need a Node runtime at serve time. Embedding it in a Go binary means static export, which discards most of that value while keeping the framework weight. An authenticated control panel is honestly an SPA. Node stays a build-time dependency only.
+
+### 9.5 Build and release
+
+- `goreleaser` for cross-compiled artifacts
+- Web assets built before the Go build and embedded
+- Docker image as a thin wrapper around the same binary
+
+---
+
+## 10. Repository structure
 
 ```text
 aliasdeck/
-├── apps/
-│   ├── api/
-│   ├── web/
-│   └── cli/
-├── packages/
-│   ├── shared/
-│   ├── shell-renderers/
-│   └── sdk/
+├── cmd/
+│   ├── aliasdeck/          # CLI binary
+│   └── aliasdeck-server/   # server binary
+├── internal/
+│   ├── domain/             # entities, shared by server and CLI
+│   ├── renderers/          # shell renderers (bash, zsh, powershell)
+│   ├── validate/           # alias name and payload validation
+│   ├── source/             # ConfigSource: file, git, server
+│   ├── apply/              # atomic write, bootstrap, native + chezmoi backends
+│   ├── config/             # config.yaml and aliases.yaml parsing
+│   ├── api/                # HTTP handlers, middleware, routing
+│   ├── store/              # repository interfaces + sqlite/postgres impls
+│   ├── auth/               # sessions, device tokens
+│   └── sync/               # server-side resolution
+├── web/                    # Vite + React app, built into internal/api/static
+├── migrations/
 ├── docs/
 │   ├── PROJECT.md
 │   ├── API.md
 │   └── ARCHITECTURE.md
-├── docker-compose.yml
+├── .goreleaser.yaml
+├── Dockerfile
 ├── README.md
 └── LICENSE
 ```
 
-If the CLI is written in Go:
-
-```text
-aliasdeck/
-├── apps/
-│   ├── api/
-│   └── web/
-├── cli/
-│   └── cmd/
-├── packages/
-│   ├── shared/
-│   └── sdk/
-└── docs/
-```
-
 ---
 
-## 10. Chezmoi integration
+## 11. Chezmoi integration
 
-Chezmoi should NOT be required for AliasDeck to work.
+Chezmoi is never required. It sits behind an apply-time interface in the CLI:
 
-Instead AliasDeck should expose a backend abstraction:
-
-```ts
-interface SyncBackend {
-  apply(config: ResolvedConfig): Promise<void>;
+```go
+type SyncBackend interface {
+    Apply(ctx context.Context, cfg ResolvedConfig, rendered string) error
 }
 ```
 
-Initial implementations:
+Implementations: `NativeBackend`, `ChezmoiBackend`.
 
-```text
-NativeBackend
-ChezmoiBackend
-```
-
-### Native backend
-
-AliasDeck writes its own generated files and inserts/validates the shell bootstrap.
-
-### Chezmoi backend
-
-AliasDeck generates or updates files inside the user's Chezmoi-managed source directory and then delegates application to Chezmoi.
-
-Potential command:
+- **Native** — writes the generated file and manages the shell bootstrap.
+- **Chezmoi** — writes into the user's Chezmoi source directory and delegates application to Chezmoi.
 
 ```bash
-aliasdeck config set sync.backend chezmoi
+aliasdeck config set backend chezmoi
 aliasdeck sync
 ```
 
-This allows existing Chezmoi users to keep their dotfile workflows while using AliasDeck as the control plane.
+The interface ships in the MVP. `ChezmoiBackend` is implemented on demand, not preemptively.
+
+Note that `SyncBackend` (how output is applied) is orthogonal to `ConfigSource` (where input comes from). A user can read from a server and apply through Chezmoi, or read from a Git repo and apply natively.
 
 ---
 
-## 11. Security
+## 12. Security
 
-Important design requirements:
-
-- Device-specific API tokens
-- Tokens stored securely by CLI
+- Device-specific API tokens, hashed at rest
+- Tokens stored by the CLI with `0600` permissions, OS keychain later
 - TLS expected in production
 - Secrets must not be embedded in aliases by default
-- Sensitive environment variables should eventually use a separate secret mechanism
+- Sensitive environment variables use a separate secret mechanism (post-MVP)
 - Audit trail for configuration changes
-- Device revocation
-- Token rotation
+- Device revocation and token rotation
 
-Do not blindly execute arbitrary server-side commands during sync. The sync process should render configuration files; command execution should only happen through explicitly designed features.
+### 12.1 Client-side validation is mandatory
+
+Because the client renders, the client is the last line of defense. This applies to *every* source — a malicious `aliases.yaml` pulled from a Git repo deserves the same scrutiny as a compromised server. Before writing anything:
+
+- **Alias names** must match a strict identifier pattern for the target shell. A name containing quotes, newlines, `;`, `$` or control characters can break out of the generated construct and corrupt the user's shell configuration
+- **Commands** must be escaped by the renderer for the target shell, never concatenated
+- **Payload size** must be bounded
+- Anything failing validation is skipped and reported by `aliasdeck doctor`, never silently written
+
+### 12.2 Sync never executes
+
+Sync renders and writes configuration files. It does not execute source-supplied content. Execution happens only when the user sources their shell, which is their explicit act.
+
+The generated file is written atomically (temp file + rename) so an interrupted sync can never leave a truncated file that a shell will try to source.
 
 ---
 
-## 12. Future features
-
-After the MVP:
+## 13. Future features
 
 ### Shell features
 
-- Fish support
-- Shell functions
-- Parameterized commands
-- Environment variables
-- PATH entries
-- Snippets
-- SSH shortcuts
+- Fish and Nushell support
+- Shell functions, parameterized commands
+- Environment variables, PATH entries
+- Snippets, SSH shortcuts
 
 ### Synchronization
 
-- Automatic periodic synchronization
-- Push notifications / websocket invalidation
-- Config versioning
-- Rollback
-- Diff before apply
-- Conflict detection
+- **Opportunistic auto-sync** — the generated file carries a non-blocking TTL check that triggers a background sync when stale. Automatic synchronization without a daemon. It must never add measurable latency to shell startup; a slow shell is an uninstall
+- Conditional requests (`ETag` / `If-None-Match`) so a no-op sync is cheap
+- Push invalidation via websocket
+- Config versioning, rollback, diff before apply, conflict detection
+- A real background daemon, only if opportunistic sync proves insufficient
 
 ### Organization
 
-- Shared/team aliases
-- Role-based access control
-- Multiple users
-- Shared profiles
+- Shared/team aliases, RBAC, multiple users, shared profiles
 
 ### Developer experience
 
-- Import aliases from existing `.zshrc`, `.bashrc` or PowerShell profile
-- Export configuration
+- Import from existing `.zshrc`, `.bashrc` or PowerShell profile
+- Export configuration (including server → `aliases.yaml`, so users can always leave)
 - CLI autocomplete
-- Homebrew package
-- Scoop/WinGet package
-- Debian/RPM packages
-- Docker image
+- Homebrew, Scoop/WinGet, Debian/RPM packages, Docker image
 
 ### Integrations
 
-- Chezmoi
-- Git repository export
+- Chezmoi, Git repository export
 - 1Password / Bitwarden / Vault for secret references
 - MCP server
 
 ---
 
-## 13. MCP / AI integration
+## 14. MCP / AI integration
 
-AliasDeck should eventually expose MCP tools such as:
+Eventually exposed MCP tools:
 
 ```text
-list_aliases
-get_alias
-create_alias
-update_alias
-delete_alias
-list_devices
-list_profiles
-assign_alias_to_profile
+list_aliases      get_alias         create_alias
+update_alias      delete_alias      list_devices
+list_profiles     assign_alias_to_profile
 sync_device
 ```
 
@@ -508,23 +635,38 @@ Example interaction:
 
 > Create an alias called `pve` that SSHs into my Proxmox host and enable it only for my Homelab profile on macOS and Linux.
 
-The MCP layer should call the same application service/API used by the Web UI.
-
-No MCP-only business logic.
+The MCP layer calls the same application services used by the Web UI and the API. No MCP-only business logic.
 
 ---
 
-## 14. MVP user flow
+## 15. User flows
 
-### Server installation
+### 15.1 Standalone — the default path
 
 ```bash
-git clone <repo>
-cd aliasdeck
-docker compose up -d
+brew install aliasdeck
+aliasdeck init                    # creates config.yaml + aliases.yaml, adds shell bootstrap
+aliasdeck edit                    # opens aliases.yaml in $EDITOR
+aliasdeck sync
 ```
 
-### Device setup
+Pointing at an existing dotfiles repository instead:
+
+```bash
+aliasdeck init --source ~/dotfiles/aliases.yaml
+aliasdeck sync
+```
+
+### 15.2 Control plane
+
+Server:
+
+```bash
+curl -sSL https://.../install.sh | sh
+./aliasdeck serve
+```
+
+Device:
 
 ```bash
 aliasdeck login https://aliases.example.com
@@ -532,9 +674,7 @@ aliasdeck register --name macbook
 aliasdeck sync
 ```
 
-### UI
-
-Create alias:
+Creating an alias in the UI:
 
 ```text
 Name: dcu
@@ -545,90 +685,109 @@ Platforms: macOS, Linux
 Shells: zsh, bash
 ```
 
-### Result
-
-AliasDeck CLI receives the resolved config and writes:
+### 15.3 Result, in both cases
 
 ```bash
 alias dcu='docker compose up -d'
 ```
 
-The alias becomes available after reload/source or through shell bootstrap behavior.
+Available after reload/source, or through shell bootstrap behavior.
 
 ---
 
-## 15. Milestones
+## 16. Milestones
 
-### Milestone 1 — Foundation
+Ordered so that the hardest and most dangerous code is written and tested first, and so that a genuinely useful product ships before any server exists.
 
-- Monorepo
-- API skeleton
-- Web skeleton
-- Database schema
-- Docker Compose
-- Authentication
+### Milestone 1 — Renderer core
 
-### Milestone 2 — Alias management
+- Go module and repository layout
+- `internal/domain` types
+- `internal/renderers` for zsh and bash
+- `internal/validate` — alias name rules, escaping, size bounds
+- Golden-file tests for every renderer
 
-- Alias CRUD
-- Tags
-- Profiles
-- Platform/shell filters
-- Web UI
+Nothing user-facing. All of the project's delicate logic, tested in isolation.
 
-### Milestone 3 — Device + sync
+### Milestone 2 — Standalone CLI · **v0.1, first release**
 
-- Device registration
-- Device tokens
-- Sync endpoint
-- CLI
-- Bash/Zsh renderer
-- Safe generated-file bootstrap
+- `aliases.yaml` and `config.yaml` schemas
+- `FileSource` and local resolution
+- `internal/apply`: atomic write, shell bootstrap management
+- CLI: `init`, `sync`, `status`, `list`, `doctor`, `edit`
+- `goreleaser`, Homebrew tap, install script
 
-### Milestone 4 — Windows
+A complete, useful tool on macOS and Linux. Zero server, zero UI.
 
-- PowerShell renderer
-- Windows device support
-- CLI packaging
+### Milestone 3 — Windows and Git · **v0.2**
 
-### Milestone 5 — Advanced
+- PowerShell renderer and Windows support
+- Scoop packaging
+- `GitSource`
 
-- Chezmoi adapter
-- Import/export
-- Version history
-- Diff/rollback
+The standalone product now covers all three operating systems and composes with existing dotfiles repositories.
 
-### Milestone 6 — AI
+### Milestone 4 — Server · **v0.3**
 
-- MCP server
-- MCP authorization
-- Agent-safe mutation APIs
+- `aliasdeck serve`, SQLite schema and embedded migrations
+- Authentication, device registration, device tokens
+- Alias/profile/device CRUD over REST, OpenAPI spec
+- Server-side resolution and sync endpoint
+- `ServerSource` in the CLI
 
----
+### Milestone 5 — Web UI · **v0.4**
 
-## 16. Decisions for the first implementation
+- Vite + React app embedded via `embed.FS`
+- Alias, profile and device management
+- Search, filtering, tags
+- Sync status
+- Live rendered preview using the shared renderer package
 
-Recommended defaults:
+### Milestone 6 — Advanced
 
-- Project name: **AliasDeck**
-- License: AGPL-3.0 or MIT — decide before public launch
-- API: NestJS
-- Web: Next.js
-- Database: PostgreSQL
-- ORM: Prisma
-- CLI: Go preferred
-- Deployment: Docker Compose
-- First shells: zsh + bash
-- Windows/PowerShell: immediately after first MVP sync works
-- Native sync backend: required
-- Chezmoi: optional adapter
-- MCP: post-MVP
+- Opportunistic auto-sync
+- Import from existing shell config, export to `aliases.yaml`
+- Version history, diff, rollback
+- Chezmoi backend
+
+### Milestone 7 — AI
+
+- MCP server, MCP authorization, agent-safe mutation APIs
 
 ---
 
-## 17. Non-goals for MVP
+## 17. Decisions for the first implementation
 
-Do not initially build:
+Settled as of 2026-08-12:
+
+| Area | Decision |
+| --- | --- |
+| Project name | AliasDeck |
+| Positioning | Cross-shell command compiler, not a dotfile manager |
+| Build order | **Local-first** — standalone CLI ships before the server exists |
+| Server language | Go |
+| CLI language | Go |
+| Rendering location | **Client (CLI)** — no source ever emits shell code |
+| Renderer sharing | Shared Go package, used by CLI and by server-side preview |
+| Config input | `ConfigSource` interface: file, git, server |
+| Source binding | Exactly one source per device, explicit, no merging |
+| Standalone format | `aliases.yaml` (source) + `config.yaml` (device-local) |
+| Web | Vite + React + Tailwind + shadcn/ui, embedded via `embed.FS` |
+| Database | SQLite by default (pure-Go driver), PostgreSQL optional |
+| Query layer | `sqlc`, no ORM |
+| Deployment | Single static binary; Docker as convenience |
+| First shells | zsh + bash, PowerShell in v0.2 |
+| Sync model | Pull-based, manual, no daemon |
+| Native apply backend | Required |
+| Chezmoi | Optional apply backend, interface only in MVP |
+| MCP | Post-MVP |
+| License | AGPL-3.0 or MIT — decide before public launch |
+
+---
+
+## 18. Non-goals for MVP
+
+Not built initially:
 
 - Full dotfile management
 - Remote command execution
@@ -638,7 +797,10 @@ Do not initially build:
 - Cloud-hosted SaaS
 - Complex team RBAC
 - Real-time collaboration
+- A background sync daemon
+- Merging or reconciling multiple configuration sources
+- Chezmoi backend implementation
 
-The first release should solve one problem extremely well:
+The first release solves one problem extremely well:
 
-> Create a command once and safely make it available on the machines where you want it.
+> Define a command once and safely make it available, in the right syntax, on the machines where you want it.
