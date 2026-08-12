@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -105,10 +107,16 @@ func TestBaseExpandsTildeInAliasdeckHome(t *testing.T) {
 	}
 }
 
-// TestBaseDoesNotUseUserConfigDir is the explicit regression test required by
-// the project's non-negotiable constraint: os.UserConfigDir() returns
-// ~/Library/Application Support on macOS, which contradicts the
-// ~/.config/aliasdeck path documented in PROJECT.md §3.4.
+// TestBaseDoesNotUseUserConfigDir guards the project's non-negotiable path
+// constraint: os.UserConfigDir() returns ~/Library/Application Support on
+// macOS, which contradicts the ~/.config/aliasdeck path PROJECT.md §3.4
+// documents and promises.
+//
+// The forbidden-path half of the assertion only means anything where the two
+// actually diverge. On Linux os.UserConfigDir() resolves to $XDG_CONFIG_HOME
+// or ~/.config — the same place AliasDeck correctly resolves to — so demanding
+// they differ there fails a correct implementation. That is not hypothetical:
+// it is what this test did the first time it ran on Linux.
 func TestBaseDoesNotUseUserConfigDir(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
@@ -130,8 +138,18 @@ func TestBaseDoesNotUseUserConfigDir(t *testing.T) {
 		t.Fatalf("Base() = %q, want %q", got, want)
 	}
 
-	// os.UserConfigDir() is real HOME-backed and, on macOS, resolves under
-	// "Library/Application Support". Base() must never produce that path.
+	// The path must never land under macOS's Application Support, whichever
+	// platform the test happens to run on.
+	if strings.Contains(got, filepath.Join("Library", "Application Support")) {
+		t.Fatalf("Base() = %q resolves under macOS's Application Support directory", got)
+	}
+
+	// Only assert divergence from os.UserConfigDir() where the two genuinely
+	// differ. On Linux they coincide by design, and requiring them to differ
+	// would reject the correct answer.
+	if runtime.GOOS != "darwin" {
+		return
+	}
 	if userConfigDir, err := os.UserConfigDir(); err == nil {
 		forbidden := filepath.Join(userConfigDir, "aliasdeck")
 		if got == forbidden {
