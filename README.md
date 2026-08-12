@@ -8,36 +8,48 @@ It is not a dotfile manager. Dotfile managers copy files; AliasDeck understands 
 
 ---
 
-## Status: usable from source — no packaged release yet
+## Install
 
-The standalone CLI works: `init`, `sync`, `status`, `list`, `doctor`, `edit` and `uninstall` are all implemented and tested against real bash and zsh. **There is no tagged release, no Homebrew tap and no install-script endpoint yet.** `brew install aliasdeck` and `curl … | sh` will not work until v0.1 is tagged and published — build from source in the meantime.
+**Homebrew** (macOS and Linux):
+
+```bash
+brew install angeltonio/tap/aliasdeck
+```
+
+**Or without Homebrew:**
+
+```bash
+curl -sSL https://raw.githubusercontent.com/angeltonio/aliasdeck/main/scripts/install.sh | sh
+```
+
+The script verifies the download against the release checksums before installing anything.
+
+## Getting started
+
+```bash
+aliasdeck init      # creates ~/.config/aliasdeck/{config,aliases}.yaml, detects platform and shell,
+                    # and asks before adding a one-line bootstrap to your shell rc file
+aliasdeck edit      # opens aliases.yaml in $EDITOR — add your own aliases here
+aliasdeck sync      # renders and writes the generated file for your shell
+aliasdeck status    # active source, device identity, up-to-date check
+aliasdeck list      # aliases that apply to this device, and why others are skipped
+```
+
+Reload your shell and your aliases are live. `aliasdeck uninstall` reverses all of it, leaving your rc file byte-identical to how it was found.
+
+## Status
+
+**v0.1.0** — the standalone CLI, on macOS and Linux, for zsh and bash.
 
 | Component | State |
 | --- | --- |
-| Domain model and resolution | ✅ Done |
-| Validation (name/command/description safety) | ✅ Done |
-| zsh + bash renderers | ✅ Done |
-| Standalone CLI (`init`, `sync`, `status`, `list`, `doctor`, `edit`, `uninstall`) | ✅ Done — build from source |
-| Packaged release (Homebrew tap, install script) | ⬜ Next |
-| PowerShell renderer | ⬜ Planned |
+| Domain model and resolution | ✅ |
+| Validation (name/command/description safety) | ✅ |
+| zsh + bash renderers | ✅ |
+| Standalone CLI (`init`, `sync`, `status`, `list`, `doctor`, `edit`, `uninstall`) | ✅ |
+| Homebrew tap and install script | ✅ |
+| PowerShell renderer and Windows | ⬜ Planned |
 | Server + web UI | ⬜ Later |
-
-Build it and try it:
-
-```bash
-git clone https://github.com/angeltonio/aliasdeck
-cd aliasdeck
-go build -o aliasdeck ./cmd/aliasdeck
-
-./aliasdeck init      # creates ~/.config/aliasdeck/{config,aliases}.yaml, detects platform/shell,
-                      # asks before adding a one-line bootstrap to your shell rc file
-./aliasdeck edit      # opens aliases.yaml in $EDITOR — add your own aliases here
-./aliasdeck sync      # renders and writes the generated file for your shell
-./aliasdeck status    # active source, device identity, up-to-date check
-./aliasdeck list      # aliases that apply to this device, and why others are skipped
-```
-
-Reload your shell (or `source` the printed bootstrap line) and your aliases are live. `aliasdeck uninstall` reverses all of it, byte-identically.
 
 ---
 
@@ -104,7 +116,7 @@ Chezmoi is excellent and AliasDeck does not replace it. They solve different pro
 
 ## Two ways to use it
 
-**Standalone** — one CLI, one `aliases.yaml`. No server, no account, no database. This is the primary way to use AliasDeck, and it works today — build from source, see the Status section above.
+**Standalone** — one CLI, one `aliases.yaml`. No server, no account, no database. This is the primary way to use AliasDeck, and it is what v0.1 ships.
 
 ```bash
 aliasdeck init
@@ -142,7 +154,7 @@ These are the choices that shape everything else. The reasoning lives in [`docs/
 | Version | Scope |
 | --- | --- |
 | — | Renderer core, validation, golden tests ✅ |
-| **v0.1** | Standalone CLI · zsh + bash · macOS + Linux — implemented, tagged release pending |
+| **v0.1** | Standalone CLI · zsh + bash · macOS + Linux ✅ |
 | v0.2 | PowerShell + Windows · Git-hosted config |
 | v0.3 | Self-hosted server · devices, profiles, REST API |
 | v0.4 | Web UI with live rendered preview |
@@ -168,8 +180,6 @@ make test      # tests only
 make cover     # per-package coverage
 make golden    # regenerate renderer golden files, then read the diff
 ```
-
-There is no tagged release yet, so `scripts/install.sh` and the Homebrew tap referenced in `.goreleaser.yaml` are not live — building from source above is the only way to install AliasDeck today.
 
 ### A note on the tests
 

@@ -19,6 +19,25 @@ set -eu
 REPO="angeltonio/aliasdeck"
 BIN_NAME="aliasdeck"
 
+# fetch wraps every network call so the retry and timeout policy lives in one
+# place instead of being repeated, and inconsistently, at each call site.
+#
+# Retries matter: a connection dropped part way through a download is common
+# enough on hotel wifi, mobile tethering and congested CI networks that failing
+# on the first one turns a working install into a support question. The
+# timeouts still bound how long a genuinely dead connection can hang, which is
+# what stops `curl … | sh` waiting forever on a socket nobody will answer.
+#
+# Usage: fetch <max-seconds> [curl args...]
+fetch() {
+	fetch_timeout=$1
+	shift
+	curl -fsSL \
+		--retry 3 --retry-delay 2 --retry-connrefused \
+		--connect-timeout 10 --max-time "$fetch_timeout" \
+		"$@"
+}
+
 log() {
 	printf '%s\n' "$*" >&2
 }
@@ -60,8 +79,7 @@ resolve_version() {
 	fi
 
 	latest_url="https://github.com/${REPO}/releases/latest"
-	resolved=$(curl -fsSL --connect-timeout 10 --max-time 60 \
-		-o /dev/null -w '%{url_effective}' "$latest_url" 2>/dev/null) ||
+	resolved=$(fetch 60 -o /dev/null -w '%{url_effective}' "$latest_url" 2>/dev/null) ||
 		fail "could not resolve the latest release from $latest_url"
 
 	# GitHub redirects /releases/latest to /releases/tag/<tag> only when a
@@ -103,7 +121,7 @@ verify_checksum() {
 	fi
 
 	sums_url="https://github.com/${REPO}/releases/download/${version}/checksums.txt"
-	curl -fsSL --connect-timeout 10 --max-time 60 -o "$work_dir/checksums.txt" "$sums_url" ||
+	fetch 60 -o "$work_dir/checksums.txt" "$sums_url" ||
 		fail "could not download $sums_url; refusing to install an unverified binary"
 
 	expected=$(grep " $archive\$" "$work_dir/checksums.txt" | cut -d' ' -f1)
@@ -141,7 +159,7 @@ main() {
 	# Timeouts matter more than usual here: this script is meant to be piped
 	# into sh, where a connection that is accepted but never delivers data
 	# would otherwise hang the install forever with nothing to report.
-	curl -fsSL --connect-timeout 10 --max-time 300 -o "$work_dir/$archive" "$url" ||
+	fetch 300 -o "$work_dir/$archive" "$url" ||
 		fail "download failed: $url (no partial install was performed)"
 
 	verify_checksum "$work_dir" "$archive" "$version"
