@@ -46,16 +46,16 @@ Unit 4 and Unit 6 are the largest (~530 and ~730 lines respectively); split furt
 
 ## Phase 2: Source, Apply, State
 
-- [ ] 2.1 RED `internal/source/file_test.go`: configured path only (no merge/fallback), resolve error not partially applied, hostile alias name/oversized command filtered before render (CS reqs 1-4; threat matrix "Hostile aliases.yaml")
-- [ ] 2.2 GREEN `internal/source/source.go`, `file.go`: `ConfigSource`, `Descriptor`, `FileSource.Resolve` → `validate.FilterValid` → `renderers.Render`
-- [ ] 2.3 RED `internal/apply/atomic_test.go`: temp+rename, mode, symlink/directory destination refused, temp cleanup on failure (NA req 1; threat matrix "Output path")
-- [ ] 2.4 GREEN `internal/apply/atomic.go`: atomic write helper
-- [ ] 2.5 RED `internal/apply/bootstrap_test.go`: rc fixtures (trailing-newline/none/empty/pre-existing block/user-edited block), idempotent add, exact-byte removal, symlinked rc preserved, marker text inside hostile rc not corrupted (NA reqs 2-4; threat matrix "rc file mutation")
-- [ ] 2.6 GREEN `internal/apply/bootstrap.go`: marker block add/remove, `filepath.EvalSymlinks`
-- [ ] 2.7 RED `internal/apply/native_test.go`: `NativeBackend.Apply` happy path, `backend: chezmoi` hard error, no partial writes
-- [ ] 2.8 GREEN `internal/apply/backend.go`, `native.go`: `SyncBackend{Name,OutputPath,Apply}`, `NativeBackend`, `ChezmoiBackend` stub (NA reqs 5-6)
-- [ ] 2.9 RED `internal/state/state_test.go`: round-trip, corrupt/missing JSON tolerated
-- [ ] 2.10 GREEN `internal/state/state.go`: `State`, `Bootstrap`, `Load`/`Save` at `0600` (SS req 1)
+- [x] 2.1 RED `internal/source/file_test.go`: configured path only (no merge/fallback), resolve error not partially applied, hostile alias name/oversized command filtered before render (CS reqs 1-4; threat matrix "Hostile aliases.yaml")
+- [x] 2.2 GREEN `internal/source/source.go`, `file.go`: `ConfigSource`, `Descriptor`, `FileSource.Resolve` → `validate.FilterValid` → `renderers.Render`
+- [x] 2.3 RED `internal/apply/atomic_test.go`: temp+rename, mode, symlink/directory destination refused, temp cleanup on failure (NA req 1; threat matrix "Output path")
+- [x] 2.4 GREEN `internal/apply/atomic.go`: atomic write helper
+- [x] 2.5 RED `internal/apply/bootstrap_test.go`: rc fixtures (trailing-newline/none/empty/pre-existing block/user-edited block), idempotent add, exact-byte removal, symlinked rc preserved, marker text inside hostile rc not corrupted (NA reqs 2-4; threat matrix "rc file mutation")
+- [x] 2.6 GREEN `internal/apply/bootstrap.go`: marker block add/remove, `filepath.EvalSymlinks`
+- [x] 2.7 RED `internal/apply/native_test.go`: `NativeBackend.Apply` happy path, `backend: chezmoi` hard error, no partial writes
+- [x] 2.8 GREEN `internal/apply/backend.go`, `native.go`: `SyncBackend{Name,OutputPath,Apply}`, `NativeBackend`, `ChezmoiBackend` stub (NA reqs 5-6)
+- [x] 2.9 RED `internal/state/state_test.go`: round-trip, corrupt/missing JSON tolerated
+- [x] 2.10 GREEN `internal/state/state.go`: `State`, `Bootstrap`, `Load`/`Save` at `0600` (SS req 1)
 
 ## Phase 3: App Use Cases & CLI Wiring
 
