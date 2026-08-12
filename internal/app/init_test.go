@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -164,5 +165,89 @@ func TestInitIsIdempotentForExistingFiles(t *testing.T) {
 	}
 	if report.AliasesCreated {
 		t.Error("second Init() must not report AliasesCreated when aliases.yaml already exists")
+	}
+}
+
+// TestInitAssumeYesConsentsWithoutPrompting covers the flag that makes an
+// unattended install possible.
+//
+// Prompts are skipped when stdin is not a terminal, because reading a pipe
+// that never delivers a line blocks forever. Without an explicit way to
+// consent, that safety measure would leave an install script or a container
+// build permanently unable to add the bootstrap — the one step that makes
+// aliases actually load.
+func TestInitAssumeYesConsentsWithoutPrompting(t *testing.T) {
+	te := newTestEnv(t)
+	te.setenv("ALIASDECK_PLATFORM", "macos")
+	te.setenv("ALIASDECK_SHELL", "zsh")
+
+	rcPath := filepath.Join(t.TempDir(), ".zshrc")
+	if err := os.WriteFile(rcPath, []byte("alias ll='ls -la'\n"), 0o644); err != nil {
+		t.Fatalf("seeding rc file: %v", err)
+	}
+
+	confirmCalled := false
+	report, err := Init(context.Background(), te.Env, InitOptions{
+		AssumeYes: true,
+		RCFile:    rcPath,
+		Confirm: func(string) (bool, error) {
+			confirmCalled = true
+			return false, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Init() returned an error: %v", err)
+	}
+
+	if confirmCalled {
+		t.Error("--yes must not ask a question it already has the answer to")
+	}
+	if !report.BootstrapAdded {
+		t.Fatalf("--yes did not add the bootstrap line (skipped: %q)", report.BootstrapSkippedReason)
+	}
+
+	rc, err := os.ReadFile(rcPath)
+	if err != nil {
+		t.Fatalf("reading rc file: %v", err)
+	}
+	if !strings.Contains(string(rc), "aliasdeck") {
+		t.Errorf("rc file has no bootstrap block after --yes:\n%s", rc)
+	}
+	if !strings.Contains(string(rc), "alias ll='ls -la'") {
+		t.Error("--yes destroyed the user's existing rc content")
+	}
+}
+
+// TestInitAssumeYesAndNoBootstrapPrefersNotTouchingTheFile pins the safe
+// resolution when a caller passes both flags: the one that declines wins.
+func TestInitAssumeYesAndNoBootstrapPrefersNotTouchingTheFile(t *testing.T) {
+	te := newTestEnv(t)
+	te.setenv("ALIASDECK_PLATFORM", "macos")
+	te.setenv("ALIASDECK_SHELL", "zsh")
+
+	rcPath := filepath.Join(t.TempDir(), ".zshrc")
+	original := "alias ll='ls -la'\n"
+	if err := os.WriteFile(rcPath, []byte(original), 0o644); err != nil {
+		t.Fatalf("seeding rc file: %v", err)
+	}
+
+	report, err := Init(context.Background(), te.Env, InitOptions{
+		AssumeYes:   true,
+		NoBootstrap: true,
+		RCFile:      rcPath,
+	})
+	if err != nil {
+		t.Fatalf("Init() returned an error: %v", err)
+	}
+	if report.BootstrapAdded {
+		t.Error("--no-bootstrap must win over --yes; the safe outcome is not editing the file")
+	}
+
+	rc, err := os.ReadFile(rcPath)
+	if err != nil {
+		t.Fatalf("reading rc file: %v", err)
+	}
+	if string(rc) != original {
+		t.Errorf("rc file was modified despite --no-bootstrap:\n%s", rc)
 	}
 }

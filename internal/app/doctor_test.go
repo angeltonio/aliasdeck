@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/angeltonio/aliasdeck/internal/config"
@@ -81,6 +82,45 @@ func TestDoctorWritesNothing(t *testing.T) {
 
 	if len(beforeNames) != len(afterNames) {
 		t.Errorf("doctor changed the number of files in the base dir: before=%v after=%v", beforeNames, afterNames)
+	}
+}
+
+// TestDoctorLeavesAHandWrittenConfigUntouched covers the case the file-count
+// assertion above cannot see.
+//
+// Counting files misses a rewrite in place, and seeding a config that already
+// has device.name excludes the branch that used to do the rewriting: loading a
+// config without one generated an identity and persisted it, so `doctor`
+// reformatted a hand-authored file and added empty keys the user never typed.
+//
+// The fixture here is deliberately minimal and hand-shaped — no device block,
+// no quoting AliasDeck would have produced — so any write at all shows up as a
+// byte difference.
+func TestDoctorLeavesAHandWrittenConfigUntouched(t *testing.T) {
+	te := newTestEnv(t)
+
+	handWritten := "version: 1\nsource:\n  type: file\nbackend: native\n"
+	configPath := config.ConfigFile(te.Base)
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
+		t.Fatalf("creating base dir: %v", err)
+	}
+	if err := os.WriteFile(configPath, []byte(handWritten), 0o600); err != nil {
+		t.Fatalf("seeding config.yaml: %v", err)
+	}
+	writeAliasesYAML(t, te.Base, testHostileAliasesYAML)
+	te.setenv("ALIASDECK_PLATFORM", "macos")
+	te.setenv("ALIASDECK_SHELL", "zsh")
+
+	if _, err := Doctor(context.Background(), te.Env, Options{}); err != nil {
+		t.Fatalf("Doctor() returned an error: %v", err)
+	}
+
+	got, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("re-reading config.yaml: %v", err)
+	}
+	if string(got) != handWritten {
+		t.Errorf("doctor rewrote the user's config.yaml\n before: %q\n  after: %q", handWritten, got)
 	}
 }
 

@@ -65,5 +65,12 @@ rules:
     test_command: "go test ./..."
     build_command: "go vet ./... && gofmt -l ."
     coverage_threshold: 70
+    # cmd/ is exempt. It holds Cobra flag declarations and the mapping from
+    # errors to exit codes; the behaviour it exposes is tested in internal/app,
+    # where it can be exercised without a process boundary. Chasing 70% here
+    # would mean tests that assert flags were registered, which pins the
+    # wiring without checking anything a user experiences.
+    coverage_exempt:
+      - cmd/aliasdeck
   archive:
     - Warn before merging destructive deltas

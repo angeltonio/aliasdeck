@@ -149,9 +149,19 @@ func ParseDeviceConfig(data []byte) (DeviceFileConfig, error) {
 // Load reads path, strictly parses it, and ensures the device has a stable
 // identity.
 //
-// If device.name is empty, Load generates a fallback identity and persists
-// it by writing the file back, so every later Load call for the same file
-// returns the same ID rather than a fresh random one on every run.
+// If device.name is empty, Load fills in a fallback identity **in memory only**
+// and never writes the file back.
+//
+// Loading is a read. Persisting here would mean that `doctor`, `status` and
+// `list` — commands documented as writing nothing — silently rewrote a
+// hand-authored config.yaml, reformatting it and adding empty keys the user
+// never typed. A diagnostic that edits the thing it is diagnosing is not a
+// diagnostic.
+//
+// The identity stays stable across runs without being stored because
+// generateDeviceName derives it from the hostname. Only the random last-resort
+// branch would vary, and init writes the resolved name into the file it
+// creates, so that branch is reached at most once.
 func Load(path string) (DeviceFileConfig, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -170,10 +180,6 @@ func Load(path string) (DeviceFileConfig, error) {
 		}
 		cfg.Device.Name = name
 		cfg.Device.ID = name
-
-		if err := Write(path, cfg); err != nil {
-			return DeviceFileConfig{}, fmt.Errorf("persisting generated device identity: %w", err)
-		}
 	}
 
 	return cfg, nil

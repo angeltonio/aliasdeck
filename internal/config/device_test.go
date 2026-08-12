@@ -180,3 +180,51 @@ func TestGenerateDeviceNamePrefersHostname(t *testing.T) {
 		t.Error("fell back to a random identity while a usable hostname was available")
 	}
 }
+
+// TestLoadNeverWritesTheFileBack pins loading as a pure read.
+//
+// Load previously persisted a generated identity, which made every command
+// that merely reads configuration — doctor, status, list — rewrite a
+// hand-authored config.yaml, reformatting it and inserting empty keys. The
+// fixture is written the way a person writes it, not the way Write emits it,
+// so any round-trip through the serializer is visible as a byte difference.
+func TestLoadNeverWritesTheFileBack(t *testing.T) {
+	fixtures := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "no device block at all",
+			body: "version: 1\nsource:\n  type: file\nbackend: native\n",
+		},
+		{
+			name: "empty device block",
+			body: "version: 1\ndevice: {}\nsource:\n  type: file\nbackend: native\n",
+		},
+		{
+			name: "comments and spacing a serializer would not produce",
+			body: "version: 1\n\n# my laptop\ndevice:\n  name: work-laptop\n\nsource:\n  type: file\nbackend: native\n",
+		},
+	}
+
+	for _, tt := range fixtures {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte(tt.body), 0o600); err != nil {
+				t.Fatalf("seeding config.yaml: %v", err)
+			}
+
+			if _, err := Load(path); err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+
+			got, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("re-reading config.yaml: %v", err)
+			}
+			if string(got) != tt.body {
+				t.Errorf("Load modified the file on disk\n before: %q\n  after: %q", tt.body, got)
+			}
+		})
+	}
+}
