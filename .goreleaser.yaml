@@ -4,7 +4,7 @@
 #
 # The `homebrew_casks:` block below publishes a cask to angeltonio/homebrew-tap.
 # That repository now exists with a `main` branch; GoReleaser creates the
-# `Formula/` directory and commits into it.
+# `Casks/` directory and commits into it.
 #
 # What is still required is a token that can push there. The GITHUB_TOKEN
 # GitHub Actions injects is scoped to the repository running the workflow
