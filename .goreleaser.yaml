@@ -2,7 +2,7 @@
 #
 # RELEASE PREREQUISITE — READ BEFORE TAGGING v0.1
 #
-# The `brews:` block below publishes a formula to angeltonio/homebrew-tap.
+# The `homebrew_casks:` block below publishes a cask to angeltonio/homebrew-tap.
 # That repository now exists with a `main` branch; GoReleaser creates the
 # `Formula/` directory and commits into it.
 #
@@ -71,9 +71,14 @@ changelog:
       - "^test:"
       - "^chore:"
 
-brews:
+# Casks, not formulae. GoReleaser deprecated `brews` because the formulae it
+# generated for pre-compiled binaries were a workaround for a problem Homebrew
+# solves properly with casks.
+homebrew_casks:
   - name: aliasdeck
     ids:
+      - aliasdeck
+    binaries:
       - aliasdeck
     repository:
       owner: angeltonio
@@ -86,14 +91,27 @@ brews:
       # Locally:  export GORELEASER_TAP_TOKEN=$(gh auth token)
       # In CI:    a PAT stored as the GORELEASER_TAP_TOKEN secret
       token: "{{ .Env.GORELEASER_TAP_TOKEN }}"
-    directory: Formula
     homepage: "https://github.com/angeltonio/aliasdeck"
     description: "Your commands. Every machine. Compiles neutral aliases into shell-specific syntax."
-    license: "MIT"
-    install: |
-      bin.install "aliasdeck"
-    test: |
-      system "#{bin}/aliasdeck", "--help"
+    url:
+      verified: github.com/angeltonio/aliasdeck
+    hooks:
+      post:
+        # These binaries are not signed or notarized, so macOS quarantines
+        # anything downloaded and refuses to run it. Without this the install
+        # succeeds and the first `aliasdeck` invocation fails with a message
+        # about an unverified developer — which looks like a broken tool rather
+        # than an unsigned one.
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr",
+                           args: ["-dr", "com.apple.quarantine", "#{staged_path}/aliasdeck"]
+          end
+    caveats: |
+      Get started with:
+        aliasdeck init
+        aliasdeck edit
+        aliasdeck sync
 
 release:
   github:
