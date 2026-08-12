@@ -1,0 +1,122 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      # ubuntu-latest ships bash but not zsh. Installing it is not optional:
+      # without zsh the real-shell tests would skip, and a skip reads as a pass.
+      - name: Install zsh
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y zsh
+
+      - name: Record the shells under test
+        run: |
+          bash --version | head -1
+          zsh --version
+
+      - name: Check formatting
+        run: make fmt-check
+
+      - name: Vet
+        run: go vet ./...
+
+      # ALIASDECK_REQUIRE_SHELLS turns a missing shell from a skip into a
+      # failure. The tests it governs are the ones proving AliasDeck does not
+      # write executable code into a user's shell, so a pipeline that silently
+      # declined to run them would be worse than no pipeline at all.
+      - name: Test
+        env:
+          ALIASDECK_REQUIRE_SHELLS: "1"
+        run: go test -race -coverprofile=coverage.out ./...
+
+      - name: Coverage
+        run: go tool cover -func=coverage.out | tail -20
+
+      - name: Build the binary
+        run: go build -o /tmp/aliasdeck ./cmd/aliasdeck
+
+      # The unit tests exercise the use cases directly. This proves the shipped
+      # binary works end to end on this platform: create a config, sync it,
+      # source the result in a real shell, then remove it and confirm the rc
+      # file came back byte-identical.
+      - name: Smoke test the binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          work=$(mktemp -d)
+          export ALIASDECK_HOME="$work/config"
+          rc="$work/.zshrc"
+          printf 'alias mine=%s\n' "'echo mine'" > "$rc"
+          cp "$rc" "$work/rc.original"
+
+          /tmp/aliasdeck init --shell zsh --rc-file "$rc" --yes
+          cat > "$ALIASDECK_HOME/aliases.yaml" <<'YAML'
+          version: 1
+          aliases:
+            - name: dps
+              command: docker ps
+            - name: gwip
+              command: git commit -m 'wip'
+          YAML
+
+          /tmp/aliasdeck sync --shell zsh
+          /tmp/aliasdeck status --shell zsh
+          /tmp/aliasdeck list --shell zsh
+          /tmp/aliasdeck doctor --shell zsh
+
+          zsh -c "source '$ALIASDECK_HOME/aliases.zsh'; alias gwip" | tee /dev/stderr | grep -q "git commit"
+
+          /tmp/aliasdeck uninstall --shell zsh --yes
+          diff "$work/rc.original" "$rc"
+          echo "rc file restored byte-identically"
+
+  shellcheck:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the install script
+        run: |
+          sudo apt-get update && sudo apt-get install -y shellcheck
+          shellcheck -s sh scripts/install.sh
+
+  goreleaser-config:
+    name: goreleaser config
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      # Validating the release config on every change means a broken one is
+      # found here rather than half way through publishing a tag.
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: latest
+          args: check

@@ -16,9 +16,13 @@
 # GitHub release publishes, and only then does the Homebrew step reject the
 # push — leaving a half-finished release to unpick from a CI log.
 #
-# A local release from a machine whose gh token already carries `repo`
-# scope needs no PAT. Either way, run `goreleaser release --snapshot
-# --clean` first to check the build without publishing anything.
+# Releasing locally from a machine whose gh token already carries `repo`
+# scope needs no PAT — just point the same variable at it:
+#
+#   export GORELEASER_TAP_TOKEN=$(gh auth token)
+#
+# Either way, run `goreleaser release --snapshot --clean` first to check the
+# build without publishing anything.
 
 version: 2
 
@@ -75,6 +79,13 @@ brews:
       owner: angeltonio
       name: homebrew-tap
       branch: main
+      # Always required, in CI and locally. Without it GoReleaser falls back to
+      # GITHUB_TOKEN, which in Actions is scoped to this repository and cannot
+      # push to the tap.
+      #
+      # Locally:  export GORELEASER_TAP_TOKEN=$(gh auth token)
+      # In CI:    a PAT stored as the GORELEASER_TAP_TOKEN secret
+      token: "{{ .Env.GORELEASER_TAP_TOKEN }}"
     directory: Formula
     homepage: "https://github.com/angeltonio/aliasdeck"
     description: "Your commands. Every machine. Compiles neutral aliases into shell-specific syntax."
