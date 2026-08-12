@@ -7,6 +7,9 @@ build/
 *.test
 *.out
 coverage.html
+
+# Local code index — machine-specific, never shared between checkouts
+.codegraph/
 .env
 .env.*
 !.env.example

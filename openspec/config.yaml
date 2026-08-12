@@ -1,0 +1,63 @@
+schema: spec-driven
+
+context: |
+  Tech stack: Go 1.25.11 (asdf-pinned), stdlib only, no external deps yet.
+  Module: github.com/angeltonio/aliasdeck (single module monorepo).
+  Architecture: cross-shell command compiler. Neutral alias -> ShellRenderer
+  interface -> shell-specific syntax (zsh, bash; PowerShell later).
+  Layout: internal/domain, internal/renderers, internal/validate. cmd/ absent
+  (library-only, Milestone 1 complete per docs/PROJECT.md).
+  Testing: table-driven unit tests, golden files for renderer output, real-shell
+  (bash/zsh) injection integration test. 162 cases, domain 70.4%/renderers
+  89.1%/validate 87.7% coverage.
+  Style: MIT license, public repo, contributor-facing docs in README.md and
+  docs/PROJECT.md (authoritative product/architecture spec).
+
+strict_tdd: true
+
+testing:
+  test_command: "go test ./..." # also: make test
+  check_command: "make check"   # gofmt -l -w . && go vet ./... && go test ./...
+  coverage_command: "make cover"
+  golden_command: "make golden" # go test ./internal/renderers -update
+  frameworks:
+    unit: "Go standard library testing (table-driven, t.Run subtests)"
+    integration: "real bash/zsh binary injection test in internal/renderers"
+    golden_files: "internal/renderers/testdata"
+  coverage:
+    domain: "70.4%"
+    renderers: "89.1%"
+    validate: "87.7%"
+  quality:
+    formatter: "gofmt -l -w ."
+    vet: "go vet ./..."
+    linter: "none configured yet"
+    type_checker: "n/a (Go is statically typed at compile time)"
+
+rules:
+  proposal:
+    - Include rollback plan for risky changes
+    - Respect docs/PROJECT.md as the authoritative product/architecture spec; flag any proposal that contradicts a decision in section 17 explicitly
+  specs:
+    - Use Given/When/Then for scenarios
+    - Use RFC 2119 keywords (MUST, SHALL, SHOULD, MAY)
+  design:
+    - Document architecture decisions with rationale, consistent with docs/PROJECT.md
+    - Preserve the "client renders, server never emits shell code" boundary (PROJECT.md section 6.1)
+  tasks:
+    - Group by phase, use hierarchical numbering
+    - Keep tasks completable in one session
+    - Any change to internal/renderers or internal/validate MUST plan golden-file updates and the real-shell integration test as explicit tasks, never skipped
+  apply:
+    guidelines:
+      - Follow existing code patterns (table-driven tests, t.Run subtests)
+      - Never weaken or remove the golden-file tests or the real-shell (bash/zsh) injection integration test
+      - New renderer or validation behavior requires a failing test first (Strict TDD)
+    tdd: true
+    test_command: "go test ./..."
+  verify:
+    test_command: "go test ./..."
+    build_command: "go vet ./... && gofmt -l ."
+    coverage_threshold: 70
+  archive:
+    - Warn before merging destructive deltas
