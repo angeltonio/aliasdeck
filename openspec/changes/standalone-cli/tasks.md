@@ -74,24 +74,24 @@ Unit 4 and Unit 6 are the largest (~530 and ~730 lines respectively); split furt
 
 ## Phase 4: Milestone-1-Adjacent Verification (no production edits)
 
-- [ ] 4.1 Add table case to `internal/renderers/posix_test.go` covering `posixRenderer.Shell()` (0% coverage today) — test-only, no golden/production change
-- [ ] 4.2 Run `make golden`; confirm zero diff in `internal/renderers/testdata` (golden files stay untouched, per design)
-- [ ] 4.3 Run existing real bash/zsh injection test unmodified; add a new integration test (skipped under `-short`) asserting the Milestone-2 generated file sources cleanly in real `bash` and `zsh`
-- [ ] 4.4 Decide and document CRLF rc-file handling scope for `uninstall`: add a CRLF fixture case to 2.5; either pass byte-identical or add an explicit "LF-only in v0.1" note plus a `doctor` warning
+- [x] 4.1 Add table case to `internal/renderers/posix_test.go` covering `posixRenderer.Shell()` (0% coverage today) — test-only, no golden/production change
+- [x] 4.2 Run `make golden`; confirm zero diff in `internal/renderers/testdata` (golden files stay untouched, per design)
+- [x] 4.3 Run existing real bash/zsh injection test unmodified; add a new integration test (skipped under `-short`) asserting the Milestone-2 generated file sources cleanly in real `bash` and `zsh`
+- [x] 4.4 CRLF rc-file handling: `internal/apply/roundtrip_test.go`'s `TestBootstrapRoundTripOnRealisticRCFiles/windows_line_endings` case already proves byte-identical add-then-remove round-tripping on a CRLF rc file. CRLF is supported, not scoped out — no `doctor` warning or "LF-only" note needed.
 
 ## Phase 5: Release Tooling
 
-- [ ] 5.1 Create `.goreleaser.yaml`: darwin/linux, amd64/arm64, `CGO_ENABLED=0`, homebrew-tap target (RD reqs 1-2)
-- [ ] 5.2 Create `scripts/install.sh`: OS/arch detection, download+install, clean non-zero exit on unsupported platform (RD req 3)
-- [ ] 5.3 Confirm `homebrew-tap` repository prerequisite is documented (proposal Dependencies) before tagging
+- [x] 5.1 Create `.goreleaser.yaml`: darwin/linux, amd64/arm64, `CGO_ENABLED=0`, homebrew-tap target (RD reqs 1-2)
+- [x] 5.2 Create `scripts/install.sh`: OS/arch detection, download+install, clean non-zero exit on unsupported platform (RD req 3)
+- [x] 5.3 `homebrew-tap` repository prerequisite is documented in `proposal.md` ("Dependencies") and now also as a prominent blocking comment at the top of `.goreleaser.yaml` itself — the artifact a maintainer opens right before tagging a release.
 
 ## Phase 6: Docs & Config Sync
 
-- [ ] 6.1 `docs/PROJECT.md` §11: add `Name() string` and `OutputPath(dev domain.Device) (string, error)` to the `SyncBackend` code block (design D9)
-- [ ] 6.2 `docs/PROJECT.md` §9: retract "stdlib only"; list `cobra` and `go.yaml.in/yaml/v3` as first runtime deps
-- [ ] 6.3 `openspec/config.yaml` `context`: replace "stdlib only, no external deps yet" with the actual dependency list
-- [ ] 6.4 `README.md`: replace "not usable yet" status banner/table with real `init`/`sync` usage
-- [ ] 6.5 Run `make check` and `make cover`: confirm new packages ≥70% coverage, Milestone 1 coverage unchanged
+- [x] 6.1 `docs/PROJECT.md` §11: add `Name() string` and `OutputPath(dev domain.Device) (string, error)` to the `SyncBackend` code block (design D9)
+- [x] 6.2 `docs/PROJECT.md` §9: retract "stdlib only"; list `cobra` and `go.yaml.in/yaml/v3` as first runtime deps
+- [x] 6.3 `openspec/config.yaml` `context`: already lists `cobra` and `go.yaml.in/yaml/v3` plus the `os.UserConfigDir` prohibition — verified, no change needed.
+- [x] 6.4 `README.md`: replace "not usable yet" status banner/table with real `init`/`sync`/`status`/`list` usage, honestly noting no tagged release/tap/install-script exists yet
+- [x] 6.5 Run `make check` and `make cover`: confirm new packages ≥70% coverage, Milestone 1 coverage unchanged
 
 ## Parallelization Notes
 

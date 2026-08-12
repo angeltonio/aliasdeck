@@ -272,3 +272,102 @@ None. `internal/domain`, `internal/validate`, and `internal/renderers` remain co
 ### Status
 
 31/31 tasks complete across Phases 1–3 (9/9 + 10/10 + 12/12). Ready for `sdd-verify` on Phases 1–3, or the next apply batch (Phase 4: Milestone-1-adjacent renderer coverage + golden/real-shell confirmation; Phase 5: release tooling; Phase 6: docs/config sync — Phases 4–6 are independent of each other and can run in any order or in parallel per tasks.md's Parallelization Notes).
+
+---
+
+## Batch 4 — Phase 4: Verification, Phase 5: Release Tooling, Phase 6: Docs & Config Sync (tasks 4.1–6.5)
+
+**Mode**: Strict TDD where behavior was added (4.1, 4.3); standard verification/documentation for the rest, per the batch instruction that most of Phase 4/6 is verification, not new behavior.
+**Branch**: `feat/standalone-cli`
+**Status**: 13/13 tasks complete (4.1–4.4, 5.1–5.3, 6.1–6.5). This completes the `standalone-cli` milestone — 44/44 tasks across all six phases.
+
+### Two tasks confirmed already done (per batch instruction, not redone)
+
+- **4.4 (CRLF)**: `internal/apply/roundtrip_test.go`'s `TestBootstrapRoundTripOnRealisticRCFiles/windows_line_endings` fixture (`"alias a='b'\r\nalias c='d'\r\n"`) already proves add-then-remove is byte-identical on a CRLF rc file. Ran it explicitly: `go test ./internal/apply/... -run TestBootstrapRoundTripOnRealisticRCFiles -v` → all 8 fixtures pass, including `windows_line_endings`. Recorded as **CRLF supported, not scoped out** — no `doctor` warning or "LF-only" note added, per instruction.
+- **6.3**: `openspec/config.yaml`'s `context` block already lists `github.com/spf13/cobra v1.10.2` and `go.yaml.in/yaml/v3 v3.0.5` as Milestone 2's first runtime deps, the `gopkg.in/yaml.v3` archival warning, and the `os.UserConfigDir` prohibition. Verified by reading the file; no change made.
+
+### Completed Tasks
+
+- [x] 4.1 Added `TestPosixRendererShell` (table-driven, `t.Run` per shell) to `internal/renderers/posix_test.go` — test-only, zero production/golden changes. Coverage of `internal/renderers` rose 89.1% → 90.6%.
+- [x] 4.2 Ran `make golden` (`go test ./internal/renderers -update`); `git diff --stat internal/renderers/testdata` is empty — golden bytes are byte-identical.
+- [x] 4.3 Ran `TestGeneratedFileIsInertInRealShells` unmodified (still passes, bash+zsh both present) — this test was not touched at all. Added `internal/app/shell_integration_test.go`'s `TestSyncedFileSourcesCleanlyInRealShells`: drives a real `Sync()` call (config parse → render → atomic write through `internal/apply`), then feeds the actual generated file to real `bash -c "source ..."` and `zsh -c "source ..."`, asserting a clean exit. Skips under `-short` and per-shell when the binary is missing.
+- [x] 4.4 Verified (see above).
+- [x] 5.1 Created `.goreleaser.yaml`: `builds` targets darwin/linux × amd64/arm64 with `CGO_ENABLED=0`; `archives`, `checksum`, `changelog`, a `brews` block targeting `angeltonio/homebrew-tap`, and a `release.github` block. Validated the YAML by parsing it with the project's own `go.yaml.in/yaml/v3` dependency (no `goreleaser` binary available in this environment to run `goreleaser check`).
+- [x] 5.2 Created `scripts/install.sh` (POSIX `sh`, `set -eu`): `detect_os`/`detect_arch` (darwin/linux × amd64/arm64, hard error with a clear message and non-zero exit on anything else), `resolve_version` (GitHub `/releases/latest` redirect parsing, with an `ALIASDECK_VERSION` override), download to a `mktemp -d` scratch dir with a `trap ... EXIT` cleanup, extract, `chmod +x`, then move into place (`ALIASDECK_INSTALL_DIR` override, falling back to `$HOME/.local/bin` when `/usr/local/bin` is not writable). `shellcheck -s sh` is clean (verified installed and run). Verified three real behaviors: (1) run against the real (currently empty) GitHub releases page → clean `exit=1` with "no published release was found", no partial install; (2) a faked `uname` returning an unsupported OS/arch → clean `exit=1` naming the unsupported platform; (3) `bash -n` passes.
+- [x] 5.3 Documented the `homebrew-tap` prerequisite as a prominent comment block at the very top of `.goreleaser.yaml` (the file a maintainer opens immediately before running `goreleaser release`), in addition to its existing mention in `proposal.md`'s Dependencies section.
+- [x] 6.1 `docs/PROJECT.md` §11: added `Name() string` and `OutputPath(dev Device) (string, error)` to the `SyncBackend` interface code block (matching the design's `SyncBackend` signature and the section's existing unprefixed-type style).
+- [x] 6.2 `docs/PROJECT.md` §9.2: added a bullet for `go.yaml.in/yaml/v3` (with the `gopkg.in/yaml.v3` archival note) and a paragraph clarifying that Milestone 1 (`domain`/`renderers`/`validate`) is stdlib-only by design, while `cobra` and `go.yaml.in/yaml/v3` are Milestone 2's — and the whole project's — actual first two runtime dependencies.
+- [x] 6.3 Verified (see above).
+- [x] 6.4 Rewrote `README.md`'s status section: replaced the "⚠️ Status: early development — not usable yet" banner with an honest "Status: usable from source — no packaged release yet" section, an updated component table, and a real `go build` → `init`/`edit`/`sync`/`status`/`list` walkthrough. Explicitly states no tagged release/tap/install-script exists and that `brew install`/`curl … | sh` will not work yet. Updated "Two ways to use it" (was "Two ways it will work") to present tense for standalone. Updated the Roadmap's v0.1 row to "implemented, tagged release pending". Updated "Building from source" to include the actual `go build` command and a note that `scripts/install.sh`/the tap are not live yet.
+- [x] 6.5 Ran `make check` (fmt+vet+test, clean) and `make cover` — see Test Summary below for every package's number.
+
+### Additional doc sync (not separately numbered, per the batch's "Also record" instruction)
+
+`internal/app/init.go`/`cmd/aliasdeck/init.go` already implement an `--yes`/`-f` flag (`InitOptions.AssumeYes`) and stdin-not-a-terminal detection (`isInteractive` in `internal/app/prompt.go`) — both were already present in the tree at the start of this batch (most likely added incidentally during Batch 3's `init`/`uninstall` work, since `uninstall` already had the same `--yes` pattern, but not called out in Batch 3's own task list). This batch found the cli-commands spec (`openspec/changes/standalone-cli/specs/cli-commands/spec.md`) still only documented `--no-bootstrap` for `init`. Updated its "init Creates Config and Prompts Before Bootstrap" requirement to also require `--yes`/`-f` and the non-interactive-stdin default-decline behavior, and added a "Non-interactive install with explicit consent" scenario alongside the existing "Non-interactive install" scenario (renamed to "no consent given" for clarity against the new one).
+
+### TDD Cycle Evidence (Batch 4 — tasks with new behavior/test coverage only)
+
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|------|-----------|-------|------------|-----|-------|-------------|----------|
+| 4.1 | `internal/renderers/posix_test.go` | Unit | ✅ ran `go test ./internal/renderers/...` before adding (all green) | N/A — this task adds coverage for existing, already-correct production code (`Shell()` is a one-line getter); there is no behavior to falsify first. Confirmed the test fails to compile against a hypothetical wrong expectation by first asserting the wrong shell value, watching it fail, then correcting it to the real expectation | ✅ Passed with the correct table | ✅ 2 cases (zsh, bash) via `For()` | ➖ None needed |
+| 4.3 | `internal/app/shell_integration_test.go` | Integration (real `bash`/`zsh` subprocesses) | ✅ ran `go test ./internal/app/...` before adding (all green, including the untouched renderers-level real-shell test) | N/A — verifies existing, already-implemented pipeline behavior (`Sync` + `apply.NativeBackend` + real shells); nothing in `internal/app` or `internal/apply` changed as a result | ✅ Passed on first run, both shells | ✅ bash + zsh subtests, each via a real `Sync()` call and a real `source` invocation | ➖ None needed |
+
+Both rows are honest about not following a literal RED→GREEN cycle: the underlying production behavior already existed and was already covered by other tests at other layers (renderer golden tests; the app-level `sync_test.go`/`integration_test.go` suite). These two tasks close *specific, named coverage gaps* the tasks.md explicitly calls out (posix `Shell()` at 0%; no real-shell proof of the actual on-disk Milestone-2 pipeline output) rather than introducing new behavior, which is exactly the batch instruction's "apply TDD where behavior is added, not ceremonially where it is not."
+
+### Work Unit Evidence (Batch 4)
+
+| Evidence | Value |
+|---|---|
+| Focused test command and exact result | `go test ./internal/renderers/... ./internal/app/... ./internal/apply/... -v` → all PASS, 0 failures. Full suite: `go test ./...` → all 9 packages PASS |
+| Runtime harness command/scenario and exact result | Three real harnesses: (1) `internal/renderers` real bash/zsh injection test, unmodified, still passing; (2) `internal/app/shell_integration_test.go`'s new real bash/zsh sourcing test against the actual `Sync()`-written file; (3) `scripts/install.sh` run for real against the live (currently release-less) `github.com/angeltonio/aliasdeck` repo and against a faked unsupported `uname`, both producing clean non-zero exits with no partial install |
+| Rollback boundary | Phase 4: revert `internal/renderers/posix_test.go`'s new test and delete `internal/app/shell_integration_test.go` — no production code touched by either. Phase 5: delete `.goreleaser.yaml` and `scripts/install.sh` — no other file references them except the new README/PROJECT.md prose, which can be reverted independently. Phase 6: revert `docs/PROJECT.md`, `README.md`, and the cli-commands spec edits individually — none of them touch code. Each phase's revert is independent of the others |
+
+### Test Summary (Batch 4)
+
+- **Total tests added**: 2 top-level test functions (`TestPosixRendererShell` with 2 subtests; `TestSyncedFileSourcesCleanlyInRealShells` with 2 subtests)
+- **Total tests passing**: all, including the full pre-existing suite (`go test ./...` clean)
+- **Coverage per package** (`make cover`, i.e. `go test -cover ./...`):
+  - `internal/domain`: **70.4%** — unchanged from Batch 1/2/3 baseline
+  - `internal/validate`: **87.7%** — unchanged from Batch 1/2/3 baseline
+  - `internal/renderers`: **90.6%** — up from the Batch 1/2/3 baseline of 89.1%, due to 4.1's intentional new coverage; no production code changed
+  - `internal/config`: **87.2%** — unchanged from Batch 2/3 baseline
+  - `internal/source`: **100.0%** — unchanged from Batch 2/3 baseline
+  - `internal/apply`: **82.5%** — unchanged from Batch 2/3 baseline
+  - `internal/state`: **73.0%** — unchanged from Batch 2/3 baseline
+  - `internal/app`: **79.7%** — up slightly from Batch 3's 79.2% (the new integration test exercises more of `Sync`'s already-covered paths); no production code changed
+  - `cmd/aliasdeck`: **62.7%** — up slightly from Batch 3's 62.3%; not gated by the ≥70% floor (Cobra wiring glue, per Batch 3's own note)
+  - **Milestone 1 packages (`domain`, `validate`) and every Milestone 2 package from Batches 2–3 are unchanged or improved. No package regressed. Every package with a ≥70% target clears it.**
+
+### Deviations from Design (Batch 4)
+
+None. The one place this batch went beyond its numbered tasks — updating the cli-commands spec for the already-implemented `--yes`/non-interactive-stdin behavior — was explicitly requested by the batch instructions ("Also record") and only documents existing, already-tested behavior; it introduces no new code.
+
+### Issues Found (Batch 4)
+
+- `goreleaser` and `python3-yaml` are not installed in this environment, so `.goreleaser.yaml` could not be validated with `goreleaser check`. It was validated for well-formed YAML by parsing it with the project's own `go.yaml.in/yaml/v3` dependency via a throwaway `go run` script (not committed). A maintainer with `goreleaser` installed should run `goreleaser release --snapshot --clean` once before the first real tag, as the config's own top comment now says.
+- No `.github/workflows` directory exists yet in this repository, so there is no CI pipeline invoking `goreleaser` or `scripts/install.sh` automatically. That is out of scope for this milestone's tasks (5.1–5.3 only ask for the config and script themselves) and is not blocking; noted here so a future CI-setup task has this context.
+
+### Remaining Tasks
+
+None. All 44 tasks across Phases 1–6 are complete.
+
+### Workload / PR Boundary
+
+- Mode: stacked-to-main (per tasks.md "Suggested Work Units")
+- Current work unit: PR 7 — "Release tooling + docs sync" (`.goreleaser.yaml`, `install.sh`, PROJECT.md §9/§11, README, `openspec/config.yaml` verification, renderers `Shell()` coverage), plus the folded-in Phase 4 verification tasks that tasks.md's Parallelization Notes says can run alongside it.
+- Boundary: starts from the Batch 3 tree (Phases 1–3 complete, `internal/app`/`cmd/aliasdeck` fully wired); ends with all 44 tasks across all 6 phases complete, `internal/domain`/`internal/validate`/`internal/renderers` production code still completely untouched (only a new test added to `internal/renderers`), and no new runtime dependency introduced.
+- Estimated review budget impact: small — 2 new files (`.goreleaser.yaml`, `scripts/install.sh`), 1 new test file (`internal/app/shell_integration_test.go`), 1 new test case in an existing file, and doc-only edits to `README.md`, `docs/PROJECT.md`, and one OpenSpec spec file. No production logic changed anywhere. Well within a single PR's budget for this unit.
+
+### Verification Run (Batch 4)
+
+- `go test ./...` → all 9 packages pass
+- `make check` (`gofmt -l -w .` + `go vet ./...` + `go test ./...`) → clean, no formatting diffs, no vet warnings, all tests pass
+- `make cover` → see per-package table above; every ≥70%-floor package clears it, Milestone 1 unchanged
+- `go build -o /tmp/aliasdeck ./cmd/aliasdeck` → succeeds; `/tmp/aliasdeck --help` prints the full command tree
+- `git diff --stat internal/renderers/testdata` → empty (confirmed both before and after `make golden`)
+- `bash -n scripts/install.sh` → passes
+- `shellcheck -s sh scripts/install.sh` → clean, exit 0
+
+### Status
+
+44/44 tasks complete across all six phases (9/9 + 10/10 + 12/12 + 4/4 + 3/3 + 5/5). The `standalone-cli` milestone is functionally, procedurally, and documentation-wise complete. Ready for `sdd-verify` on the full change.
