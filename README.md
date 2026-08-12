@@ -77,7 +77,7 @@ alias dps='docker ps'
 # PowerShell — Set-Alias cannot hold a command string, so a function is generated
 function dps {
     $__aliasdeck_cmd = 'docker ps'
-    & ([scriptblock]::Create($__aliasdeck_cmd)) @args
+    & ([scriptblock]::Create($__aliasdeck_cmd + ' @args')) @args
 }
 ```
 

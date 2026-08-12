@@ -253,7 +253,7 @@ PowerShell output — `Set-Alias` cannot hold an arbitrary command string, so a 
 ```powershell
 function dps {
     $__aliasdeck_cmd = 'docker ps'
-    & ([scriptblock]::Create($__aliasdeck_cmd)) @args
+    & ([scriptblock]::Create($__aliasdeck_cmd + ' @args')) @args
 }
 ```
 
@@ -323,6 +323,30 @@ compiles it only when the function is invoked, which is what the user asked for.
 The escaping rule follows from the quoting: single-quote the command and double
 every embedded `'`. Same shape as the POSIX renderer's `'` → `'\''`, different
 mechanism.
+
+**`@args` appears twice, and both are necessary.** The second one passes the
+caller's arguments to the script block; the first, inside the compiled string,
+is what makes the command actually receive them. Compiling the command alone
+and splatting at the invocation looks equivalent and silently drops every
+argument — an alias for `git checkout` would ignore the branch name. Verified
+on Windows PowerShell 5.1 and PowerShell 7.
+
+### 6.4 PowerShell editions are not interchangeable
+
+Windows ships **PowerShell 5.1 (Desktop)** by default. **PowerShell 7 (Core)**
+is a separate installation, and the two resolve `$PROFILE` to different paths:
+
+```text
+5.1   ~\Documents\WindowsPowerShell\Microsoft.PowerShell_profile.ps1
+7     ~\Documents\PowerShell\Microsoft.PowerShell_profile.ps1
+```
+
+A user can have both installed. Bootstrapping the wrong profile leaves aliases
+that never load, with nothing obviously wrong to look at.
+
+Both editions were verified to inject on the inlined form and to contain on the
+corrected one, so the renderer does not need to branch on edition — but rc-file
+detection does.
 
 ---
 
