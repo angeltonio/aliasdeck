@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/angeltonio/aliasdeck/internal/domain"
+	"github.com/angeltonio/aliasdeck/internal/shelltest"
 )
 
 // TestGeneratedFileIsInertInRealShells feeds AliasDeck's output to actual bash
@@ -37,10 +38,7 @@ func TestGeneratedFileIsInertInRealShells(t *testing.T) {
 
 	for _, sh := range shells {
 		t.Run(sh.bin, func(t *testing.T) {
-			bin, err := exec.LookPath(sh.bin)
-			if err != nil {
-				t.Skipf("%s not installed on this machine", sh.bin)
-			}
+			bin := shelltest.LookPath(t, sh.bin)
 
 			dir := t.TempDir()
 			canary := filepath.Join(dir, canaryName)

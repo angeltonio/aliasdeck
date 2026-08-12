@@ -1,0 +1,45 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # goreleaser builds the changelog from history
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install zsh
+        run: sudo apt-get update && sudo apt-get install -y zsh
+
+      # Tagging is not a promise that the code works. Run the suite against the
+      # exact commit being released, with the real-shell tests required rather
+      # than skippable, before anything is published.
+      - name: Test before publishing
+        env:
+          ALIASDECK_REQUIRE_SHELLS: "1"
+        run: go test -race ./...
+
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --clean
+        env:
+          # Publishes the GitHub release in this repository.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Publishes the formula to angeltonio/homebrew-tap. A separate token
+          # is required: the GITHUB_TOKEN above is scoped to this repository
+          # and cannot push to the tap. Without this secret the run fails at
+          # the Homebrew step, after the binaries and the GitHub release have
+          # already been published.
+          GORELEASER_TAP_TOKEN: ${{ secrets.GORELEASER_TAP_TOKEN }}
