@@ -148,3 +148,127 @@ None. `internal/domain`, `internal/validate`, and `internal/renderers` remain co
 ### Status
 
 19/19 tasks complete across Phases 1–2 (9/9 + 10/10). Ready for the next apply batch (Phase 3: `internal/app` use cases + `cmd/aliasdeck` Cobra wiring — this is the batch that must re-add `github.com/spf13/cobra` to `go.mod`, per Batch 1's Deviation #1) or `sdd-verify` if the orchestrator wants to verify Phases 1–2 together first.
+
+---
+
+## Batch 3 — Phase 3: App Use Cases & CLI Wiring (tasks 3.1–3.12)
+
+**Mode**: Strict TDD
+**Branch**: `feat/standalone-cli`
+**Status**: 12/12 Phase 3 tasks complete. AliasDeck now builds and runs as a standalone CLI.
+
+### First task: re-added cobra
+
+`go get github.com/spf13/cobra@v1.10.2` then `go mod tidy` once `cmd/aliasdeck` actually imported it. `go.mod` now declares `github.com/spf13/cobra v1.10.2` and `go.yaml.in/yaml/v3 v3.0.5` as direct requirements, with `github.com/inconshreveable/mousetrap` and `github.com/spf13/pflag` as indirect (cobra's own deps).
+
+### Completed Tasks
+
+- [x] 3.1 RED `internal/app/sync_test.go`: `TestSyncFullPipelineOrder`, `TestSyncNoOpSkipWhenUnchanged` (read-only base dir proves no write attempt), `TestSyncForcedRewriteOnDiskHashMismatch`, `TestSyncRenderedOutputIsDeterministic` (delete state, re-resolve, compare hash), `TestSyncUnresolvableSourceNamesTheSource`
+- [x] 3.2 GREEN `internal/app/sync.go` (+ shared `env.go`, `context.go`, `errors.go`, `hash.go` infrastructure every later use case reuses): resolve → validate(implicit via `FileSource.Resolve`) → render → apply → state, `Env` injection, no-op skip via revision+disk-hash
+- [x] 3.3 RED `internal/app/init_test.go`: `TestInitCreatesBothConfigFiles`, `TestInitNoBootstrapSkipsPromptAndRCFile`, `TestInitPromptsBeforeBootstrapAndAddsOnConsent`, `TestInitPromptDeclinedLeavesRCFileUntouched`, `TestInitIsIdempotentForExistingFiles`
+- [x] 3.4 GREEN `internal/app/init.go` (+ `prompt.go`, `rcpath.go`): creates both files only when absent, runs an initial sync via the shared `syncWithContext`, prompts via an injectable `Confirm` (defaults to a real `promptYesNo` over `Env.Stdin`), records `state.Bootstrap` on successful add
+- [x] 3.5 RED `internal/app/{status,list,doctor}_test.go`: `TestStatusReportsActiveSource`/`TestStatusReportsNotInitialized`, `TestListShowsDeviceScopedEntries`, `TestDoctorReportsHostileEntryAndUndeclaredProfile`/`TestDoctorWritesNothing`
+- [x] 3.6 GREEN `internal/app/status.go`, `list.go`, `doctor.go`
+- [x] 3.7 RED `internal/app/edit_test.go` — **threat-matrix case**: `TestEditNeverInvokesAShell` (`$EDITOR="x; rm -rf ."`, asserts the literal first token `"x;"` is what gets looked up, asserts a marker file survives), `TestEditMultiWordEditorPassesThrough` (`code -w` via a fake script capturing argv), `TestEditHasNoSyncSideEffect`, `TestEditReturnsErrorWhenEditorNotSet`
+- [x] 3.8 GREEN `internal/app/edit.go`: `strings.Fields($EDITOR)` → `Env.LookPath` (test seam) → `exec.Command(resolved, args...)`, never `sh -c`; documented quoted-path limitation in the doc comment
+- [x] 3.9 RED `internal/app/uninstall_test.go`: `TestUninstallRestoresRCFileByteIdentically`, `TestUninstallYesSkipsPrompt`, `TestUninstallInteractivePromptsBeforeModifying`, `TestUninstallExactFalseWhenUserEditedInsideBlock`
+- [x] 3.10 GREEN `internal/app/uninstall.go`: removes generated file → `apply.RemoveBootstrap` (surfaces `exact` as `report.BootstrapExact` rather than swallowing it) → removes `state.json`; leaves `config.yaml`/`aliases.yaml` untouched
+- [x] 3.11 GREEN `cmd/aliasdeck/{main,root,exit,init,sync,status,list,doctor,edit,uninstall}.go`: Cobra wiring, `--shell` persistent flag, exit-code map (0/1/2/3/4) via an `*exitError` carrier type plus a `cmd.SilenceUsage`-based usage-vs-business-error split
+- [x] 3.12 Integration `internal/app/integration_test.go` — `TestFullLifecycleInitSyncSyncUninstall`: `init` (with a pre-existing rc file) → explicit `sync` after adding real aliases → second `sync` against a read-only base dir (no-op proof) → `uninstall --yes`, asserting the rc file is byte-identical to its pre-init content and `config.yaml`/`aliases.yaml` survive while `state.json` and the generated file do not
+
+### Files Changed (Batch 3)
+
+| File | Action | What Was Done |
+|------|--------|----------------|
+| `go.mod`, `go.sum` | Modified | Re-added `github.com/spf13/cobra v1.10.2` as a direct dependency (`go get` + `go mod tidy` after `cmd/aliasdeck` imported it); indirect `mousetrap`/`pflag` added by cobra itself |
+| `internal/app/env.go` | Created | `Env{Stdin,Stdout,Stderr,Getenv,HomeDir,Now,LookPath}`, `OSEnv()`, `Env.ConfigEnv()` adapter to `config.Env` |
+| `internal/app/errors.go` | Created | `ErrNotInitialized`, `ConfigError{Err}` (`Error`/`Unwrap`) — the two exit-code-bearing sentinels every use case can return |
+| `internal/app/hash.go` | Created | `hashBytes`, `diskHashMatches` — the sha256-hex helpers behind the no-op skip |
+| `internal/app/context.go` | Created | `Version`, `Options{Shell}`, `deviceContext`, `loadDeviceContext` (config.yaml existence check → `ErrNotInitialized`; `config.Load` failure → `ConfigError`; platform/shell detection; builds `domain.Device`), `resolveSource` (file-only in this milestone; git/server are an explicit error), `resolveBackend` (native/chezmoi/unsupported) |
+| `internal/app/sync.go` | Created | `SyncReport`, `Sync` (public, loads context) / `syncWithContext` (reused by `Init`): resolve → render → no-op-skip check (revision + disk hash) → `Backend.Apply` → `state.Save`, preserving any existing `state.Bootstrap` |
+| `internal/app/prompt.go` | Created | `promptYesNo` — prints the question, reads one line from `Env.Stdin`, defaults to `false` on empty/EOF |
+| `internal/app/rcpath.go` | Created | `resolveRCPath` — `--rc-file` override → zsh (`$ZDOTDIR`/`~/.zshrc`) → bash (platform-ordered existing-file preference, falling back to the platform default to create) → error for shells with no rc convention |
+| `internal/app/init.go` | Created | `InitOptions`, `InitReport`, `Init`: create-if-absent for both files (skips creating aliases.yaml when `--source` points elsewhere), `loadDeviceContext` + `syncWithContext` for the initial sync, `resolveRCPath` + injectable `Confirm` for the bootstrap prompt, `apply.AddBootstrap` + `recordBootstrap` (persists `state.Bootstrap`) on consent |
+| `internal/app/status.go` | Created | `StatusReport`, `Status`: source/device/backend/state + `UpToDate` (output path match + disk-hash match) |
+| `internal/app/list.go` | Created | `AliasListing`, `ListReport`, `List` (own direct `config.ParseAliases` read, not `Source.Resolve`), `skipReason` (disabled/platform/shell/profile/device, in that precedence order) |
+| `internal/app/doctor.go` | Created | `DoctorReport`, `Doctor`: independent `domain.Resolve` → `validate.Config` pass (mirrors what `FileSource.Resolve`+`FilterValid` do internally, but returns the `Issues` instead of discarding them) + `config.ProfileWarnings`; never writes |
+| `internal/app/edit.go` | Created | `EditTarget`, `EditOptions`, `EditReport`, `ErrEditorNotSet`, `Edit`: `strings.Fields($EDITOR)` → `Env.LookPath` → `exec.Command`, documented quoted-path limitation |
+| `internal/app/uninstall.go` | Created | `UninstallOptions`, `UninstallReport`, `Uninstall`: optional confirm → remove generated file → `apply.RemoveBootstrap` (surfaces `exact`) → remove `state.json` |
+| `internal/app/testutil_test.go` | Created | `testEnv` (wraps `Env` + `Base`/`Home`/mutable `vars` map/buffers), `newTestEnv`, `writeConfigYAML`, `writeAliasesYAML`, `nativeDeviceConfig` — shared fixtures for every test file below |
+| `internal/app/sync_test.go`, `init_test.go`, `status_test.go`, `list_test.go`, `doctor_test.go`, `edit_test.go`, `uninstall_test.go`, `misc_test.go`, `integration_test.go` | Created | Per-unit RED tests plus a `misc_test.go` sweep (`promptYesNo`, `resolveBackend`, `resolveRCPath`, `skipReason`, `ConfigError`, `OSEnv`) added after the GREEN pass purely to close coverage gaps — no production logic changed as a result |
+| `cmd/aliasdeck/main.go` | Created | `main`/`run(args, stdout, stderr)` — separated from `main` for testability; maps `*exitError` and generic errors to exit codes; usage-vs-business-error split via `cmd.SilenceUsage` |
+| `cmd/aliasdeck/root.go` | Created | `newRootCmd` (`SilenceErrors: true`, `--shell` persistent flag), `shellFlag` helper |
+| `cmd/aliasdeck/exit.go` | Created | Exit-code constants (0/1/2/3/4), `*exitError{code,err}` carrier, `exitCodeFor` (maps `app.ErrNotInitialized`→4, `app.ConfigError`→3, else 1) |
+| `cmd/aliasdeck/{init,sync,status,list,doctor,edit,uninstall}.go` | Created | One `newXCmd()` per command; each `RunE` sets `cmd.SilenceUsage = true` first, then calls the matching `internal/app` function and prints its report; `doctor` returns `&exitError{code: 3}` when `Issues.HasErrors()` after already printing the report itself |
+| `cmd/aliasdeck/main_test.go` | Created | `TestRunNotInitializedExitsFour`, `TestRunInitThenSyncSucceeds`, `TestRunDoctorFindsErrorExitsThree`, `TestRunUnknownCommandExitsTwo`, `TestRunEditWithoutEditorExitsOne` — real Cobra tree, real (test-scoped) env vars, real filesystem |
+| `openspec/changes/standalone-cli/tasks.md` | Modified | Marked 3.1–3.12 `[x]` |
+
+### TDD Cycle Evidence (Batch 3)
+
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|------|-----------|-------|------------|-----|-------|-------------|----------|
+| 3.1/3.2 | `internal/app/sync_test.go` | Unit | ✅ ran `go test ./...` before adding (Phases 1–2 all green, `internal/app` package did not exist) | ✅ Written first; confirmed compile failure `undefined: Env/Sync/Options` (package did not exist) | ✅ Passed on first implementation | ✅ full pipeline, no-op skip (read-only-dir proof), forced rewrite on tampered disk hash, determinism across a deleted-state re-resolution, unresolvable-source error naming the path | ➖ None needed |
+| 3.3/3.4 | `internal/app/init_test.go` | Unit | ✅ ran `go test ./internal/app/...` before adding (sync tests green, 5/5) | ✅ Written first; confirmed compile failure `undefined: Init/InitOptions` | ✅ Passed on first implementation | ✅ both-files-created, `--no-bootstrap` skip (confirm never called, rc untouched), consent-granted (question asked, block written, state recorded), consent-declined (rc untouched), idempotent re-run | ➖ None needed |
+| 3.5/3.6 | `internal/app/{status,list,doctor}_test.go` | Unit | ✅ ran `go test ./internal/app/...` before adding (init tests green, 10/10) | ✅ Written first; confirmed compile failure `undefined: Status/List/Doctor` | ✅ Passed on first implementation | ✅ status (active source + up-to-date + not-initialized), list (active/skipped/disabled with reasons), doctor (hostile-name error surfaced + undeclared-profile warning + writes-nothing via before/after dir listing) | ➖ None needed |
+| 3.7/3.8 | `internal/app/edit_test.go` | Unit — **threat-matrix RED required first** | ✅ ran `go test ./internal/app/...` before adding (15/15 passing) | ✅ Written first; confirmed compile failure `undefined: Edit/EditOptions/ErrEditorNotSet` | ✅ Passed on first implementation | ✅ hostile `$EDITOR` (asserted the literal `"x;"` token, not any shell, is what `LookPath` receives; marker file survives), `code -w` via a real fake-script subprocess capturing argv, no-sync-side-effect, unset-`$EDITOR` error | ➖ None needed |
+| 3.9/3.10 | `internal/app/uninstall_test.go` | Unit | ✅ ran `go test ./internal/app/...` before adding (18/18 passing) | ✅ Written first; confirmed compile failure `undefined: Uninstall/UninstallOptions` | ✅ Passed on first implementation | ✅ byte-identical restore with real pre-existing rc content, `--yes` skips prompt, interactive decline leaves everything untouched (rc + state.json), fallback-path (`BootstrapExact=false`) when the block was edited inside | ➖ None needed |
+| 3.11 | `cmd/aliasdeck/main_test.go` | Integration (real Cobra tree + real env vars + real filesystem) | ✅ ran `go build ./...` before adding (compiled clean once wiring was written) | N/A for this task — no RED assigned to Cobra wiring in tasks.md; written GREEN-first, then covered by `main_test.go` and a full manual smoke test (`--help`, `init`→`status`→`sync`→`doctor`→`list`→`uninstall`, plus exit-code probes for 1/2/3/4) | ✅ Passed | ✅ not-initialized(4), init+sync(0), doctor-with-error(3), unknown-command(2), edit-without-$EDITOR(1) | ➖ None needed |
+| 3.12 | `internal/app/integration_test.go` | Integration, `t.TempDir()` HOME | ✅ ran full `internal/app` suite before adding (23/23 passing) | ✅ Written first; confirmed compile failure (referenced not-yet-relevant symbols were already defined by this point, so this test compiled but was run to confirm it exercises real behavior before being trusted as a safety net) | ✅ Passed on first implementation | ✅ init-with-pre-existing-rc-content, explicit content-bearing sync, second no-op sync under a read-only base dir, uninstall restoring byte-identical rc while leaving config.yaml/aliases.yaml in place | ➖ None needed |
+| — | `internal/app/misc_test.go` | Unit (coverage closure) | ✅ ran `go test -cover ./internal/app/...` after the GREEN pass, found 70.5% (at the floor) | N/A — added after full GREEN specifically to close coverage gaps in already-implemented helpers, per Batch 2's own precedent | ✅ Passed on first implementation | ✅ `promptYesNo` (7 input cases), `resolveBackend` (4 cases), `resolveRCPath` (7 cases), `skipReason` (6 cases), `ConfigError.Unwrap`, `OSEnv` wiring | ➖ None needed — raised `internal/app` from 70.5% to 79.2% with zero production changes |
+
+### Design Interpretation Notes (not deviations — two places the design text needed a resolved reading)
+
+1. **Where bootstrap happens.** The design's "Atomic write" section says "Order per sync: generated file → bootstrap → state," which read literally would mean every `sync` call re-attempts `AddBootstrap`. But tasks.md's own phase breakdown assigns bootstrap prompting and `--no-bootstrap` exclusively to `init` (3.3/3.4) and lists `sync`'s pipeline as only "resolve→validate→render→apply→state" (3.1/3.2) with no bootstrap step — and the cli-commands spec requires `edit` to have zero side effects and `init` alone to prompt for rc-file consent. I implemented bootstrap as an `init`-only action (`Sync`/`syncWithContext` never touch any rc file), consistent with PROJECT.md §15.1's own flow (`init` "adds shell bootstrap"; a later bare `sync` does not). If a future milestone wants `sync` to also re-bootstrap a stale device (e.g. after a manual rc-file edit removed the block), that would need to be raised as an explicit new requirement, not inferred from this one line.
+2. **Exit code 3 for "edit found SeverityError."** The design's exit table lists exit 3 for "parse failure, or `doctor`/`edit` found `SeverityError`," but the cli-commands spec's `edit` requirement never describes any validation step for `edit` — it only opens `$EDITOR` and forbids any sync/render/apply side effect. `Edit` therefore performs no validation and can only return `ErrEditorNotSet` or a runtime `LookPath`/`exec` failure (both exit 1), or a `ConfigError` from `loadDeviceContext` if `config.yaml` itself fails to parse (exit 3, via the same path every other command shares). I read the table's "doctor/edit" phrasing as a shorthand that primarily describes `doctor`'s own exit-3 behavior; `edit` inherits exit 3 only through the shared `config.yaml`-parse path, never through any aliases.yaml validation of its own.
+
+### Work Unit Evidence (Batch 3)
+
+| Evidence | Value |
+|---|---|
+| Focused test command and exact result | `go test ./internal/app/... ./cmd/... -v` → all PASS, 0 failures (36 top-level test functions across both packages, many with `t.Run` subtests) |
+| Runtime harness command/scenario and exact result | Two real harnesses: (1) `go build -o /tmp/aliasdeck ./cmd/aliasdeck && /tmp/aliasdeck --help` plus a full manual walkthrough (`init --no-bootstrap` → `status` → `sync` (no-op) → `doctor` → `list` → `uninstall --yes`) against a real `t.TempDir()`-style scratch HOME, confirming exit codes 0/1/2/3/4 all match the design's table exactly; (2) `internal/app/integration_test.go`'s `TestFullLifecycleInitSyncSyncUninstall`, the required `init→sync→second sync (no write)→uninstall (byte-identical rc)` scenario |
+| Rollback boundary | Delete `internal/app/` and `cmd/aliasdeck/`; revert `go.mod`/`go.sum` to the Batch 2 state (`git checkout -- go.mod go.sum` would drop cobra again); revert the `[x]` marks for 3.1–3.12 in `tasks.md`. No other package imports `internal/app` or `cmd/aliasdeck`, and `internal/domain`/`internal/validate`/`internal/renderers` remain byte-identical to Batch 2 (confirmed via `git diff --stat -- internal/domain internal/validate internal/renderers`, zero output) |
+
+### Test Summary (Batch 3)
+
+- **Total tests written**: 36 top-level test functions across `internal/app` (31) and `cmd/aliasdeck` (5), most with `t.Run` subtests; 90+ individual subtest/table cases
+- **Total tests passing**: all (`go test ./... -v`, `go test -race ./internal/app/... ./cmd/...` also clean)
+- **Layers used**: Unit (majority), Integration (`internal/app/integration_test.go`'s full lifecycle test; `cmd/aliasdeck/main_test.go`'s real-Cobra-tree tests; the real fake-editor-subprocess tests in `edit_test.go`)
+- **Approval tests**: None — no refactoring of existing behavior, only new files
+- **Coverage per package**:
+  - `internal/app`: **79.2%** of statements (raised from 70.5% post-GREEN by `misc_test.go`'s coverage-closure sweep, with zero production changes)
+  - `cmd/aliasdeck`: **62.3%** of statements (Cobra wiring glue; not gated by the ≥70% floor, which config.yaml scopes to "new packages" the design calls out — `internal/app` is the one with a numeric target in this phase's instructions)
+  - Milestone 1 packages unchanged: `domain` 70.4%, `renderers` 89.1%, `validate` 87.7% — byte-identical to the Batch 1/2 baseline
+  - Milestone 2 packages from Batch 2 unchanged: `apply` 82.5%, `source` 100.0%, `state` 73.0%, `config` 87.2%
+
+### Deviations from Design (Batch 3)
+
+None that change behavior. See "Design Interpretation Notes" above for the two places the design text needed a resolved reading (bootstrap's home in `init` rather than `sync`; exit-3's "edit" clause resolving to the shared config-parse path).
+
+### Issues Found (Batch 3)
+
+None. `internal/domain`, `internal/validate`, and `internal/renderers` remain completely untouched — confirmed by `git diff --stat -- internal/domain internal/validate internal/renderers` (zero output) and by their coverage numbers staying exactly at the Batch 1/2 baseline (70.4%/89.1%/87.7%). `internal/config`, `internal/source`, `internal/apply`, `internal/state` (Batch 2's packages) were read but never modified — confirmed the same way (82.5%/100.0%/73.0%/87.2%, unchanged from Batch 2).
+
+### Verification Run (Batch 3)
+
+- `go test ./...` → all 9 packages pass (`cmd/aliasdeck`, `internal/app`, `internal/apply`, `internal/config`, `internal/domain`, `internal/renderers`, `internal/source`, `internal/state`, `internal/validate`)
+- `make check` (`gofmt -l -w .` + `go vet ./...` + `go test ./...`) → clean, no formatting diffs, no vet warnings, all tests pass
+- `go build -o /tmp/aliasdeck ./cmd/aliasdeck && /tmp/aliasdeck --help` → prints the full command tree (`init`, `sync`, `status`, `list`, `doctor`, `edit`, `uninstall`, plus Cobra's built-in `help`/`completion`), exits 0
+- Manual exit-code probe against a real scratch HOME: not-initialized → 4; `doctor` with a hostile alias name → 3 (message includes the specific validation reason); unknown subcommand → 2; `edit` with no `$EDITOR` → 1; every happy path → 0
+
+### Remaining Tasks
+
+- [ ] Phase 4: Milestone-1-Adjacent Verification (tasks 4.1–4.4)
+- [ ] Phase 5: Release Tooling (tasks 5.1–5.3)
+- [ ] Phase 6: Docs & Config Sync (tasks 6.1–6.5)
+
+### Workload / PR Boundary
+
+- Mode: stacked-to-main (per tasks.md "Suggested Work Units")
+- Current work unit: Unit 6 — "`internal/app` (7 use cases) + `cmd/aliasdeck` (Cobra wiring)" (PR 6 of 7 in the suggested split)
+- Boundary: starts from the Batch 2 tree (Phases 1–2 complete, `internal/domain`/`internal/validate`/`internal/renderers` untouched, no `cmd/` or `internal/app`); ends with all seven commands implemented, wired, and tested, `go.mod`/`go.sum` updated with `cobra` as a direct dependency, the binary building and running correctly end to end
+- Estimated review budget impact: 1 new package (`internal/app`, 12 production files + 9 test files) + 1 new command package (`cmd/aliasdeck`, 10 production files + 1 test file) + a two-line `go.mod`/`go.sum` change. This is the largest unit in the plan (tasks.md flagged ~730 lines as a possible split candidate); it landed as one batch since every use case shares the same `Env`/`deviceContext` infrastructure and splitting further would have meant reviewing partial, non-compiling slices
+
+### Status
+
+31/31 tasks complete across Phases 1–3 (9/9 + 10/10 + 12/12). Ready for `sdd-verify` on Phases 1–3, or the next apply batch (Phase 4: Milestone-1-adjacent renderer coverage + golden/real-shell confirmation; Phase 5: release tooling; Phase 6: docs/config sync — Phases 4–6 are independent of each other and can run in any order or in parallel per tasks.md's Parallelization Notes).

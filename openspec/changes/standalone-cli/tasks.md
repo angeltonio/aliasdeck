@@ -59,18 +59,18 @@ Unit 4 and Unit 6 are the largest (~530 and ~730 lines respectively); split furt
 
 ## Phase 3: App Use Cases & CLI Wiring
 
-- [ ] 3.1 RED `internal/app/sync_test.go`: full pipeline order, no-op skip on matching revision+hash, forced rewrite on disk-hash mismatch, deterministic render hash (SS reqs 2-3)
-- [ ] 3.2 GREEN `internal/app/sync.go`: resolve→validate→render→apply→state, `Env` injection
-- [ ] 3.3 RED `internal/app/init_test.go`: creates both config files, prompts before bootstrap, `--no-bootstrap` skip
-- [ ] 3.4 GREEN `internal/app/init.go`
-- [ ] 3.5 RED `internal/app/{status,list,doctor}_test.go`: active-source reporting, device-scoped listing, hostile-entry + undeclared-profile diagnostics, `doctor` writes nothing
-- [ ] 3.6 GREEN `internal/app/status.go`, `list.go`, `doctor.go`
-- [ ] 3.7 RED `internal/app/edit_test.go`: `$EDITOR="x; rm -rf ."` must not execute, `code -w` passes through, no sync side effect (threat matrix "Editor subprocess")
-- [ ] 3.8 GREEN `internal/app/edit.go`: `exec.Command` with split argv, never `sh -c`
-- [ ] 3.9 RED `internal/app/uninstall_test.go`: byte-identical rc restore, `--yes` vs interactive prompt
-- [ ] 3.10 GREEN `internal/app/uninstall.go`
-- [ ] 3.11 GREEN `cmd/aliasdeck/main.go`, `root.go`, `{init,sync,status,list,doctor,edit,uninstall}.go`: Cobra wiring, exit-code map (exit 0-4)
-- [ ] 3.12 Integration `internal/app`: `init`→`sync`→second `sync` (no write)→`uninstall` (byte-identical rc) on `t.TempDir()` HOME
+- [x] 3.1 RED `internal/app/sync_test.go`: full pipeline order, no-op skip on matching revision+hash, forced rewrite on disk-hash mismatch, deterministic render hash (SS reqs 2-3)
+- [x] 3.2 GREEN `internal/app/sync.go`: resolve→validate→render→apply→state, `Env` injection
+- [x] 3.3 RED `internal/app/init_test.go`: creates both config files, prompts before bootstrap, `--no-bootstrap` skip
+- [x] 3.4 GREEN `internal/app/init.go`
+- [x] 3.5 RED `internal/app/{status,list,doctor}_test.go`: active-source reporting, device-scoped listing, hostile-entry + undeclared-profile diagnostics, `doctor` writes nothing
+- [x] 3.6 GREEN `internal/app/status.go`, `list.go`, `doctor.go`
+- [x] 3.7 RED `internal/app/edit_test.go`: `$EDITOR="x; rm -rf ."` must not execute, `code -w` passes through, no sync side effect (threat matrix "Editor subprocess")
+- [x] 3.8 GREEN `internal/app/edit.go`: `exec.Command` with split argv, never `sh -c`
+- [x] 3.9 RED `internal/app/uninstall_test.go`: byte-identical rc restore, `--yes` vs interactive prompt
+- [x] 3.10 GREEN `internal/app/uninstall.go`
+- [x] 3.11 GREEN `cmd/aliasdeck/main.go`, `root.go`, `{init,sync,status,list,doctor,edit,uninstall}.go`: Cobra wiring, exit-code map (exit 0-4)
+- [x] 3.12 Integration `internal/app`: `init`→`sync`→second `sync` (no write)→`uninstall` (byte-identical rc) on `t.TempDir()` HOME
 
 ## Phase 4: Milestone-1-Adjacent Verification (no production edits)
 
