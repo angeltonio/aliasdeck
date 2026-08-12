@@ -25,6 +25,19 @@ golden: ## Rewrite renderer golden files, then read the diff before committing
 fmt: ## Format the module
 	gofmt -l -w .
 
+.PHONY: fmt-check
+fmt-check: ## Fail if anything needs formatting, without rewriting it
+	@unformatted=$$(gofmt -l .); \
+	if [ -n "$$unformatted" ]; then \
+		echo "These files are not gofmt-clean:"; \
+		echo "$$unformatted"; \
+		exit 1; \
+	fi
+
+.PHONY: ci
+ci: fmt-check vet test-race ## What CI runs
+	@echo "CI checks passed"
+
 .PHONY: vet
 vet: ## Run go vet
 	go vet ./...
