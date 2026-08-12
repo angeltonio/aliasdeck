@@ -3,19 +3,22 @@
 # RELEASE PREREQUISITE — READ BEFORE TAGGING v0.1
 #
 # The `brews:` block below publishes a formula to angeltonio/homebrew-tap.
-# That repository does not exist yet (proposal.md "Dependencies"). Running
-# `goreleaser release` before it is created will fail at the Homebrew
-# publish step after binaries and the GitHub release are already created,
-# which is a confusing half-finished state to debug from a CI log.
+# That repository now exists with a `main` branch; GoReleaser creates the
+# `Formula/` directory and commits into it.
 #
-# Before pushing the first `v0.1.x` tag:
-#   1. Create the `angeltonio/homebrew-tap` GitHub repository (empty is
-#      fine; GoReleaser creates the `Formula/` directory and commits to it).
-#   2. Grant the token GoReleaser runs with (GITHUB_TOKEN or a PAT set as
-#      GORELEASER_TAP_TOKEN) push access to that repository.
-# Until both are true, do not tag a release — run `goreleaser release
-# --snapshot --clean` locally instead to sanity-check the build without
-# publishing anything.
+# What is still required is a token that can push there. The GITHUB_TOKEN
+# GitHub Actions injects is scoped to the repository running the workflow
+# and cannot write to the tap. Releasing from CI needs a separate PAT
+# (classic with `repo`, or fine-grained with Contents: write on the tap)
+# exposed as GORELEASER_TAP_TOKEN.
+#
+# Getting this wrong fails late and confusingly: the binaries build, the
+# GitHub release publishes, and only then does the Homebrew step reject the
+# push — leaving a half-finished release to unpick from a CI log.
+#
+# A local release from a machine whose gh token already carries `repo`
+# scope needs no PAT. Either way, run `goreleaser release --snapshot
+# --clean` first to check the build without publishing anything.
 
 version: 2
 
