@@ -1,8 +1,10 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/angeltonio/aliasdeck/internal/config"
@@ -117,15 +119,32 @@ func TestUninstallInteractivePromptsBeforeModifying(t *testing.T) {
 
 func TestUninstallExactFalseWhenUserEditedInsideBlock(t *testing.T) {
 	te := newTestEnv(t)
-	rcPath := seedBootstrappedDevice(t, te, "")
+	prior := "# my own stuff\nexport PATH=\"$PATH:/usr/local/bin\"\n"
+	rcPath := seedBootstrappedDevice(t, te, prior)
 
 	data, err := os.ReadFile(rcPath)
 	if err != nil {
 		t.Fatalf("reading rc file: %v", err)
 	}
-	edited := []byte(string(data) + "# a line the user added inside nothing in particular\n")
-	// Corrupt the exact recorded block (but keep the marker lines intact)
-	// so RemoveBootstrap must fall back to the documented marker scan.
+	// Edit *inside* the marker block, which is what forces the fallback.
+	//
+	// Appending to the end of the file would leave the recorded block intact
+	// and byte-exact removal would still succeed — the fixture has to break
+	// the recorded bytes while leaving the markers findable, or it tests
+	// nothing the name claims.
+	const beginMarker = "# >>> aliasdeck >>>"
+	if !strings.Contains(string(data), beginMarker) {
+		t.Fatalf("fixture is missing the begin marker, cannot force the fallback:\n%s", data)
+	}
+	edited := []byte(strings.Replace(
+		string(data),
+		beginMarker+"\n",
+		beginMarker+"\n# a line the user added inside AliasDeck's block\n",
+		1,
+	))
+	if bytes.Equal(edited, data) {
+		t.Fatal("fixture did not modify the rc file")
+	}
 	if err := os.WriteFile(rcPath, edited, 0o644); err != nil {
 		t.Fatalf("editing rc file: %v", err)
 	}
@@ -138,12 +157,25 @@ func TestUninstallExactFalseWhenUserEditedInsideBlock(t *testing.T) {
 		t.Error("BootstrapRemoved = false, want true even via the fallback path")
 	}
 
+	// The assertion this test is named for. Without it, a regression that made
+	// the fallback claim an exact removal would pass here — and the user would
+	// be told their rc file was restored byte-for-byte when it was not.
+	if report.BootstrapExact {
+		t.Error("BootstrapExact = true after the user edited inside the block; " +
+			"the marker-scan fallback cannot restore byte-for-byte and must not claim it did")
+	}
+
 	got, err := os.ReadFile(rcPath)
 	if err != nil {
 		t.Fatalf("reading rc file after uninstall: %v", err)
 	}
-	if len(got) == 0 && len(edited) != 0 {
-		// sanity: uninstall should not have destroyed everything
-		t.Fatal("rc file was emptied unexpectedly")
+	// The user's own content, which lived outside our block, must survive
+	// intact. The fallback is allowed to be imprecise about the block it
+	// removes; it is not allowed to take anything else with it.
+	if !strings.Contains(string(got), "export PATH=\"$PATH:/usr/local/bin\"") {
+		t.Errorf("the fallback destroyed content the user owned:\n%s", got)
+	}
+	if strings.Contains(string(got), "aliasdeck") {
+		t.Errorf("the fallback left an AliasDeck marker behind:\n%s", got)
 	}
 }

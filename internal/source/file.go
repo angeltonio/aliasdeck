@@ -32,8 +32,9 @@ func (s FileSource) Descriptor() Descriptor {
 // Filtering happens here, not in a caller, so every ConfigSource
 // implementation guarantees the same safety property regardless of where its
 // bytes came from (config-source spec, "Every Source Is Hostile Input").
-// Dropped entries are not reported through this call: `doctor` performs its
-// own independent read-and-validate pass for diagnostics (PROJECT.md §7.4).
+// Dropped entries are not reported through this call. Resolve returns only a
+// configuration, with no channel for diagnostics, so `doctor` performs its own
+// independent read-and-validate pass to explain what was skipped and why.
 func (s FileSource) Resolve(_ context.Context, dev domain.Device) (domain.ResolvedConfig, error) {
 	data, err := os.ReadFile(s.Path)
 	if err != nil {

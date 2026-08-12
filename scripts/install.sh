@@ -60,7 +60,8 @@ resolve_version() {
 	fi
 
 	latest_url="https://github.com/${REPO}/releases/latest"
-	resolved=$(curl -fsSL -o /dev/null -w '%{url_effective}' "$latest_url" 2>/dev/null) ||
+	resolved=$(curl -fsSL --connect-timeout 10 --max-time 60 \
+		-o /dev/null -w '%{url_effective}' "$latest_url" 2>/dev/null) ||
 		fail "could not resolve the latest release from $latest_url"
 
 	# GitHub redirects /releases/latest to /releases/tag/<tag> only when a
@@ -75,6 +76,44 @@ resolve_version() {
 		;;
 	esac
 	echo "$tag"
+}
+
+# verify_checksum compares the downloaded archive against the checksums.txt
+# published alongside every release.
+#
+# Without this the script would download a binary and put it on the user's PATH
+# on the strength of TLS alone. TLS proves the bytes came from GitHub; it says
+# nothing about whether the artifact GitHub is serving is the one the
+# maintainer built. A compromised release token would otherwise install
+# silently and run with the user's full privileges.
+#
+# Verification is required, not best-effort: a missing checksums.txt or a
+# missing hashing tool aborts the install rather than continuing unverified.
+verify_checksum() {
+	work_dir=$1
+	archive=$2
+	version=$3
+
+	if command -v sha256sum >/dev/null 2>&1; then
+		actual=$(sha256sum "$work_dir/$archive" | cut -d' ' -f1)
+	elif command -v shasum >/dev/null 2>&1; then
+		actual=$(shasum -a 256 "$work_dir/$archive" | cut -d' ' -f1)
+	else
+		fail "neither sha256sum nor shasum was found; cannot verify the download"
+	fi
+
+	sums_url="https://github.com/${REPO}/releases/download/${version}/checksums.txt"
+	curl -fsSL --connect-timeout 10 --max-time 60 -o "$work_dir/checksums.txt" "$sums_url" ||
+		fail "could not download $sums_url; refusing to install an unverified binary"
+
+	expected=$(grep " $archive\$" "$work_dir/checksums.txt" | cut -d' ' -f1)
+	[ -n "$expected" ] ||
+		fail "$archive is not listed in checksums.txt; refusing to install"
+
+	[ "$actual" = "$expected" ] ||
+		fail "checksum mismatch for $archive (expected $expected, got $actual); refusing to install"
+
+	log "Checksum verified"
 }
 
 main() {
@@ -99,8 +138,13 @@ main() {
 	trap 'rm -rf "$work_dir"' EXIT
 
 	log "Downloading $url"
-	curl -fsSL -o "$work_dir/$archive" "$url" ||
+	# Timeouts matter more than usual here: this script is meant to be piped
+	# into sh, where a connection that is accepted but never delivers data
+	# would otherwise hang the install forever with nothing to report.
+	curl -fsSL --connect-timeout 10 --max-time 300 -o "$work_dir/$archive" "$url" ||
 		fail "download failed: $url (no partial install was performed)"
+
+	verify_checksum "$work_dir" "$archive" "$version"
 
 	tar -xzf "$work_dir/$archive" -C "$work_dir" "$BIN_NAME" ||
 		fail "could not extract $BIN_NAME from $archive"

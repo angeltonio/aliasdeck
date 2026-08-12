@@ -6,7 +6,10 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
+
+	"github.com/angeltonio/aliasdeck/internal/config"
 )
 
 // TestEditNeverInvokesAShell is the required RED test for the "Editor
@@ -129,5 +132,80 @@ func TestEditReturnsErrorWhenEditorNotSet(t *testing.T) {
 
 	if _, err := Edit(context.Background(), te.Env, EditOptions{}); err != ErrEditorNotSet {
 		t.Errorf("Edit() error = %v, want ErrEditorNotSet", err)
+	}
+}
+
+// TestEditTargetSelectsTheRightFile covers the --config branch, which the
+// cli-commands spec requires and which had no test.
+//
+// Both targets resolve to files in the same directory with similar names, so a
+// transposition would be easy to introduce and easy to miss: a user reaching
+// for their aliases would silently be handed their device configuration
+// instead, and would edit the wrong file believing it was the right one.
+func TestEditTargetSelectsTheRightFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script fixture requires a POSIX shell")
+	}
+
+	tests := []struct {
+		name   string
+		target EditTarget
+		want   func(dir string) string
+	}{
+		{
+			name:   "default target is aliases.yaml",
+			target: "",
+			want:   func(dir string) string { return config.AliasesFile(dir) },
+		},
+		{
+			name:   "explicit aliases target",
+			target: EditTargetAliases,
+			want:   func(dir string) string { return config.AliasesFile(dir) },
+		},
+		{
+			name:   "config target opens config.yaml",
+			target: EditTargetConfig,
+			want:   func(dir string) string { return config.ConfigFile(dir) },
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			te := newTestEnv(t)
+			seedSyncableDevice(t, te)
+
+			captureFile := filepath.Join(t.TempDir(), "captured-args")
+			scriptPath := filepath.Join(t.TempDir(), "fakeeditor")
+			script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + captureFile + "\n"
+			if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+				t.Fatalf("writing fake editor script: %v", err)
+			}
+
+			te.setenv("EDITOR", "fakeeditor")
+			te.Env.LookPath = func(file string) (string, error) {
+				if file == "fakeeditor" {
+					return scriptPath, nil
+				}
+				return "", errors.New("not found")
+			}
+
+			report, err := Edit(context.Background(), te.Env, EditOptions{Target: tt.target})
+			if err != nil {
+				t.Fatalf("Edit() returned an error: %v", err)
+			}
+
+			want := tt.want(te.Base)
+			if report.Path != want {
+				t.Errorf("report.Path = %q, want %q", report.Path, want)
+			}
+
+			captured, err := os.ReadFile(captureFile)
+			if err != nil {
+				t.Fatalf("reading captured args: %v", err)
+			}
+			if strings.TrimSpace(string(captured)) != want {
+				t.Errorf("editor received %q, want %q", strings.TrimSpace(string(captured)), want)
+			}
+		})
 	}
 }

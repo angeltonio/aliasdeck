@@ -159,9 +159,11 @@ func ParseDeviceConfig(data []byte) (DeviceFileConfig, error) {
 // diagnostic.
 //
 // The identity stays stable across runs without being stored because
-// generateDeviceName derives it from the hostname. Only the random last-resort
-// branch would vary, and init writes the resolved name into the file it
-// creates, so that branch is reached at most once.
+// generateDeviceName derives it from the hostname. The random last-resort
+// branch is the exception: on a machine whose hostname yields nothing usable,
+// the generated name differs on every run. Setting device.name in config.yaml
+// is the fix, and `aliasdeck status` prints the name so the instability is
+// visible rather than mysterious.
 func Load(path string) (DeviceFileConfig, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {

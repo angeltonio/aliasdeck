@@ -167,7 +167,15 @@ func Init(ctx context.Context, env Env, opts InitOptions) (InitReport, error) {
 
 	if block != "" {
 		if err := recordBootstrap(config.StateFile(base), rcPath, block, env.Now()); err != nil {
-			return report, err
+			// The rc file has already been modified at this point. Returning a
+			// bare state error would tell the user the command failed while
+			// leaving them unaware that their shell configuration was changed,
+			// and `uninstall` cannot remove a block it has no record of. Say
+			// both things, and say where the block is.
+			return report, fmt.Errorf(
+				"%w\n\n%s was modified and the bootstrap line was added, but it could not be "+
+					"recorded, so `aliasdeck uninstall` will not remove it. Delete this block by hand:\n%s",
+				err, rcPath, block)
 		}
 	}
 
@@ -183,7 +191,7 @@ func createIfAbsent(path string, data []byte, mode os.FileMode) (bool, error) {
 		return false, fmt.Errorf("checking %s: %w", path, err)
 	}
 
-	if err := os.MkdirAll(pathDir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return false, fmt.Errorf("creating directory for %s: %w", path, err)
 	}
 	if err := os.WriteFile(path, data, mode); err != nil {
@@ -191,10 +199,6 @@ func createIfAbsent(path string, data []byte, mode os.FileMode) (bool, error) {
 	}
 	return true, nil
 }
-
-// pathDir returns path's parent directory (a thin wrapper kept local to
-// this file to avoid a second import alias for filepath.Dir elsewhere).
-func pathDir(path string) string { return filepath.Dir(path) }
 
 // recordBootstrap persists the exact bytes AddBootstrap appended into
 // state.Bootstrap, so uninstall can restore them byte-for-byte later
