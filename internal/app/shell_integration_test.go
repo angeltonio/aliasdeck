@@ -6,6 +6,8 @@ import (
 	"context"
 	"os/exec"
 	"testing"
+
+	"github.com/angeltonio/aliasdeck/internal/shelltest"
 )
 
 // TestSyncedFileSourcesCleanlyInRealShells feeds a full Sync's generated
@@ -39,10 +41,7 @@ func TestSyncedFileSourcesCleanlyInRealShells(t *testing.T) {
 
 	for _, sh := range shells {
 		t.Run(sh.bin, func(t *testing.T) {
-			binPath, err := exec.LookPath(sh.bin)
-			if err != nil {
-				t.Skipf("%s not installed on this machine", sh.bin)
-			}
+			binPath := shelltest.LookPath(t, sh.bin)
 
 			te := newTestEnv(t)
 			writeConfigYAML(t, te.Base, nativeDeviceConfig("test-device"))
