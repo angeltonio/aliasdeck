@@ -119,12 +119,12 @@ jobs:
 
       - name: Coverage
         if: runner.os != 'Windows'
-        run: go tool cover -func=coverage.out | tail -20
+        run: go tool cover "-func=coverage.out" | tail -20
 
       - name: Coverage (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: go tool cover -func=coverage.out | Select-Object -Last 20
+        run: go tool cover "-func=coverage.out" | Select-Object -Last 20
 
       - name: Build the binary
         if: runner.os != 'Windows'
