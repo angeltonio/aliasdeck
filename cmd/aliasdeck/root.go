@@ -28,6 +28,7 @@ func newRootCmd() *cobra.Command {
 		newDoctorCmd(),
 		newEditCmd(),
 		newUninstallCmd(),
+		newServeCmd(),
 	)
 	return root
 }
