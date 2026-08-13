@@ -143,6 +143,10 @@ scoops:
       # a second secret; see the top-of-file comment for why. Its scope names
       # this repository as well as the tap.
       token: "{{ .Env.GORELEASER_PUBLISH_TOKEN }}"
+    # Scoop looks for manifests in bucket/ by convention. Without this the
+    # manifest lands at the repository root, where `scoop install` will not
+    # find it — and the bucket's own README already points readers at bucket/.
+    directory: bucket
     homepage: "https://github.com/angeltonio/aliasdeck"
     description: "Your commands. Every machine. Compiles neutral aliases into shell-specific syntax."
     license: MIT
