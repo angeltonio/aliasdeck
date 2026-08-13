@@ -35,10 +35,18 @@ func Run(t *testing.T, newStore func(t *testing.T) store.Store) {
 	t.Run("AliasNotFoundAndConflict", func(t *testing.T) { testAliasNotFoundAndConflict(t, newStore(t)) })
 	t.Run("AliasListOrdering", func(t *testing.T) { testAliasListOrdering(t, newStore(t)) })
 	t.Run("AliasCascadeDeletesTargeting", func(t *testing.T) { testAliasCascadeDeletesTargeting(t, newStore(t)) })
+	t.Run("AliasCascadeDeletesDeviceTargeting", func(t *testing.T) { testAliasCascadeDeletesDeviceTargeting(t, newStore(t)) })
 	t.Run("AliasNameWithSQLMetacharactersRoundTrips", func(t *testing.T) { testAliasNameWithSQLMetacharactersRoundTrips(t, newStore(t)) })
+	t.Run("AliasInvalidReference", func(t *testing.T) { testAliasInvalidReference(t, newStore(t)) })
+	t.Run("AliasCreateRollsBackFullyOnPartialTargetingFailure", func(t *testing.T) { testAliasCreateRollsBackFullyOnPartialTargetingFailure(t, newStore(t)) })
 	t.Run("ProfileCRUD", func(t *testing.T) { testProfileCRUD(t, newStore(t)) })
+	t.Run("ProfileNotFoundAndConflict", func(t *testing.T) { testProfileNotFoundAndConflict(t, newStore(t)) })
+	t.Run("DeviceProfileMembershipCascadesOnProfileDelete", func(t *testing.T) { testDeviceProfileMembershipCascadesOnProfileDelete(t, newStore(t)) })
+	t.Run("DeviceProfileMembershipCascadesOnDeviceDelete", func(t *testing.T) { testDeviceProfileMembershipCascadesOnDeviceDelete(t, newStore(t)) })
 	t.Run("OperatorCRUD", func(t *testing.T) { testOperatorCRUD(t, newStore(t)) })
 	t.Run("TokenLifecycle", func(t *testing.T) { testTokenLifecycle(t, newStore(t)) })
+	t.Run("TokenLookupConflict", func(t *testing.T) { testTokenLookupConflict(t, newStore(t)) })
+	t.Run("ConsumeEnrollmentRejectsExpiredToken", func(t *testing.T) { testConsumeEnrollmentRejectsExpiredToken(t, newStore(t)) })
 	t.Run("DeviceLifecycle", func(t *testing.T) { testDeviceLifecycle(t, newStore(t)) })
 	t.Run("ConsumeEnrollmentIsAtomic", func(t *testing.T) { testConsumeEnrollmentIsAtomic(t, newStore(t)) })
 	t.Run("CancelledContextWritesNothing", func(t *testing.T) { testCancelledContextWritesNothing(t, newStore(t)) })
@@ -120,6 +128,18 @@ func testAliasNotFoundAndConflict(t *testing.T, st store.Store) {
 	if _, err := repo.Create(ctx, domain.Alias{Name: "dup", Command: "false", Enabled: true}); !errors.Is(err, store.ErrConflict) {
 		t.Fatalf("Create() with a duplicate name = %v, want ErrConflict", err)
 	}
+
+	// Update() must reject a name collision with a DIFFERENT existing row,
+	// not just report success trivially because no other row happens to
+	// share the id being updated.
+	other, err := repo.Create(ctx, domain.Alias{Name: "other", Command: "true", Enabled: true})
+	if err != nil {
+		t.Fatalf("creating a second alias: %v", err)
+	}
+	other.Name = "dup"
+	if _, err := repo.Update(ctx, other); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("Update() renaming a row to collide with a different row's name = %v, want ErrConflict", err)
+	}
 }
 
 func testAliasListOrdering(t *testing.T, st store.Store) {
@@ -190,6 +210,130 @@ func testAliasCascadeDeletesTargeting(t *testing.T, st store.Store) {
 	}
 }
 
+// testAliasCascadeDeletesDeviceTargeting is testAliasCascadeDeletesTargeting's
+// counterpart for alias_devices: the profile-delete case above does not
+// exercise the device-delete cascade, so a migration edit dropping
+// ON DELETE CASCADE from alias_devices specifically would go undetected
+// without this.
+func testAliasCascadeDeletesDeviceTargeting(t *testing.T, st store.Store) {
+	t.Helper()
+	ctx := context.Background()
+
+	if err := st.Tokens().Create(ctx, store.Token{
+		Lookup: "cascade-alias-device-enroll", Kind: store.TokenKindEnrollment, SecretHash: []byte("hash"), CreatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("creating enrollment token: %v", err)
+	}
+	dev, err := st.Tokens().ConsumeEnrollment(ctx, "cascade-alias-device-enroll", domain.Device{
+		Name: "cascade-alias-device", Platform: domain.PlatformLinux, Shell: domain.ShellBash,
+	})
+	if err != nil {
+		t.Fatalf("enrolling device: %v", err)
+	}
+
+	alias, err := st.Aliases().Create(ctx, domain.Alias{
+		Name: "dcu-device-target", Command: "true", Enabled: true, DeviceIDs: []string{dev.ID},
+	})
+	if err != nil {
+		t.Fatalf("creating alias: %v", err)
+	}
+	if len(alias.DeviceIDs) != 1 || alias.DeviceIDs[0] != dev.ID {
+		t.Fatalf("Create() = %+v, want DeviceIDs to include %q", alias, dev.ID)
+	}
+
+	if err := st.Devices().Delete(ctx, dev.ID); err != nil {
+		t.Fatalf("deleting device: %v", err)
+	}
+
+	got, err := st.Aliases().Get(ctx, alias.ID)
+	if err != nil {
+		t.Fatalf("Get() alias after deleting its targeted device: %v", err)
+	}
+	if len(got.DeviceIDs) != 0 {
+		t.Fatalf("alias.DeviceIDs = %v after its targeted device was deleted, want empty — the join row must cascade away", got.DeviceIDs)
+	}
+}
+
+// testAliasInvalidReference is the design decision 18 case: an alias
+// naming a profile or device ID that does not exist must surface as
+// ErrInvalidReference, distinct from ErrConflict (a name collision) —
+// mapWriteError previously collapsed both to ErrConflict, which would have
+// told a caller "that name is already taken" for a completely different
+// failure.
+func testAliasInvalidReference(t *testing.T, st store.Store) {
+	t.Helper()
+	ctx := context.Background()
+	repo := st.Aliases()
+
+	_, err := repo.Create(ctx, domain.Alias{
+		Name: "dangling-profile-ref", Command: "true", Enabled: true, ProfileIDs: []string{"does-not-exist"},
+	})
+	if !errors.Is(err, store.ErrInvalidReference) {
+		t.Fatalf("Create() with a nonexistent ProfileIDs entry = %v, want ErrInvalidReference", err)
+	}
+	if errors.Is(err, store.ErrConflict) {
+		t.Fatalf("Create() with a nonexistent ProfileIDs entry = %v, must not also satisfy errors.Is(err, ErrConflict) — a dangling reference is not a name collision", err)
+	}
+
+	_, err = repo.Create(ctx, domain.Alias{
+		Name: "dangling-device-ref", Command: "true", Enabled: true, DeviceIDs: []string{"does-not-exist"},
+	})
+	if !errors.Is(err, store.ErrInvalidReference) {
+		t.Fatalf("Create() with a nonexistent DeviceIDs entry = %v, want ErrInvalidReference", err)
+	}
+
+	created, err := repo.Create(ctx, domain.Alias{Name: "valid-first", Command: "true", Enabled: true})
+	if err != nil {
+		t.Fatalf("creating a valid alias: %v", err)
+	}
+	created.ProfileIDs = []string{"still-does-not-exist"}
+	if _, err := repo.Update(ctx, created); !errors.Is(err, store.ErrInvalidReference) {
+		t.Fatalf("Update() adding a nonexistent ProfileIDs entry = %v, want ErrInvalidReference", err)
+	}
+}
+
+// testAliasCreateRollsBackFullyOnPartialTargetingFailure is the "fails
+// partway through a multi-table write" case testCancelledContextWritesNothing
+// does not cover: that test cancels its context before the call, so it
+// dies in BeginTx and never reaches the multi-statement targeting write
+// the transaction exists to protect. This test instead gives Create() one
+// valid ProfileIDs entry (which inserts successfully) followed by one
+// dangling entry (which fails), forcing a real failure partway through,
+// and asserts neither the alias row nor the first targeting row survived.
+func testAliasCreateRollsBackFullyOnPartialTargetingFailure(t *testing.T, st store.Store) {
+	t.Helper()
+	ctx := context.Background()
+
+	profile, err := st.Profiles().Create(ctx, domain.Profile{Name: "partial-write-profile"})
+	if err != nil {
+		t.Fatalf("creating profile: %v", err)
+	}
+
+	_, err = st.Aliases().Create(ctx, domain.Alias{
+		Name: "partial-write-alias", Command: "true", Enabled: true,
+		ProfileIDs: []string{profile.ID, "does-not-exist"},
+	})
+	if !errors.Is(err, store.ErrInvalidReference) {
+		t.Fatalf("Create() with one valid and one dangling ProfileIDs entry = %v, want ErrInvalidReference", err)
+	}
+
+	aliases, err := st.Aliases().List(ctx)
+	if err != nil {
+		t.Fatalf("List() aliases after a failed multi-row targeting write: %v", err)
+	}
+	if len(aliases) != 0 {
+		t.Fatalf("Aliases().List() = %d aliases after Create() failed partway through targeting, want 0 — a mid-transaction failure must leave no partial row", len(aliases))
+	}
+
+	profiles, err := st.Profiles().List(ctx)
+	if err != nil {
+		t.Fatalf("List() profiles: %v", err)
+	}
+	if len(profiles) != 1 {
+		t.Fatalf("Profiles().List() = %d profiles, want 1 (only the one seeded before the failed alias write, untouched by its rollback)", len(profiles))
+	}
+}
+
 // testAliasNameWithSQLMetacharactersRoundTrips is the threat-matrix "SQL
 // construction" case: a name built to look like a SQL statement must
 // survive as literal text, proving writes go through parameterized
@@ -257,6 +401,43 @@ func testProfileCRUD(t *testing.T, st store.Store) {
 	}
 }
 
+// testProfileNotFoundAndConflict is ProfileRepo's counterpart to
+// testAliasNotFoundAndConflict: testProfileCRUD only exercises the happy
+// path, so missing-id Update/Delete, a duplicate-name Create, and an
+// Update() colliding with a different row's name were previously
+// uncovered here even though ProfileRepo documents all three.
+func testProfileNotFoundAndConflict(t *testing.T, st store.Store) {
+	t.Helper()
+	ctx := context.Background()
+	repo := st.Profiles()
+
+	if _, err := repo.Get(ctx, "does-not-exist"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("Get() on a missing id = %v, want ErrNotFound", err)
+	}
+	if err := repo.Delete(ctx, "does-not-exist"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("Delete() on a missing id = %v, want ErrNotFound", err)
+	}
+	if _, err := repo.Update(ctx, domain.Profile{ID: "does-not-exist", Name: "x"}); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("Update() on a missing id = %v, want ErrNotFound", err)
+	}
+
+	if _, err := repo.Create(ctx, domain.Profile{Name: "dup"}); err != nil {
+		t.Fatalf("first Create(): %v", err)
+	}
+	if _, err := repo.Create(ctx, domain.Profile{Name: "dup"}); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("Create() with a duplicate name = %v, want ErrConflict", err)
+	}
+
+	other, err := repo.Create(ctx, domain.Profile{Name: "other"})
+	if err != nil {
+		t.Fatalf("creating a second profile: %v", err)
+	}
+	other.Name = "dup"
+	if _, err := repo.Update(ctx, other); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("Update() renaming a row to collide with a different row's name = %v, want ErrConflict", err)
+	}
+}
+
 func testOperatorCRUD(t *testing.T, st store.Store) {
 	t.Helper()
 	ctx := context.Background()
@@ -292,6 +473,109 @@ func testOperatorCRUD(t *testing.T, st store.Store) {
 	}
 	if _, err := repo.Get(ctx, "does-not-exist"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("Get() on a missing id = %v, want ErrNotFound", err)
+	}
+}
+
+// testDeviceProfileMembershipCascadesOnProfileDelete proves device_profiles
+// rows are removed when the profile side of the membership is deleted:
+// testAliasCascadeDeletesTargeting only ever exercised alias_profiles, so
+// this join table's own cascade was previously unverified in either
+// direction.
+func testDeviceProfileMembershipCascadesOnProfileDelete(t *testing.T, st store.Store) {
+	t.Helper()
+	ctx := context.Background()
+
+	profile, err := st.Profiles().Create(ctx, domain.Profile{Name: "cascade-profile-delete"})
+	if err != nil {
+		t.Fatalf("creating profile: %v", err)
+	}
+
+	if err := st.Tokens().Create(ctx, store.Token{
+		Lookup: "cascade-profile-delete-enroll", Kind: store.TokenKindEnrollment, SecretHash: []byte("hash"),
+		CreatedAt: time.Now().UTC(), ProfileIDs: []string{profile.ID},
+	}); err != nil {
+		t.Fatalf("creating enrollment token: %v", err)
+	}
+	dev, err := st.Tokens().ConsumeEnrollment(ctx, "cascade-profile-delete-enroll", domain.Device{
+		Name: "cascade-profile-delete-device", Platform: domain.PlatformLinux, Shell: domain.ShellBash,
+	})
+	if err != nil {
+		t.Fatalf("enrolling device: %v", err)
+	}
+	if len(dev.ProfileIDs) != 1 || dev.ProfileIDs[0] != profile.ID {
+		t.Fatalf("ConsumeEnrollment() = %+v, want ProfileIDs to include %q", dev, profile.ID)
+	}
+
+	if err := st.Profiles().Delete(ctx, profile.ID); err != nil {
+		t.Fatalf("deleting profile: %v", err)
+	}
+
+	got, err := st.Devices().Get(ctx, dev.ID)
+	if err != nil {
+		t.Fatalf("Get() device after deleting its profile: %v", err)
+	}
+	if len(got.ProfileIDs) != 0 {
+		t.Fatalf("device.ProfileIDs = %v after its profile was deleted, want empty — the join row must cascade away", got.ProfileIDs)
+	}
+}
+
+// testDeviceProfileMembershipCascadesOnDeviceDelete is
+// testDeviceProfileMembershipCascadesOnProfileDelete's mirror for the
+// device side of the same join table. It cannot Get() the deleted device
+// to inspect membership directly — the device row itself is gone before
+// ListDeviceProfileIDs would even run — so it reuses the device's own id
+// for a second, freshly enrolled device with no profile membership of its
+// own: ListDeviceProfileIDs reads device_profiles by device_id with no
+// join back to devices, so if the first device's row had not cascaded
+// away, it would leak straight into the second device's membership list
+// even though its own enrollment never granted it.
+func testDeviceProfileMembershipCascadesOnDeviceDelete(t *testing.T, st store.Store) {
+	t.Helper()
+	ctx := context.Background()
+
+	profile, err := st.Profiles().Create(ctx, domain.Profile{Name: "cascade-device-delete-profile"})
+	if err != nil {
+		t.Fatalf("creating profile: %v", err)
+	}
+
+	const reusedDeviceID = "cascade-device-delete-reused-id"
+	if err := st.Tokens().Create(ctx, store.Token{
+		Lookup: "cascade-device-delete-enroll-1", Kind: store.TokenKindEnrollment, SecretHash: []byte("hash"),
+		CreatedAt: time.Now().UTC(), ProfileIDs: []string{profile.ID},
+	}); err != nil {
+		t.Fatalf("creating first enrollment token: %v", err)
+	}
+	dev, err := st.Tokens().ConsumeEnrollment(ctx, "cascade-device-delete-enroll-1", domain.Device{
+		ID: reusedDeviceID, Name: "cascade-device-delete-device", Platform: domain.PlatformLinux, Shell: domain.ShellBash,
+	})
+	if err != nil {
+		t.Fatalf("enrolling first device: %v", err)
+	}
+	if dev.ID != reusedDeviceID {
+		t.Fatalf("ConsumeEnrollment() left ID = %q, want the explicit %q preserved", dev.ID, reusedDeviceID)
+	}
+	if len(dev.ProfileIDs) != 1 {
+		t.Fatalf("ConsumeEnrollment() = %+v, want ProfileIDs to include the seeded profile", dev)
+	}
+
+	if err := st.Devices().Delete(ctx, dev.ID); err != nil {
+		t.Fatalf("deleting device: %v", err)
+	}
+
+	if err := st.Tokens().Create(ctx, store.Token{
+		Lookup: "cascade-device-delete-enroll-2", Kind: store.TokenKindEnrollment, SecretHash: []byte("hash"),
+		CreatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("creating second enrollment token: %v", err)
+	}
+	reenrolled, err := st.Tokens().ConsumeEnrollment(ctx, "cascade-device-delete-enroll-2", domain.Device{
+		ID: reusedDeviceID, Name: "cascade-device-delete-device-again", Platform: domain.PlatformLinux, Shell: domain.ShellBash,
+	})
+	if err != nil {
+		t.Fatalf("re-enrolling a device at the reused id: %v", err)
+	}
+	if len(reenrolled.ProfileIDs) != 0 {
+		t.Fatalf("re-enrolled device (reused id %q) has ProfileIDs = %v, want empty — the first device's deleted device_profiles row must not have leaked into it", reusedDeviceID, reenrolled.ProfileIDs)
 	}
 }
 
@@ -358,6 +642,59 @@ func testTokenLifecycle(t *testing.T, st store.Store) {
 		if err != nil || tok.RevokedAt.IsZero() {
 			t.Fatalf("token %q after RevokeSubject() = %+v, %v, want RevokedAt set", lookup, tok, err)
 		}
+	}
+}
+
+// testTokenLookupConflict is the threat-matrix "token handling" case for
+// tokens.lookup's UNIQUE index: TokenRepo.Create routes writes through
+// mapWriteError like every other repo, but no test ever created a
+// duplicate lookup to prove that path is exercised for this table too.
+func testTokenLookupConflict(t *testing.T, st store.Store) {
+	t.Helper()
+	ctx := context.Background()
+	repo := st.Tokens()
+
+	if err := repo.Create(ctx, store.Token{
+		Lookup: "dup-lookup", Kind: store.TokenKindSession, SecretHash: []byte("hash"), CreatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("first Create(): %v", err)
+	}
+	if err := repo.Create(ctx, store.Token{
+		Lookup: "dup-lookup", Kind: store.TokenKindDevice, SecretHash: []byte("other-hash"), CreatedAt: time.Now().UTC(),
+	}); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("Create() with a duplicate lookup = %v, want ErrConflict", err)
+	}
+}
+
+// testConsumeEnrollmentRejectsExpiredToken is the threat-matrix "token
+// handling" case for expiry: no test previously constructed an
+// already-expired enrollment token, which is also this project's
+// regression fixture for the RFC3339Nano variable-width timestamp bug
+// (sqlitestore's expires_at > ? guard compares timestamps as TEXT).
+func testConsumeEnrollmentRejectsExpiredToken(t *testing.T, st store.Store) {
+	t.Helper()
+	ctx := context.Background()
+
+	if err := st.Tokens().Create(ctx, store.Token{
+		Lookup: "expired-enroll", Kind: store.TokenKindEnrollment, SecretHash: []byte("hash"),
+		CreatedAt: time.Now().UTC().Add(-2 * time.Hour),
+		ExpiresAt: time.Now().UTC().Add(-1 * time.Hour),
+	}); err != nil {
+		t.Fatalf("creating an already-expired enrollment token: %v", err)
+	}
+
+	if _, err := st.Tokens().ConsumeEnrollment(ctx, "expired-enroll", domain.Device{
+		Name: "too-late", Platform: domain.PlatformLinux, Shell: domain.ShellBash,
+	}); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("ConsumeEnrollment() on an already-expired token = %v, want ErrConflict", err)
+	}
+
+	list, err := st.Devices().List(ctx)
+	if err != nil {
+		t.Fatalf("Devices().List(): %v", err)
+	}
+	if len(list) != 0 {
+		t.Fatalf("Devices().List() = %d devices after consuming an already-expired token, want 0", len(list))
 	}
 }
 

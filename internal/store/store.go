@@ -33,7 +33,9 @@ type Store interface {
 // a WHERE clause here.
 type AliasRepo interface {
 	// Create persists a, assigning an ID if a.ID is empty. It returns
-	// ErrConflict if a.Name is already taken.
+	// ErrConflict if a.Name is already taken, or ErrInvalidReference if
+	// a.ProfileIDs or a.DeviceIDs names a profile or device that does not
+	// exist.
 	Create(ctx context.Context, a domain.Alias) (domain.Alias, error)
 
 	// Get returns the alias with the given ID, or ErrNotFound.
@@ -43,8 +45,10 @@ type AliasRepo interface {
 	List(ctx context.Context) ([]domain.Alias, error)
 
 	// Update replaces the alias with a.ID's fields and targeting. It
-	// returns ErrNotFound if no alias with that ID exists, or ErrConflict
-	// if the new name collides with a different alias.
+	// returns ErrNotFound if no alias with that ID exists, ErrConflict if
+	// the new name collides with a different alias, or ErrInvalidReference
+	// if a.ProfileIDs or a.DeviceIDs names a profile or device that does
+	// not exist.
 	Update(ctx context.Context, a domain.Alias) (domain.Alias, error)
 
 	// Delete removes the alias with the given ID and its targeting join
@@ -65,7 +69,9 @@ type DeviceRepo interface {
 	List(ctx context.Context) ([]domain.Device, error)
 
 	// Update replaces the device's name and profile membership. It
-	// returns ErrNotFound if no device with that ID exists.
+	// returns ErrNotFound if no device with that ID exists, or
+	// ErrInvalidReference if d.ProfileIDs names a profile that does not
+	// exist.
 	Update(ctx context.Context, d domain.Device) (domain.Device, error)
 
 	// Delete removes the device and its profile/alias-targeting join
@@ -180,7 +186,9 @@ type TokenRepo interface {
 	// calls with the same lookup yield exactly one device: the loser
 	// observes zero rows affected and returns an error, never a second
 	// device. It returns ErrNotFound if the token does not exist,
-	// ErrConflict if it was already used, revoked, or has expired.
+	// ErrConflict if it was already used, revoked, or has expired, or
+	// ErrInvalidReference if the token's ProfileIDs names a profile that
+	// does not exist.
 	ConsumeEnrollment(ctx context.Context, lookup string, dev domain.Device) (domain.Device, error)
 
 	// Revoke marks the token with the given ID revoked at the given

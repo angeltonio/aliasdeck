@@ -18,18 +18,34 @@ import (
 // to recover the primary code from an extended one.
 const sqliteConstraintPrimaryCode = 19
 
-// mapWriteError translates a raw *sql.DB error into a store sentinel: a
-// UNIQUE constraint violation becomes ErrConflict, everything else passes
-// through wrapped with context. This is the one place sqlitestore looks at
-// a driver-specific error type — the store interfaces themselves never see
-// it (design decision 3).
+// sqliteConstraintForeignKey is SQLITE_CONSTRAINT_FOREIGNKEY, the extended
+// result code modernc.org/sqlite's Error.Code() returns for a foreign-key
+// violation. It must be checked before the 0xff mask below: masking it
+// first collapses it to the same primary code (19) every other
+// SQLITE_CONSTRAINT_* subtype shares, which is exactly the bug design
+// decision 18 fixes — a dangling reference (e.g. an alias targeting a
+// profile ID that does not exist) is not a name collision and must not
+// surface as ErrConflict.
+const sqliteConstraintForeignKey = 787
+
+// mapWriteError translates a raw *sql.DB error into a store sentinel
+// (design decision 18): a foreign-key violation becomes ErrInvalidReference,
+// any other constraint violation (UNIQUE, NOT NULL, ...) becomes
+// ErrConflict, everything else passes through wrapped with context. This is
+// the one place sqlitestore looks at a driver-specific error type — the
+// store interfaces themselves never see it (design decision 3).
 func mapWriteError(op string, err error) error {
 	if err == nil {
 		return nil
 	}
 	var sqliteErr *sqlitedriver.Error
-	if errors.As(err, &sqliteErr) && sqliteErr.Code()&0xff == sqliteConstraintPrimaryCode {
-		return fmt.Errorf("%s: %w", op, store.ErrConflict)
+	if errors.As(err, &sqliteErr) {
+		switch {
+		case sqliteErr.Code() == sqliteConstraintForeignKey:
+			return fmt.Errorf("%s: %w", op, store.ErrInvalidReference)
+		case sqliteErr.Code()&0xff == sqliteConstraintPrimaryCode:
+			return fmt.Errorf("%s: %w", op, store.ErrConflict)
+		}
 	}
 	return fmt.Errorf("store: %s: %w", op, err)
 }
@@ -45,9 +61,20 @@ func mapReadError(op string, err error) error {
 	return fmt.Errorf("store: %s: %w", op, err)
 }
 
-// timeFormat is RFC 3339 with nanosecond precision. Sqlite has no native
-// timestamp type; text in this format sorts and compares correctly.
-const timeFormat = time.RFC3339Nano
+// timeFormat is RFC 3339 with a fixed nine-digit fractional second and a
+// zone offset that is always "Z" (formatTime always calls t.UTC() first).
+// This is deliberately NOT time.RFC3339Nano: that layout's "9" fractional
+// digits are trimmed when zero, so "2024-01-01T00:00:00Z" (no fraction) and
+// "2024-01-01T00:00:00.5Z" (half a second later) are different widths, and
+// "." (0x2E) sorts before "Z" (0x5A) in the whole-second string — text
+// comparison then disagrees with chronological order in both directions.
+// The "0" fractional digits here are zero-padded rather than trimmed, so
+// every formatted timestamp is exactly the same width and lexicographic
+// order matches chronological order — which is what query.sql's
+// expires_at > ? guard (and any future ORDER BY over a time column) relies
+// on, since sqlite has no native timestamp type and compares this column as
+// TEXT.
+const timeFormat = "2006-01-02T15:04:05.000000000Z07:00"
 
 func formatTime(t time.Time) string {
 	return t.UTC().Format(timeFormat)

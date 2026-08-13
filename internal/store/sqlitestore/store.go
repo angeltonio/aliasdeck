@@ -9,10 +9,20 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
 
 	"github.com/angeltonio/aliasdeck/internal/store"
 	_ "modernc.org/sqlite"
 )
+
+// dbFileMode is the permission the SQLite database file (and its WAL/SHM
+// sidecars) is created and kept at: the file holds operator password
+// hashes and token secret hashes, the same class of secret
+// internal/config/credentials.json is protected for (design decision 14).
+// See design.md's "Windows 0600 Gap" — the same documented gap and
+// compensating controls apply here verbatim; this package does not invent
+// a second Windows convention.
+const dbFileMode = 0o600
 
 // SQLiteStore implements store.Store over one *sql.DB, deliberately
 // serialized to a single connection (design decision 7): SetMaxOpenConns(1)
@@ -30,6 +40,10 @@ type SQLiteStore struct {
 // Store. Callers never need to know modernc.org/sqlite's pragma
 // query-string syntax.
 func Open(ctx context.Context, path string) (*SQLiteStore, error) {
+	if err := ensureFileMode(path, dbFileMode); err != nil {
+		return nil, err
+	}
+
 	dsn := fmt.Sprintf("%s?_busy_timeout=5000&_foreign_keys=on&_journal_mode=WAL", path)
 
 	db, err := sql.Open("sqlite", dsn)
@@ -43,7 +57,42 @@ func Open(ctx context.Context, path string) (*SQLiteStore, error) {
 		return nil, err
 	}
 
+	// WAL mode (decision 7) creates path-wal and path-shm sidecar files
+	// lazily, on the first write — which Migrate above just performed on
+	// an empty database. Those sidecars can hold the same class of
+	// in-flight secret data as the main file, so they get the same mode.
+	// Best-effort: a sidecar that does not exist yet (e.g. re-opening an
+	// already-migrated, otherwise-idle database) is not an error.
+	for _, suffix := range []string{"-wal", "-shm"} {
+		if err := os.Chmod(path+suffix, dbFileMode); err != nil && !os.IsNotExist(err) {
+			db.Close()
+			return nil, fmt.Errorf("store: setting permissions on %s: %w", path+suffix, err)
+		}
+	}
+
 	return &SQLiteStore{db: db, q: New(db)}, nil
+}
+
+// ensureFileMode makes sure the database file at path exists and is at
+// mode perm before sqlite ever opens it, mirroring the atomic-write
+// discipline internal/config uses for credentials.json (design decision
+// 14): a file created at 0600 never has a window where a more permissive
+// default (process umask) applies. If path already exists, its mode is
+// tightened to perm rather than left as whatever created it — this
+// package is the only writer of its own database file. Windows has no
+// POSIX mode bits; os.Chmod there only toggles the read-only attribute, so
+// this call is a no-op-ish best effort there, exactly as design.md's
+// "Windows 0600 Gap" already documents for credentials.json.
+func ensureFileMode(path string, perm os.FileMode) error {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, perm)
+	if err != nil {
+		return fmt.Errorf("store: opening database file %s: %w", path, err)
+	}
+	defer f.Close()
+	if err := f.Chmod(perm); err != nil {
+		return fmt.Errorf("store: setting permissions on %s: %w", path, err)
+	}
+	return nil
 }
 
 // Close closes the underlying database connection.

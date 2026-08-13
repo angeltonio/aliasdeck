@@ -56,11 +56,25 @@ func (r tokenRepo) ByLookup(ctx context.Context, lookup string) (store.Token, er
 	return toStoreToken(row)
 }
 
+// afterEnrollmentTokenRead is a test-only seam, called immediately after
+// ConsumeEnrollment reads the token and decides whether it is still
+// consumable, and before it writes. It is always a no-op in production —
+// only tokens_test.go ever reassigns it, to force two concurrent callers
+// through the exact "both already decided, now both write" interleaving
+// deterministically. Natural goroutine scheduling essentially never lands
+// two callers in that window on its own (the round trip is too fast), so
+// without this seam a concurrency test can only assert what happened to
+// come up, never what MUST happen in the worst case.
+var afterEnrollmentTokenRead = func() {}
+
 // ConsumeEnrollment atomically marks the enrollment token used and creates
-// dev in one transaction: the UPDATE's WHERE used_at IS NULL guard is what
-// makes two concurrent callers agree on exactly one winner (design's
-// Interfaces section, storetest's ConsumeEnrollmentIsAtomic case). The
-// loser observes zero rows affected on an existing token and returns
+// dev in one transaction: the UPDATE's WHERE used_at IS NULL guard and the
+// device INSERT sharing that one transaction are both what make two
+// concurrent callers agree on exactly one winner (design's Interfaces
+// section, storetest's ConsumeEnrollmentIsAtomic case, and this package's
+// ConsumeEnrollmentTokenGuardIsAtomicUnderRealConcurrency /
+// ConsumeEnrollmentTokenGuardIsAtomicUnderForcedInterleaving). The loser
+// observes zero rows affected on an existing token and returns
 // ErrConflict, never a second device.
 func (r tokenRepo) ConsumeEnrollment(ctx context.Context, lookup string, dev domain.Device) (domain.Device, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
@@ -79,6 +93,8 @@ func (r tokenRepo) ConsumeEnrollment(ctx context.Context, lookup string, dev dom
 		dev.ID = uuid.NewString()
 	}
 	nowText := formatTime(time.Now())
+
+	afterEnrollmentTokenRead()
 
 	// ExpiresAt here is the "now" the WHERE clause compares expires_at
 	// against, not a new value being written — the query only ever sets
