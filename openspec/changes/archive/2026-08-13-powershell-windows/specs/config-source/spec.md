@@ -1,37 +1,26 @@
-# Config Source Specification
+# Delta for Config Source
 
-## Purpose
+## MODIFIED Requirements
 
-Defines the `ConfigSource` contract and the `FileSource` implementation (PROJECT.md §7), and pins that every source — local or remote — is treated as hostile input (§12.1).
+### Requirement: Exactly One Source Per Device
 
-## Requirements
+A device MUST resolve through exactly one `ConfigSource`, as declared by `config.yaml`'s `source.type` (`file`, `git`, or `server`). The system MUST NOT merge or fall back across multiple sources (§7.1), and `status` MUST always name the single active source and its type.
+(Previously: only `file` was an implemented alternative; the no-fallback rule did not yet cover `git`.)
 
-### Requirement: ConfigSource Contract
+#### Scenario: No automatic fallback
+- GIVEN `source.type: file` configured
+- WHEN the configured file is temporarily unavailable
+- THEN sync fails with an error naming the unavailable source; no other source is attempted
 
-Every `ConfigSource` implementation MUST return a `ResolvedConfig` already filtered by the device's platform, shell, and profiles, or a non-nil error. It MUST NOT execute, interpret, or shell-out to any content it reads.
-
-#### Scenario: Successful resolve
-- GIVEN a valid source and a device
-- WHEN `Resolve(ctx, device)` is called
-- THEN it returns a `ResolvedConfig` containing only aliases applicable to that device
-
-#### Scenario: Resolve error is not partially applied
-- GIVEN a source that fails (missing file, malformed YAML)
-- WHEN `Resolve` is called
-- THEN it returns an error and no partial `ResolvedConfig` is used downstream
-
-### Requirement: FileSource Reads a Single Local Path
-
-`FileSource` MUST read the local `aliases.yaml` at the path declared in `config.yaml`'s `source.path`, and MUST NOT read or merge any other file.
-
-#### Scenario: Configured path is used
-- GIVEN `source: {type: file, path: ~/dotfiles/aliases.yaml}`
-- WHEN `sync` runs
-- THEN `FileSource` reads exactly that path
+#### Scenario: GitSource is the sole active source
+- GIVEN `source.type: git` configured
+- WHEN `sync` or `status` run
+- THEN `status` names `GitSource` and its repository, and no other source is merged or attempted on failure
 
 ### Requirement: Every Source Is Hostile Input
 
 `FileSource` and `GitSource` output MUST pass through `validate.FilterValid` before reaching `renderers.Render`, identically regardless of origin (§12.1). A local file receives no lesser scrutiny than a Git or server source would. Name validation MUST match reserved words case-insensitively when the target shell is `powershell`, and duplicate-name detection MUST treat names as case-insensitive for `powershell` while remaining case-sensitive for POSIX shells.
+(Previously: hostile-input coverage only exercised `FileSource`; case sensitivity was not part of the pinned contract.)
 
 #### Scenario: Invalid alias name filtered
 - GIVEN a local `aliases.yaml` containing an alias name with a shell metacharacter
@@ -58,19 +47,7 @@ Every `ConfigSource` implementation MUST return a `ResolvedConfig` already filte
 - WHEN validated
 - THEN it is rejected as a reserved word, matched case-insensitively
 
-### Requirement: Exactly One Source Per Device
-
-A device MUST resolve through exactly one `ConfigSource`, as declared by `config.yaml`'s `source.type` (`file`, `git`, or `server`). The system MUST NOT merge or fall back across multiple sources (§7.1), and `status` MUST always name the single active source and its type.
-
-#### Scenario: No automatic fallback
-- GIVEN `source.type: file` configured
-- WHEN the configured file is temporarily unavailable
-- THEN sync fails with an error naming the unavailable source; no other source is attempted
-
-#### Scenario: GitSource is the sole active source
-- GIVEN `source.type: git` configured
-- WHEN `sync` or `status` run
-- THEN `status` names `GitSource` and its repository, and no other source is merged or attempted on failure
+## ADDED Requirements
 
 ### Requirement: GitSource Implements ConfigSource
 
