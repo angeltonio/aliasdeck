@@ -24,6 +24,9 @@ curl -sSL https://raw.githubusercontent.com/angeltonio/aliasdeck/main/scripts/in
 
 The script verifies the download against the release checksums before installing anything.
 
+**Windows** is not packaged yet. PowerShell and Windows support are implemented on
+`main`; a Scoop package will be published once v0.2 is tagged.
+
 ## Getting started
 
 ```bash
@@ -39,7 +42,11 @@ Reload your shell and your aliases are live. `aliasdeck uninstall` reverses all 
 
 ## Status
 
-**v0.1.0** — the standalone CLI, on macOS and Linux, for zsh and bash.
+**v0.1.0** (released) — the standalone CLI, on macOS and Linux, for zsh and bash.
+
+PowerShell, Windows support and Git-hosted configuration have landed on `main`
+as **v0.2**, but that version has not been tagged or released. Nothing on
+this line is installable yet — see the table below.
 
 | Component | State |
 | --- | --- |
@@ -48,7 +55,9 @@ Reload your shell and your aliases are live. `aliasdeck uninstall` reverses all 
 | zsh + bash renderers | ✅ |
 | Standalone CLI (`init`, `sync`, `status`, `list`, `doctor`, `edit`, `uninstall`) | ✅ |
 | Homebrew tap and install script | ✅ |
-| PowerShell renderer and Windows | ⬜ Planned |
+| PowerShell renderer and Windows support | 🔶 On `main`, unreleased |
+| Git-hosted configuration (`GitSource`) | 🔶 On `main`, unreleased |
+| Scoop package | ⬜ Planned — ships with the v0.2 release |
 | Server + web UI | ⬜ Later |
 
 ---
@@ -158,7 +167,7 @@ These are the choices that shape everything else. The reasoning lives in [`docs/
 | --- | --- |
 | — | Renderer core, validation, golden tests ✅ |
 | **v0.1** | Standalone CLI · zsh + bash · macOS + Linux ✅ |
-| v0.2 | PowerShell + Windows · Git-hosted config |
+| v0.2 | PowerShell + Windows · Git-hosted config — 🔶 on `main`, unreleased |
 | v0.3 | Self-hosted server · devices, profiles, REST API |
 | v0.4 | Web UI with live rendered preview |
 | later | Auto-sync, import/export, version history, Chezmoi backend, MCP server |

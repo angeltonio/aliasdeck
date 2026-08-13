@@ -108,10 +108,10 @@ Base ordering if Feature Branch Chain is chosen: PR1 → PR2/PR3/PR4/PR5 (parall
 
 ## Phase 9: Docs & Final Verification
 
-- [ ] 9.1 `README.md` — update the PowerShell/Windows support status.
-- [ ] 9.2 `docs/PROJECT.md` §16 — mark Milestone 3 items complete.
-- [ ] 9.3 Run `make check` (`gofmt -l -w . && go vet ./... && go test ./...`) and `make cover`; confirm ≥70% on `renderers`, `apply`, `app`, `source`, `config`.
-- [ ] 9.4 Confirm zsh/bash goldens and `shell_integration_test.go` are untouched and still green.
+- [x] 9.1 `README.md` — update the PowerShell/Windows support status.
+- [x] 9.2 `docs/PROJECT.md` §16 — mark Milestone 3 items complete.
+- [x] 9.3 Run `make check` (`gofmt -l -w . && go vet ./... && go test ./...`) and `make cover`; confirm ≥70% on `renderers`, `apply`, `app`, `source`, `config`.
+- [x] 9.4 Confirm zsh/bash goldens and `shell_integration_test.go` are untouched and still green.
 
 ## Parallelization
 

@@ -775,13 +775,13 @@ Nothing user-facing. All of the project's delicate logic, tested in isolation.
 
 A complete, useful tool on macOS and Linux. Zero server, zero UI.
 
-### Milestone 3 — Windows and Git · **v0.2**
+### Milestone 3 — Windows and Git · **v0.2, complete on `main` — not yet tagged**
 
 - PowerShell renderer and Windows support
-- Scoop packaging
+- Scoop packaging (manifest and CI publish step configured; first Scoop release ships with the v0.2 tag)
 - `GitSource`
 
-The standalone product now covers all three operating systems and composes with existing dotfiles repositories.
+The standalone product now covers all three operating systems and composes with existing dotfiles repositories. All of the above is implemented, tested, and merged to `main` — nothing here is installable until `v0.2` is tagged and released. A known limitation surfaced during this milestone: on Windows, `config.yaml` and `state.json` (which can hold a credential-bearing Git URL) are written with the same `0600`-mode call as on POSIX, but Windows reports every writable file as `0666` regardless of the requested mode — there is no Unix-style owner-only protection on that platform via this mechanism. Real protection would require Windows ACL manipulation, which this milestone does not add.
 
 ### Milestone 4 — Server · **v0.3**
 
@@ -838,6 +838,10 @@ Settled as of 2026-08-12:
 | Chezmoi | Optional apply backend, interface only in MVP |
 | MCP | Post-MVP |
 | License | **MIT** — the CLI is installed on work machines, and copyleft would put it behind corporate legal review where the tool is most useful |
+| Windows path shape (v0.2) | Generated `.ps1` files use LF unconditionally, same as zsh/bash. Bootstrap lines emitted into `$PROFILE` always use forward slashes (`filepath.ToSlash`), which PowerShell accepts natively; the rc file's own pre-existing line ending (LF or CRLF) is detected and preserved rather than forced. `config.ExpandPath` additionally recognizes a literal `~\` prefix alongside `~/`, independent of the host OS |
+| PowerShell edition handling (v0.2) | Never write to both `$PROFILE` locations. Precedence: `--rc-file` → `$ALIASDECK_PWSH_PROFILE` → `LookPath("pwsh")` ⇒ Core → `LookPath("powershell")` ⇒ Desktop → Core default. `doctor` warns, without writing, when the *other* edition's profile also exists |
+| Git source read-only in v0.2 (`GitSource`) | Clone or fetch only — AliasDeck never commits, pushes, or otherwise mutates a user's Git repository. Cached at a hashed, AliasDeck-owned path so the URL itself never becomes a directory name. Offline with an existing cache resolves the last-known content and reports staleness; offline with no cache is a hard error naming the source |
+| Windows file-mode security limitation (v0.2, known gap) | `config.yaml`/`state.json` are still written with the same `0600` call as on POSIX, but Windows reports every writable file as `0666` regardless of the requested mode — there is no owner-only protection for a credential-bearing Git URL on that platform via this mechanism. ACL-based protection is out of scope for v0.2 |
 
 ---
 

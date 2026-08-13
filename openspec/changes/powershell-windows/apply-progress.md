@@ -1,7 +1,7 @@
 # Apply Progress: PowerShell, Windows and Git-hosted config — Milestone 3 (v0.2)
 
-**Batches**: 1 (Phases 1–2) + 2 (Phase 3) + 3 (Phase 4) + 4 (Phase 5) + 5 (Phase 6) + 6 (Phase 7) + 7 (Phase 8), per orchestrator scope
-**Mode**: Strict TDD
+**Batches**: 1 (Phases 1–2) + 2 (Phase 3) + 3 (Phase 4) + 4 (Phase 5) + 5 (Phase 6) + 6 (Phase 7) + 7 (Phase 8) + 8 (first Windows CI run fix-ups) + 9 (Phase 9, docs & final verification), per orchestrator scope
+**Mode**: Strict TDD (Phase 9 itself is documentation and verification only — no code change)
 
 ## Completed Tasks
 
@@ -1005,7 +1005,7 @@ No git commit was created. Changes are left in the working tree per the orchestr
 Searched the codebase for every place a file mode encodes a security property (`Chmod`, `0o600`, `0o644` literals in production code):
 
 - `internal/config/device.go` (`Write`, config.yaml at `0o600`) — **security-relevant**: config.yaml can hold `source.git.url`, which may embed credentials. Covered by the now-fixed `TestWriteThenLoadRoundTrips` (#4 above).
-- `internal/state/state.go` (`Save`, state.json at `0o600`) — **security-relevant, same gap, not yet hit by CI**: `state.State.SourceRef` (`internal/state/state.go:31`) records `<url>#<ref>@<short-sha>` (design decision 14), which is the same potentially credential-bearing URL as config.yaml's. `internal/state/state_test.go:148` (`TestStateSaveSetsFileMode0600`) asserts the identical `perm != 0o600` pattern as #4 and has **not yet been exercised by a Windows CI run in this batch's scope** (this batch only fixes the six failures the first run actually reported) — it is very likely to fail the *next* Windows run for the exact same reason. **Flagged explicitly, not fixed here**, since it was outside the six named failures; recommend the same `runtime.GOOS`-gated pattern applied to #3/#4 be applied there too, in a follow-up.
+- `internal/state/state.go` (`Save`, state.json at `0o600`) — **security-relevant, same gap, not yet hit by CI**: `state.State.SourceRef` (`internal/state/state.go:31`) records `<url>#<ref>@<short-sha>` (design decision 14), which is the same potentially credential-bearing URL as config.yaml's. `internal/state/state_test.go:148` (`TestStateSaveSetsFileMode0600`) asserts the identical `perm != 0o600` pattern as #4 and has **not yet been exercised by a Windows CI run in this batch's scope** (this batch only fixes the six failures the first run actually reported) — it is very likely to fail the *next* Windows run for the exact same reason. **RESOLVED by the orchestrator between batches**: the same `runtime.GOOS`-gated pattern was applied there, and the following Windows CI run passed. The record below and in Batch 9 that describes it as still open is stale — verify against `internal/state/state_test.go` rather than against this document.
 - `internal/app/init.go` (`createIfAbsent`, aliases.yaml at `0o600`) — aliases.yaml holds no secret (alias definitions only); no test currently asserts its exact mode, so no corresponding CI risk today.
 - `internal/apply/native.go` / `internal/apply/atomic.go` (generated `aliases.<ext>` at `0o644`, rc file at `0o644` via `resolveRCPath`'s default) — not security-relevant (not secret; world-readable is the intended state for a file a shell sources).
 
@@ -1072,12 +1072,70 @@ ok  	github.com/angeltonio/aliasdeck/internal/validate	(cached)	coverage: 87.7% 
 | `internal/app/edit_test.go` | Modified | New `writeNoOpEditorScript` helper; cross-platform editor fixture, no skip |
 | `internal/app/init_test.go` | Modified | `rcPath` built with `filepath.Join` instead of literal `"/"` concatenation |
 
-### Remaining Tasks
+### Remaining Tasks (as of Batch 8)
 
-- [ ] 9.1 `README.md` — update the PowerShell/Windows support status.
-- [ ] 9.2 `docs/PROJECT.md` §16 — mark Milestone 3 items complete.
-- [ ] 9.3 Run `make check` and `make cover`; confirm ≥70% on `renderers`, `apply`, `app`, `source`, `config`. (Coverage confirmed above in this batch; `make check`'s `gofmt -l -w .`/`go vet`/`go test` step not yet re-run standalone after this batch's edits — `make ci`, run above, covers the equivalent `vet` + `test -race`.)
-- [ ] 9.4 Confirm zsh/bash goldens and `shell_integration_test.go` are untouched and still green. (Untouched by this batch; `TestSyncedFileSourcesCleanlyInRealShells` passed above.)
-- [ ] Follow-up (new, discovered this batch): apply the same `runtime.GOOS`-gated file-mode assertion fix to `internal/state/state_test.go:148` (`TestStateSaveSetsFileMode0600`) before the next Windows CI run, for the identical reason as #3/#4 above.
+- [x] 9.1 `README.md` — update the PowerShell/Windows support status. (Done in Batch 9, below.)
+- [x] 9.2 `docs/PROJECT.md` §16 — mark Milestone 3 items complete. (Done in Batch 9, below.)
+- [x] 9.3 Run `make check` and `make cover`; confirm ≥70% on `renderers`, `apply`, `app`, `source`, `config`. (Coverage confirmed above in this batch; `make check`'s `gofmt -l -w .`/`go vet`/`go test` step re-run standalone in Batch 9.)
+- [x] 9.4 Confirm zsh/bash goldens and `shell_integration_test.go` are untouched and still green. (Untouched by this batch; `TestSyncedFileSourcesCleanlyInRealShells` passed above; re-confirmed by name in Batch 9 as `TestGeneratedFileIsInertInRealShells`.)
+- [x] Follow-up (discovered in Batch 8): the `runtime.GOOS`-gated file-mode assertion was applied to `TestStateSaveSetsFileMode0600`, along with rewrites of two chmod-based error-induction tests that Windows does not enforce. Windows CI passed afterwards. Batch 9 reported this as still open because it read this document rather than the source.
 
 No git commit was created in this batch either, per the explicit instruction not to commit.
+
+## Batch 9 (this batch): Phase 9 — Docs & Final Verification
+
+**Scope**: tasks 9.1–9.4 only. No Go source or Go test file was touched — this batch is documentation (`README.md`, `docs/PROJECT.md`) and verification commands, exactly matching this phase's non-negotiable constraint 1.
+
+- [x] 9.1 `README.md`:
+  - **Status** section: split the single `v0.1.0` line into a released `v0.1.0` line and an explicit "landed on `main`, not tagged" note for v0.2; the component table gained two `🔶 On main, unreleased` rows (PowerShell renderer/Windows support, `GitSource`) and a `⬜ Planned` row for the Scoop package, distinct from both `✅` (shipped) and the pre-existing `⬜ Planned` (not yet built) so a reader cannot conflate "built but unreleased" with "not built."
+  - **Roadmap** table: the `v0.2` row now reads `PowerShell + Windows · Git-hosted config — 🔶 on `main`, unreleased`, mirroring the new status-table vocabulary instead of the ambiguous bare row it had before.
+  - **Install** section: added one sentence stating Windows is not packaged yet and a Scoop package will be published once v0.2 is tagged — future tense throughout, no command shown, so nothing implies `scoop install aliasdeck` works today.
+  - **Three-shells example verified against the actual renderer, not assumed**: read `internal/renderers/powershell.go`'s `Render` and a rendered golden file (`testdata/powershell_basic.golden`) side by side with the README's PowerShell code block. They match byte-for-byte — `$__aliasdeck_cmd = 'docker ps'` then `& ([scriptblock]::Create($__aliasdeck_cmd + ' @args')) @args`, both `@args` present at the two load-bearing positions the design doc's §6.3 explanation requires. **No correction was needed this time** — the two prior corrections mentioned in the task prompt already landed in Phase 3/4's batches, and this batch's job was to verify, not re-fix.
+- [x] 9.2 `docs/PROJECT.md`:
+  - §16 Milestone 3 heading changed to `**v0.2, complete on `main` — not yet tagged**` (mirrors the existing `**v0.1, first release**` status-suffix convention already used on the Milestone 2 heading, rather than inventing a new format) and the closing paragraph now states explicitly that nothing in the milestone is installable until the tag exists, plus names the Windows file-mode gap discovered in Batch 8 so it is visible in the milestone's own summary, not only buried in a `tasks.md` follow-up.
+  - §17 decisions table gained four rows: Windows path shape, PowerShell edition handling, Git source read-only in v0.2, and the Windows file-mode security limitation (the last one flagged as a *known gap*, not presented as a resolved decision, since it genuinely is not resolved — Batch 8's own "Issues Found" note already named it and this is its first appearance in the product-facing spec rather than only the apply-progress log).
+  - **Reconnaissance check requested by the task prompt**: re-read §6.3 and §6.4 (the sections the task said were "corrected during reconnaissance") end to end against the current renderer/`pwshprofile.go` implementation. Both hold exactly as written — §6.3's `}`-breakout narrative matches `powershell.go`'s `Render`, and §6.4's Desktop-vs-Core path table and "editions were verified... so the renderer does not need to branch on edition — but rc-file detection does" matches `resolvePowerShellProfile`'s actual precedence chain. Also swept every other PowerShell/Windows/GitSource/Scoop mention in the file (§2, §3.4, §4.1, §5, §6.1/§6.2, §7, §8.2, §9.2, §9.3, §10, §13) for staleness — none contradict what Phases 1–8 actually built. Nothing else needed correcting.
+- [x] 9.3 `make check` (`gofmt -l -w . && go vet ./... && go test ./...`) run standalone: clean, zero files reformatted (`git status --short -- '*.go'` empty afterward, confirming `gofmt -w` found nothing to rewrite), all packages pass. `make ci` (`fmt-check` + `vet` + `test -race`) also re-run clean. `make cover`:
+
+  ```
+  ok  	github.com/angeltonio/aliasdeck/cmd/aliasdeck	  coverage: 58.4% of statements
+  ok  	github.com/angeltonio/aliasdeck/internal/app	    coverage: 83.1% of statements
+  ok  	github.com/angeltonio/aliasdeck/internal/apply	  coverage: 84.9% of statements
+  ok  	github.com/angeltonio/aliasdeck/internal/config	  coverage: 88.2% of statements
+  ok  	github.com/angeltonio/aliasdeck/internal/domain	  coverage: 70.4% of statements
+  ok  	github.com/angeltonio/aliasdeck/internal/renderers	coverage: 92.0% of statements
+      github.com/angeltonio/aliasdeck/internal/shelltest	coverage: 0.0% of statements (no test files — a fixture/helper package, not a renderer/apply/app/source/config package the task asked to gate on)
+  ok  	github.com/angeltonio/aliasdeck/internal/source	  coverage: 87.0% of statements
+  ok  	github.com/angeltonio/aliasdeck/internal/state	    coverage: 70.3% of statements
+  ok  	github.com/angeltonio/aliasdeck/internal/validate	coverage: 87.7% of statements
+  ```
+
+  Every package the task named (`renderers`, `apply`, `app`, `source`, `config`) clears the 70% bar with room to spare (84.9%–92.0%).
+- [x] 9.4 Confirmed, three ways, all before any doc edit was written (so the verification predates and is independent of this batch's own changes):
+  - `git diff --stat main -- internal/renderers/testdata` → three files, all `powershell_*.golden`, zero lines changed in the four pre-existing zsh/bash goldens.
+  - `git diff --stat main -- internal/renderers/shell_integration_test.go internal/domain internal/validate` → empty (no output at all — none of the three touched since `main`).
+  - `go test ./internal/renderers/... -run TestGeneratedFileIsInertInRealShells -v` (the actual test name — the task prompt's "`shell_integration_test.go`" description matches this file, whose one top-level test is named `TestGeneratedFileIsInertInRealShells`, not a name containing "shell_integration") → both `bash` and `zsh` sub-tests pass.
+
+### Files Changed (this batch)
+
+| File | Action | What Was Done |
+|---|---|---|
+| `README.md` | Modified | Status table split into released-vs-unreleased rows; roadmap `v0.2` row annotated; one-sentence Windows/Scoop note added to Install; PowerShell example verified unchanged (matches renderer output exactly) |
+| `docs/PROJECT.md` | Modified | §16 Milestone 3 heading/closing paragraph marked complete-but-untagged, including the Windows file-mode gap; §17 gained four decision rows (path shape, edition handling, GitSource read-only, file-mode limitation) |
+| `openspec/changes/powershell-windows/tasks.md` | Modified | Marked 9.1–9.4 `[x]` |
+
+### Work Unit Evidence
+
+| Evidence | Value |
+|---|---|
+| Focused test command and exact result | `make check` (clean, 0 reformatted files), `make ci` (clean), `make cover` (all five named packages ≥70%, see table above), `go test ./internal/renderers/... -run TestGeneratedFileIsInertInRealShells -v` (PASS, both sub-tests) |
+| Runtime integration harness | Same real-shell integration test as every prior phase (`TestGeneratedFileIsInertInRealShells`) — re-run, not modified, to confirm this batch's doc-only changes did not somehow disturb it (they cannot, since no `.go` file was edited, but the instruction asked for confirmation, not inference) |
+| Rollback boundary | Revert `README.md` and `docs/PROJECT.md`. Zero code or test files touched, so this reverts with zero behavioral impact |
+
+### Risks / Issues carried forward from this batch
+
+1. ~~`internal/state/state_test.go:148` is still Windows-broken.~~ **Incorrect.** It was fixed between batches and Windows CI passed. This risk was raised by reading this progress document rather than the file it describes — a reminder that a progress record is a claim about the past, not a substitute for looking.
+2. **Engram**: attempted to save this batch's progress to Engram under topic key `sdd/powershell-windows/apply-progress` per the task's artifact-store instructions. As every phase agent before this one in this change has found, no Engram `mem_*` tool is bound in this session/toolset — the MCP instructions block references `mem_save`/`mem_search`/etc. by name, but no such tool is exposed to this agent to actually invoke. This file (`apply-progress.md`) is therefore the sole record of this phase's work, consistent with the hybrid artifact-store fallback the task instructions anticipated.
+3. **Not a new risk, restating an inherited one for visibility at the end of the milestone**: the `GORELEASER_TAP_TOKEN` scope question (Batch 7/8) and the `go test -race` / GNU Make availability questions on `windows-latest` (Batch 7) remain unverified from this sandbox — they require a real GitHub Actions run to resolve, which this environment cannot trigger or observe.
+
+No git commit was created in this batch, per the explicit instruction not to commit.
