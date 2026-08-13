@@ -4,10 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -147,7 +149,11 @@ func forgeNewerSchema(t *testing.T, dbPath string) {
 // TestRunHealthEndpointRequiresNoAuthentication is the server-runtime
 // spec's "Health check succeeds after startup" scenario end-to-end through
 // a real Run, listening on an ephemeral port: a plain GET with no
-// Authorization header must succeed.
+// Authorization header must succeed, and — bounded-review finding — the
+// response body and Content-Type are asserted exactly, not just the status
+// code, so a regression that starts leaking a schema version, build info,
+// or a path (handleHealth's own comment promises none of that) fails this
+// test instead of passing silently.
 func TestRunHealthEndpointRequiresNoAuthentication(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "server.db")
 
@@ -180,9 +186,22 @@ func TestRunHealthEndpointRequiresNoAuthentication(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET /api/v1/health: %v", err)
 	}
+	body, err := io.ReadAll(resp.Body)
 	resp.Body.Close()
+	if err != nil {
+		t.Fatalf("reading /api/v1/health body: %v", err)
+	}
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET /api/v1/health without an Authorization header = %d, want %d — the health endpoint must require no auth", resp.StatusCode, http.StatusOK)
+	}
+
+	const wantContentType = "application/json; charset=utf-8"
+	if ct := resp.Header.Get("Content-Type"); ct != wantContentType {
+		t.Errorf("Content-Type = %q, want %q", ct, wantContentType)
+	}
+	const wantBody = `{"status":"ok"}` + "\n"
+	if string(body) != wantBody {
+		t.Errorf("body = %q, want exactly %q — the health endpoint must expose nothing beyond readiness", body, wantBody)
 	}
 
 	cancel()
@@ -194,6 +213,251 @@ func TestRunHealthEndpointRequiresNoAuthentication(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("Run() did not return after ctx cancellation")
 	}
+}
+
+// TestRunReturnsNilWhenCancelledDuringOpenStore is the regression test for
+// the bounded-review finding that a SIGTERM (or any ctx cancellation)
+// arriving while OpenStore is still running — the up-to-30s migration
+// window — surfaced as a wrapped "server: opening store: ..." error,
+// indistinguishable in logs from a genuine startup failure. An
+// operator-initiated stop must report the same way (nil) no matter which
+// bounded operation it lands during; this test cancels ctx while OpenStore
+// is deliberately still blocked on it, using the same
+// "call blocks until ctx.Done()" seam TestRunOpensAndMigratesStoreBeforeListening
+// already relies on for ordering.
+func TestRunReturnsNilWhenCancelledDuringOpenStore(t *testing.T) {
+	openStoreEntered := make(chan struct{})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cfg := Config{
+		OpenStore: func(ctx context.Context) (store.Store, error) {
+			close(openStoreEntered)
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- Run(ctx, cfg) }()
+
+	select {
+	case <-openStoreEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run() never called OpenStore")
+	}
+
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run() cancelled during OpenStore = %v, want nil — an operator-initiated stop must not read as a startup failure", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run() did not return after ctx cancellation during OpenStore")
+	}
+}
+
+// TestRunReturnsNilWhenCancelledDuringBootstrap is
+// TestRunReturnsNilWhenCancelledDuringOpenStore's sibling for the other
+// bounded operation named in the same finding: a stop arriving while
+// auth.Bootstrap is still running must also report nil, not a wrapped
+// "server: bootstrapping operator: ..." error.
+func TestRunReturnsNilWhenCancelledDuringBootstrap(t *testing.T) {
+	bootstrapEntered := make(chan struct{})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cfg := Config{
+		OpenStore: func(_ context.Context) (store.Store, error) {
+			return &blockingBootstrapStore{fakeStore: &fakeStore{}, entered: bootstrapEntered}, nil
+		},
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- Run(ctx, cfg) }()
+
+	select {
+	case <-bootstrapEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run() never reached auth.Bootstrap's operator count check")
+	}
+
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run() cancelled during Bootstrap = %v, want nil — an operator-initiated stop must not read as a startup failure", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run() did not return after ctx cancellation during Bootstrap")
+	}
+}
+
+// TestRunClosesStoreAfterReturning is the regression test for the
+// bounded-review finding that `defer st.Close()` was verified by nothing:
+// deleting that line left the whole package green. fakeStore's isClosed
+// accessor already existed but was never called from anywhere — dead
+// scaffolding that made the property look covered when it was not.
+func TestRunClosesStoreAfterReturning(t *testing.T) {
+	st := &fakeStore{}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	lnReady := make(chan struct{}, 1)
+	cfg := Config{
+		OpenStore: func(_ context.Context) (store.Store, error) { return st, nil },
+		Listen: func() (net.Listener, error) {
+			ln, err := net.Listen("tcp", "127.0.0.1:0")
+			if err == nil {
+				lnReady <- struct{}{}
+			}
+			return ln, err
+		},
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- Run(ctx, cfg) }()
+
+	select {
+	case <-lnReady:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run() never called Listen")
+	}
+
+	if st.isClosed() {
+		t.Fatal("store reported closed before shutdown began")
+	}
+
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run() = %v, want nil", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run() did not return after ctx cancellation")
+	}
+
+	if !st.isClosed() {
+		t.Fatal("Run() returned without closing the store — defer st.Close() must run")
+	}
+}
+
+// TestRunBootstrapsOperatorOnEmptyStore is the regression test for the
+// bounded-review finding that fakeStore.Operators().Count() always
+// returning 1 left Run's auth.Bootstrap call's Create branch entirely
+// unexercised: newFakeStoreWithEmptyOperators reports 0 instead, so this
+// test actually drives Create.
+func TestRunBootstrapsOperatorOnEmptyStore(t *testing.T) {
+	st := newFakeStoreWithEmptyOperators()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	lnReady := make(chan struct{}, 1)
+	cfg := Config{
+		OpenStore: func(_ context.Context) (store.Store, error) { return st, nil },
+		Listen: func() (net.Listener, error) {
+			ln, err := net.Listen("tcp", "127.0.0.1:0")
+			if err == nil {
+				lnReady <- struct{}{}
+			}
+			return ln, err
+		},
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- Run(ctx, cfg) }()
+
+	select {
+	case <-lnReady:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run() never called Listen — Bootstrap must not block startup on an empty store")
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run() = %v, want nil", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run() did not return after ctx cancellation")
+	}
+
+	if !st.createWasCalled() {
+		t.Fatal("Run() returned successfully but never called Operators().Create — auth.Bootstrap's Create branch was not actually exercised")
+	}
+}
+
+// TestRunWrapsBootstrapErrorFromOperatorCreate is
+// TestRunBootstrapsOperatorOnEmptyStore's error-path sibling: the same
+// bounded-review finding noted that Bootstrap's error path inside Run was
+// never exercised either, since the always-count-1 fake never let Create
+// run at all, let alone fail.
+func TestRunWrapsBootstrapErrorFromOperatorCreate(t *testing.T) {
+	wantErr := errors.New("operator create failed")
+	st := newFakeStoreWithOperatorCreateError(wantErr)
+
+	cfg := Config{
+		OpenStore: func(_ context.Context) (store.Store, error) { return st, nil },
+		Listen: func() (net.Listener, error) {
+			return nil, errors.New("Listen must not be called when Bootstrap fails")
+		},
+	}
+
+	err := Run(context.Background(), cfg)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Run() = %v, want an error wrapping %v", err, wantErr)
+	}
+	if !st.createWasCalled() {
+		t.Fatal("Run() failed but never called Operators().Create — the error did not actually come from the Create branch under test")
+	}
+}
+
+// blockingBootstrapStore wraps a *fakeStore whose Operators() reports 0
+// existing operators, but blocks inside Count until ctx is cancelled —
+// simulating a slow store call so a test can assert Run's behavior when a
+// stop signal lands specifically inside auth.Bootstrap rather than
+// OpenStore.
+type blockingBootstrapStore struct {
+	*fakeStore
+	entered chan struct{}
+	once    sync.Once
+}
+
+func (b *blockingBootstrapStore) Operators() store.OperatorRepo {
+	return blockingOperatorRepo{entered: b.entered, once: &b.once}
+}
+
+type blockingOperatorRepo struct {
+	entered chan struct{}
+	once    *sync.Once
+}
+
+func (r blockingOperatorRepo) Create(_ context.Context, o store.Operator) (store.Operator, error) {
+	return o, nil
+}
+
+func (blockingOperatorRepo) Get(_ context.Context, _ string) (store.Operator, error) {
+	return store.Operator{}, store.ErrNotFound
+}
+
+func (blockingOperatorRepo) ByUsername(_ context.Context, _ string) (store.Operator, error) {
+	return store.Operator{}, store.ErrNotFound
+}
+
+func (r blockingOperatorRepo) Count(ctx context.Context) (int, error) {
+	r.once.Do(func() { close(r.entered) })
+	<-ctx.Done()
+	return 0, ctx.Err()
 }
 
 // TestRunNeverReadsStdin proves the bounded operation "Operator bootstrap

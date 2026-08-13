@@ -30,8 +30,23 @@ type Config struct {
 	Getenv func(string) string
 
 	// Stdout receives auth.Bootstrap's one-time generated operator
-	// password. Defaults to io.Discard.
+	// password, or — when BootstrapPasswordFile is set — a short notice
+	// naming that file instead of the password itself (design decision
+	// 22). Defaults to io.Discard.
 	Stdout io.Writer
+
+	// BootstrapPasswordFile, when non-empty, is where auth.Bootstrap
+	// writes a freshly generated operator password instead of printing it
+	// to Stdout (design decision 22): under systemd's default
+	// StandardOutput=journal, Stdout is a persistent log, and server-auth
+	// spec.md forbids writing the password to any log. The caller (
+	// cmd/aliasdeck/serve.go) is the one place that knows whether Stdout
+	// is really a console a person will read, and resolves this field
+	// accordingly; Run and Config never inspect Stdout themselves. Empty
+	// means "Stdout is a console — print the password directly", which is
+	// also this field's zero-value default, so every existing test that
+	// leaves it unset keeps the original console-printing behavior.
+	BootstrapPasswordFile string
 
 	// ShutdownTimeout bounds the graceful drain Run gives in-flight
 	// requests once shutdown starts (design's Bounded Operations table:

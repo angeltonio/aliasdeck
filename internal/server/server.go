@@ -17,6 +17,32 @@ import (
 // read / write"). Each one has a test asserting it directly on the
 // constructed server — dropping any of these fields is a test failure, not
 // a silent regression.
+//
+// Rationale (bounded-review finding, suggestion 10 — house style per
+// internal/source/gitrun.go's GitTimeout is that a magic number carries the
+// failure or measurement that produced it): none of the five values below
+// was derived from a measurement against this project's own traffic —
+// there is no traffic yet to measure. They are conventional defaults for a
+// single-operator personal control plane, chosen for shape rather than
+// tuned for a load profile:
+//   - readHeaderTimeout/readTimeout bound a slow or hostile client's header
+//     and body delivery — 5s/15s track the values commonly recommended for
+//     small internal APIs (e.g. Go's own net/http docs) rather than any
+//     AliasDeck-specific ceiling.
+//   - writeTimeout (30s) is double readTimeout: this API's slowest handler
+//     is a store round trip already bounded by SQLite's 5s busy_timeout
+//     (design decision 7) and the 20s http.TimeoutHandler wrapping every
+//     handler (Phase 5), so 30s is headroom above both, not a measured p99.
+//   - idleTimeout (60s) is a conventional keep-alive window; nothing in
+//     this project depends on connections being reused for any specific
+//     duration.
+//   - maxHeaderBytes (64<<10) matches Go's own http.DefaultMaxHeaderBytes;
+//     it is carried here explicitly so decision changes are visible in a
+//     diff instead of riding a stdlib default.
+//
+// If a future load test contradicts one of these, replace this paragraph
+// with the measurement, the same way GitTimeout's own comment was written
+// after a failure was actually observed — not before.
 const (
 	readHeaderTimeout = 5 * time.Second
 	readTimeout       = 15 * time.Second
@@ -57,6 +83,18 @@ func newHTTPServer(handler http.Handler) *http.Server {
 // auth.Bootstrap takes an io.Writer for the one-time generated password and
 // no io.Reader whatsoever (bounded operation "Operator bootstrap ... Zero
 // stdin reads in serve").
+//
+// An operator-initiated stop (SIGINT/SIGTERM, or ctx cancelled by the
+// caller) reports the same way — a nil error — no matter which bounded
+// operation it lands during. Before this correction, a signal arriving
+// during OpenStore's up-to-30s migration window or during Bootstrap
+// propagated out as a wrapped error, indistinguishable in logs from a real
+// startup failure; the fix is narrow: after OpenStore or Bootstrap fails,
+// check whether ctx itself was already cancelled before deciding this was
+// a failure at all. A genuine failure never flips ctx.Err() on its own, so
+// this cannot mask one — it only reclassifies the case where the two
+// coincide, which is exactly the "the operator stopped it" case this
+// project wants to report identically to a stop that lands after Listen.
 func Run(ctx context.Context, cfg Config) error {
 	cfg = cfg.withDefaults()
 
@@ -65,11 +103,17 @@ func Run(ctx context.Context, cfg Config) error {
 
 	st, err := cfg.OpenStore(ctx)
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil
+		}
 		return fmt.Errorf("server: opening store: %w", err)
 	}
 	defer st.Close()
 
-	if err := auth.Bootstrap(ctx, st, cfg.Getenv, cfg.Stdout); err != nil {
+	if err := auth.Bootstrap(ctx, st, cfg.Getenv, cfg.Stdout, cfg.BootstrapPasswordFile); err != nil {
+		if ctx.Err() != nil {
+			return nil
+		}
 		return fmt.Errorf("server: bootstrapping operator: %w", err)
 	}
 
