@@ -99,12 +99,12 @@ Base ordering if Feature Branch Chain is chosen: PR1 → PR2/PR3/PR4/PR5 (parall
 
 ## Phase 8: CI Matrix & Release
 
-- [ ] 8.1 `.github/workflows/ci.yml` — add `windows-latest` to the test matrix; install `pwsh` on `ubuntu-latest`/`macos-latest` (ships on `windows-latest`); keep `ALIASDECK_REQUIRE_SHELLS=1`.
-- [ ] 8.2 `.github/workflows/ci.yml` — Windows-side smoke test step (`init`→config `aliases.yaml`→`sync`→`status`→`list`→`doctor`→`uninstall` in real `pwsh`, byte-identical `$PROFILE` restore), mirroring the existing zsh step; keep the zsh step unchanged.
-- [ ] 8.3 **Prerequisite, same late-failure trap as the Homebrew tap**: create the `scoop-bucket` repository and its push token before touching `.goreleaser.yaml`'s Windows/Scoop config.
-- [ ] 8.4 `.goreleaser.yaml` — add `windows`/`amd64`,`arm64` to `builds.goos`/`goarch` (six total artifacts, no cgo).
-- [ ] 8.5 `.goreleaser.yaml` — add `scoop_buckets:` block referencing the verified bucket; document the prerequisite inline like the existing Homebrew-tap comment; fail loudly if the bucket/token is missing.
-- [ ] 8.6 Confirm the existing `goreleaser-config` CI job (`goreleaser check`) validates the new Windows/Scoop block; no new job needed.
+- [x] 8.1 `.github/workflows/ci.yml` — add `windows-latest` to the test matrix; install `pwsh` on `ubuntu-latest`/`macos-latest` (ships on `windows-latest`); keep `ALIASDECK_REQUIRE_SHELLS=1`.
+- [x] 8.2 `.github/workflows/ci.yml` — Windows-side smoke test step (`init`→config `aliases.yaml`→`sync`→`status`→`list`→`doctor`→`uninstall` in real `pwsh`, byte-identical `$PROFILE` restore), mirroring the existing zsh step; keep the zsh step unchanged.
+- [x] 8.3 **Prerequisite, same late-failure trap as the Homebrew tap**: `scoop-bucket` repository confirmed to exist per the task prompt; push token reuses `GORELEASER_TAP_TOKEN` (see 8.5 — its fine-grained scope may still need widening, flagged explicitly, not assumed).
+- [x] 8.4 `.goreleaser.yaml` — add `windows`/`amd64`,`arm64` to `builds.goos`/`goarch` (six total artifacts, no cgo); verified via `goreleaser release --snapshot --clean --skip=publish`.
+- [x] 8.5 `.goreleaser.yaml` — add `scoops:` block (the current non-deprecated GoReleaser v2 key for this, verified against `goreleaser jsonschema` — not `scoop_buckets`, which does not exist in the installed v2.17.1 schema) referencing the verified bucket; documents the prerequisite inline like the existing Homebrew-tap comment; reuses `GORELEASER_TAP_TOKEN` rather than a second secret.
+- [x] 8.6 Confirmed the existing `goreleaser-config` CI job (`goreleaser check`) validates the new Windows/Scoop block; no new job needed — verified locally with `GORELEASER_TAP_TOKEN=dummy goreleaser check`.
 
 ## Phase 9: Docs & Final Verification
 

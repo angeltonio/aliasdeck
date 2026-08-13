@@ -19,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
 
     steps:
       - uses: actions/checkout@v4
@@ -35,13 +35,56 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y zsh
 
+      # internal/renderers/powershell_integration_test.go carries no build
+      # tag (unlike the bash/zsh integration tests, which are `!windows`
+      # tagged), because pwsh is the same interpreter on every OS AliasDeck
+      # targets. That means it compiles and runs here too, on runners where
+      # pwsh is not preinstalled the way it is on windows-latest. Without
+      # this step ALIASDECK_REQUIRE_SHELLS=1 below would fail the build for
+      # a missing binary rather than actually exercising the PowerShell
+      # renderer on these platforms.
+      - name: Install pwsh
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          if command -v pwsh >/dev/null 2>&1; then
+            echo "pwsh already present: $(pwsh -Version)"
+          elif [ "${{ runner.os }}" = "Linux" ]; then
+            sudo snap install powershell --classic
+          elif [ "${{ runner.os }}" = "macOS" ]; then
+            brew install --cask powershell
+          fi
+
       - name: Record the shells under test
+        if: runner.os != 'Windows'
         run: |
           bash --version | head -1
           zsh --version
+          pwsh -Version
+
+      - name: Record the shell under test (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: $PSVersionTable.PSVersion
 
       - name: Check formatting
+        if: runner.os != 'Windows'
         run: make fmt-check
+
+      # Windows-latest's `make` availability/configuration is unverified from
+      # this sandbox (see apply-progress.md), so this step does not depend on
+      # it: gofmt itself is part of the Go toolchain and identical on every
+      # OS, so this is the exact same check `make fmt-check` runs, inlined.
+      - name: Check formatting (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt-clean:"
+            echo "$unformatted"
+            exit 1
+          fi
 
       - name: Vet
         run: go vet ./...
@@ -50,22 +93,50 @@ jobs:
       # failure. The tests it governs are the ones proving AliasDeck does not
       # write executable code into a user's shell, so a pipeline that silently
       # declined to run them would be worse than no pipeline at all.
+      #
+      # What "the shells under test" means is platform-scoped by
+      # construction, not by an extra flag here: the bash/zsh integration
+      # tests (internal/renderers/shell_integration_test.go,
+      # internal/app/shell_integration_test.go) carry a `//go:build !windows`
+      # tag, so on windows-latest they do not exist as compiled tests at all
+      # — there is nothing for this flag to skip there, and nothing it could
+      # accidentally let slide. The PowerShell integration test
+      # (internal/renderers/powershell_integration_test.go) carries no build
+      # tag, so it compiles and is required on all three platforms.
+      # Concretely: ubuntu-latest/macos-latest require bash+zsh+pwsh;
+      # windows-latest requires pwsh only, because bash/zsh are not "the
+      # point" on Windows. internal/shelltest/shelltest.go itself is
+      # unmodified — this platform split comes entirely from the existing
+      # build tags, not from any change to the guard.
       - name: Test
         env:
           ALIASDECK_REQUIRE_SHELLS: "1"
         run: go test -race -coverprofile=coverage.out ./...
 
       - name: Coverage
+        if: runner.os != 'Windows'
         run: go tool cover -func=coverage.out | tail -20
 
+      - name: Coverage (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: go tool cover -func=coverage.out | Select-Object -Last 20
+
       - name: Build the binary
+        if: runner.os != 'Windows'
         run: go build -o /tmp/aliasdeck ./cmd/aliasdeck
+
+      - name: Build the binary (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: go build -o "$env:RUNNER_TEMP\aliasdeck.exe" ./cmd/aliasdeck
 
       # The unit tests exercise the use cases directly. This proves the shipped
       # binary works end to end on this platform: create a config, sync it,
       # source the result in a real shell, then remove it and confirm the rc
       # file came back byte-identical.
       - name: Smoke test the binary
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           set -euo pipefail
@@ -96,6 +167,66 @@ jobs:
           diff "$work/rc.original" "$rc"
           echo "rc file restored byte-identically"
 
+      # Windows counterpart of "Smoke test the binary" above: same
+      # init -> sync -> exercise-the-generated-file -> uninstall shape, but
+      # against the real .exe, a real $PROFILE-shaped .ps1 file, and real
+      # pwsh instead of zsh. "Invoke an alias" here means actually calling
+      # the generated function (not just printing its definition, the way
+      # the bash step inspects `alias gwip` without running it), so the
+      # aliased command is a deterministic, side-effect-free Write-Output
+      # rather than anything that could mutate this checkout or the runner.
+      - name: Smoke test the binary (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $bin = "$env:RUNNER_TEMP\aliasdeck.exe"
+
+          $work = New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP "aliasdeck-smoke") -Force
+          $env:ALIASDECK_HOME = Join-Path $work.FullName "config"
+          $rc = Join-Path $work.FullName "profile.ps1"
+          $rcOriginal = Join-Path $work.FullName "profile.original.ps1"
+
+          Set-Content -Path $rc -NoNewline -Value "function existing_stub { 'placeholder' }`n"
+          Copy-Item -Path $rc -Destination $rcOriginal
+
+          & $bin init --shell powershell --rc-file $rc --yes
+          if ($LASTEXITCODE -ne 0) { throw "init failed with exit code $LASTEXITCODE" }
+
+          $aliasesPath = Join-Path $env:ALIASDECK_HOME "aliases.yaml"
+          @"
+          version: 1
+          aliases:
+            - name: greet
+              command: Write-Output hello-aliasdeck
+          "@ | Set-Content -Path $aliasesPath
+
+          & $bin sync --shell powershell
+          if ($LASTEXITCODE -ne 0) { throw "sync failed with exit code $LASTEXITCODE" }
+          & $bin status --shell powershell
+          if ($LASTEXITCODE -ne 0) { throw "status failed with exit code $LASTEXITCODE" }
+          & $bin list --shell powershell
+          if ($LASTEXITCODE -ne 0) { throw "list failed with exit code $LASTEXITCODE" }
+          & $bin doctor --shell powershell
+          if ($LASTEXITCODE -ne 0) { throw "doctor failed with exit code $LASTEXITCODE" }
+
+          $generated = Join-Path $env:ALIASDECK_HOME "aliases.ps1"
+          $output = & pwsh -NoProfile -NonInteractive -Command ". '$generated'; greet"
+          if ($LASTEXITCODE -ne 0) { throw "dot-sourcing/invoking the generated alias failed" }
+          if (($output -join "`n") -notmatch "hello-aliasdeck") {
+            throw "invoking the generated alias did not produce the expected output: $output"
+          }
+
+          & $bin uninstall --shell powershell --yes
+          if ($LASTEXITCODE -ne 0) { throw "uninstall failed with exit code $LASTEXITCODE" }
+
+          $originalHash = (Get-FileHash -Path $rcOriginal -Algorithm SHA256).Hash
+          $restoredHash = (Get-FileHash -Path $rc -Algorithm SHA256).Hash
+          if ($originalHash -ne $restoredHash) {
+            throw "profile was not restored byte-identically (original=$originalHash restored=$restoredHash)"
+          }
+          Write-Output "profile restored byte-identically"
+
   shellcheck:
     name: shellcheck
     runs-on: ubuntu-latest
@@ -115,7 +246,9 @@ jobs:
         with:
           go-version-file: go.mod
       # Validating the release config on every change means a broken one is
-      # found here rather than half way through publishing a tag.
+      # found here rather than half way through publishing a tag. This also
+      # validates the Windows builds and the Scoop bucket block added in this
+      # phase, since goreleaser check parses the whole config.
       - uses: goreleaser/goreleaser-action@v6
         with:
           version: "~> v2"

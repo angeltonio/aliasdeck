@@ -1,6 +1,6 @@
 # Apply Progress: PowerShell, Windows and Git-hosted config — Milestone 3 (v0.2)
 
-**Batches**: 1 (Phases 1–2) + 2 (Phase 3) + 3 (Phase 4) + 4 (Phase 5) + 5 (Phase 6) + 6 (Phase 7), per orchestrator scope
+**Batches**: 1 (Phases 1–2) + 2 (Phase 3) + 3 (Phase 4) + 4 (Phase 5) + 5 (Phase 6) + 6 (Phase 7) + 7 (Phase 8), per orchestrator scope
 **Mode**: Strict TDD
 
 ## Completed Tasks
@@ -122,6 +122,17 @@ PASS
 - [x] 7.3 RED: `internal/app/doctor_test.go` — `TestDoctorWarnsWhenOtherPowerShellEditionProfileExists` (seeds the *other* edition's profile file so `OtherExists` is provably true, not a default zero value; asserts the new `Warnings` field names that path), `TestDoctorOmitsPowerShellWarningForNonPowerShellDevice` (zsh device, asserts `Warnings` stays empty), `TestDoctorWarnsOnStaleGitSource` (git-sourced device; seeds the cached `aliases.yaml` directly at `source.GitAliasesPath(source.GitCacheDir(...), "")` and `state.json` with `SourceStale: true` via `state.Save`, never `Sync` — `Doctor` must stay offline and read-only). Observed failing to compile (`report.Warnings undefined` — `DoctorReport` had no such field) before any production code existed.
 - [x] 7.4 GREEN: `internal/app/doctor.go` — `DoctorReport` gained `Warnings []string`; `Doctor` appends the other-edition-profile warning (reading `resolvePowerShellProfile`'s already-computed `OtherPath`/`OtherExists` — no new detection logic, per the Phase 5 "Issues Found" note this task exists to fulfill) and the stale-`GitSource` warning (reading `state.Load`'s `SourceStale`/`SourceFetchedAt` when `dc.SourceDesc.Type == "git"` — the same read-only `state.Load` call `Status` makes, never `Source.Resolve`). Both are warnings, appended to `Warnings`, never to `Issues`, so `Doctor`'s exit-code contract (`Issues.HasErrors()` only) is untouched by construction, not by a separate check. `cmd/aliasdeck/status.go` and `cmd/aliasdeck/doctor.go` were also updated (production code, not a tracked task, but the entire point of this phase per the task prompt) to actually print the new fields: `status` gains a conditional `PowerShell:` line (edition, exact `$PROFILE` path, provenance — mirroring the existing `Platform:`/`Shell:` "value (provenance)" vocabulary) and a conditional `Git ref:` line (resolved ref, with an explicit `— STALE, using cached content` suffix when stale, mirroring `cmd/aliasdeck/sync.go`'s existing `fetchedSuffix` pattern via a new local `staleSuffix` helper); `doctor` gains a `%d warning(s):` block, printed after the existing `%d profile warning(s):` block, using the same one-line-per-item vocabulary. Neither existing block's format string changed, so `TestRunDoctorFindsErrorExitsThree`'s `strings.Contains(stdout, "bad name!")` assertion and every zsh/bash `status`/`doctor` test pass unedited.
 
+### Phase 8 (this batch): CI Matrix & Release
+
+**No TDD cycle for this phase**: Phase 8 is CI workflow and release-tool configuration (`ci.yml`, `release.yml`, `.goreleaser.yaml`, `tasks.md`), not Go source. No test file was written or changed, and the non-negotiable constraints for this batch explicitly forbid modifying Go source, so there is no RED/GREEN/REFACTOR cycle to report for it — verification instead took the form of YAML parsing, `goreleaser check`/`--snapshot`, and `make ci`, all recorded below under "Phase 8 (this batch)" in Verification.
+
+- [x] 8.1 `.github/workflows/ci.yml` — added `windows-latest` to the `test` job's matrix; added an "Install pwsh" step guarded `if: runner.os != 'Windows'` (idempotent: checks `command -v pwsh` first, then `snap install powershell --classic` on Linux or `brew install --cask powershell` on macOS) so the platform-agnostic `internal/renderers/powershell_integration_test.go` actually runs there; `ALIASDECK_REQUIRE_SHELLS: "1"` is unchanged (`internal/shelltest/shelltest.go` was not touched — see "Deviations from Design" below for why the per-platform meaning comes from existing build tags, not a code change).
+- [x] 8.2 `.github/workflows/ci.yml` — added a Windows-only "Smoke test the binary (Windows)" step (`if: runner.os == 'Windows'`, `shell: pwsh`): builds a fake `$PROFILE`-shaped `.ps1`, runs `init --shell powershell --rc-file ... --yes`, writes a benign `aliases.yaml`, runs `sync`/`status`/`list`/`doctor --shell powershell`, dot-sources the generated `aliases.ps1` in a real `pwsh -NoProfile -NonInteractive` child process and invokes the generated `greet` function (asserting its output, not just printing its definition — "invoke," per the task prompt, unlike the existing bash step's `alias gwip` inspection), then `uninstall --shell powershell --yes` and compares `Get-FileHash` of the original vs. restored profile file. The existing "Smoke test the binary" (zsh) step is guarded `if: runner.os != 'Windows'` but is otherwise byte-for-byte unchanged, per the task prompt's explicit "keep the zsh step unchanged" instruction. "Build the binary"/"Coverage"/"Check formatting" steps gained Windows-specific counterparts for the same reason (path shape, `tail`/`make` availability), also guarded by `runner.os`, with the non-Windows branches left unchanged.
+- [x] 8.3 **Prerequisite, same late-failure trap as the Homebrew tap**: the task prompt states the `scoop-bucket` repository under `angeltonio` now exists with a `main` branch and a README, so this executor treated that as verified per the prompt rather than re-verifying it (this environment has no ability to query GitHub's API for the user's account). The push token is `GORELEASER_TAP_TOKEN`, reused rather than a second secret, exactly as instructed — **flagged explicitly, not assumed, per the task prompt's own instruction**: that token was originally issued as a fine-grained PAT scoped to `angeltonio/homebrew-tap`; its scope likely needs widening to also cover `angeltonio/scoop-bucket`, or the Scoop push will fail at release time with the same "binaries built, GitHub release published, then the push step rejects" late-failure shape the Homebrew tap's own comment already warns about. This is called out both in `.goreleaser.yaml`'s top-of-file comment and in this report's Risks section.
+- [x] 8.4 `.goreleaser.yaml` — added `windows` to `builds[0].goos` (alongside the existing `darwin`/`linux`); `amd64`/`arm64` were already present under `goarch` and now apply to all three `goos` values, producing six artifacts with `CGO_ENABLED=0` unchanged. Added `archives[0].format_overrides` mapping `goos: windows` to `formats: [zip]` (tar.gz stays the default for darwin/linux) — not asked for explicitly, but load-bearing: without it the Scoop manifest's `bin: [aliasdeck.exe]` would point into a `.tar.gz`, which Scoop cannot extract. Verified with `goreleaser release --snapshot --clean --skip=publish` (full transcript in Verification below): produced `aliasdeck_..._windows_amd64.zip` and `..._windows_arm64.zip` alongside the four pre-existing darwin/linux `.tar.gz` archives, six total.
+- [x] 8.5 `.goreleaser.yaml` — added a `scoops:` block (name, `ids: [aliasdeck]`, `repository{owner: angeltonio, name: scoop-bucket, branch: main, token: "{{ .Env.GORELEASER_TAP_TOKEN }}"}`, `homepage`, `description`, `license: MIT`). **Correction to the task's literal key name, verified rather than assumed** (see "Deviations from Design" below): the task text says `scoop_buckets:`, but `goreleaser jsonschema` against the pinned `~> v2` line (installed `goreleaser 2.17.1`) has no such key — the actual, current, non-deprecated key is `scoops:` (confirmed empirically: a scratch config using `scoop:` (singular) fails `goreleaser check` with `field scoop not found in type config.Project`; `scoops:` passes clean). The top-of-file comment documents the prerequisite for `scoops:` inline, mirroring the existing `homebrew_casks:` comment, and states explicitly that `GORELEASER_TAP_TOKEN` is reused, not a new secret.
+- [x] 8.6 Confirmed the existing `goreleaser-config` CI job needs no changes: it already runs `goreleaser check` unconditionally on every push/PR, which — verified locally — validates the new `windows` builds, `format_overrides`, and `scoops:` block together with everything else in the file. No new CI job was added.
+
 ## TDD Cycle Evidence
 
 | Task | RED (test written first, observed failing) | GREEN (implementation, observed passing) | REFACTOR |
@@ -198,6 +209,14 @@ PASS
 | Runtime integration harness | Built the real `aliasdeck` binary and ran it against a temp `ALIASDECK_HOME`/`$HOME` with a fake `pwsh` on `PATH`: `init` → `status` (shows the `PowerShell:` line with edition/path/provenance) → seeded the other edition's profile file → `doctor` (shows the other-edition warning, exit code 0) → seeded a hostile alias (exit code 3, warning still present alongside the error, proving the warning never changes the exit code). Full transcript in "Verification" below. |
 | Rollback boundary | Revert `internal/app/status.go`, `status_test.go`, `doctor.go`, `doctor_test.go`, `cmd/aliasdeck/status.go`, `cmd/aliasdeck/doctor.go`. No other package calls the new `StatusReport`/`DoctorReport` fields yet, so this reverts cleanly and independently of Phases 8–9 (CI matrix, release, docs), which have not started. |
 
+### Unit 7 (Phase 8)
+
+| Evidence | Value |
+|---|---|
+| Focused test command and exact result | No Go tests apply (CI/release config only). `ruby -ryaml -e "YAML.load_file(...)"` parses `.github/workflows/ci.yml`, `.github/workflows/release.yml`, and `.goreleaser.yaml` cleanly; `GORELEASER_TAP_TOKEN=dummy goreleaser check` passes against the real `.goreleaser.yaml` (installed `goreleaser 2.17.1`, matching the pinned `~> v2` line); `make ci` (`fmt-check`, `go vet ./...`, `go test -race ./...`) passes unchanged, confirming zero Go source was touched. |
+| Runtime integration harness | `GORELEASER_TAP_TOKEN=dummy goreleaser release --snapshot --clean --skip=publish` — a real (non-publishing) build: produced all six binaries (`darwin`/`linux`/`windows` × `amd64`/`arm64`), the two `windows_*.zip` archives (vs. `.tar.gz` for darwin/linux), the Homebrew cask, and `dist/scoop/aliasdeck.json`; the generated Scoop manifest was read back and inspected (both architectures present, `bin: ["aliasdeck.exe"]`, correct `license`/`description`). This is real tool execution against the real config, not a parse-only check — but it is not, and cannot be, the actual GitHub Actions `windows-latest` runner; see Risks below for exactly what stays unverified until the workflow runs there. |
+| Rollback boundary | Revert `.github/workflows/ci.yml`, `.github/workflows/release.yml`, `.goreleaser.yaml`, and this batch's `tasks.md`/`apply-progress.md` checkbox updates. No Go source was touched by this batch, so reverting it has zero effect on any Go package, test, or behavior — the cleanest possible rollback boundary in this whole change. |
+
 ## Files Changed
 
 | File | Action | What Was Done |
@@ -249,8 +268,14 @@ PASS
 | `internal/app/doctor_test.go` | Modified | Added `TestDoctorWarnsWhenOtherPowerShellEditionProfileExists`, `TestDoctorOmitsPowerShellWarningForNonPowerShellDevice`, `TestDoctorWarnsOnStaleGitSource` |
 | `cmd/aliasdeck/status.go` | Modified | Prints a conditional `PowerShell:` line and a conditional `Git ref:` line (with a `— STALE, using cached content` suffix when stale, via new local `staleSuffix` helper); existing lines' format strings unchanged |
 | `cmd/aliasdeck/doctor.go` | Modified | Prints a new `%d warning(s):` block (after the existing `%d profile warning(s):` block) for `DoctorReport.Warnings`; existing blocks' format strings unchanged |
+| `.github/workflows/ci.yml` | Modified | Added `windows-latest` to the `test` matrix; added an idempotent "Install pwsh" step (`ubuntu`/`macos` only); split "Check formatting"/"Coverage"/"Build the binary"/"Smoke test the binary" into `runner.os`-guarded non-Windows (unchanged) and Windows-only counterparts; added the Windows smoke test (`init`→`sync`→dot-source `.ps1` in real `pwsh`→invoke `greet`→`uninstall`→`Get-FileHash` byte-identical check); documented the platform-scoped meaning of `ALIASDECK_REQUIRE_SHELLS=1` inline |
+| `.github/workflows/release.yml` | Modified | Added an "Install pwsh" step before "Test before publishing" (same reasoning as ci.yml — the pwsh integration test carries no build tag and is now covered by `ALIASDECK_REQUIRE_SHELLS=1` on this runner too); updated the `GORELEASER_TAP_TOKEN` comment to name both the Homebrew and Scoop steps and flag the scope-widening risk |
+| `.goreleaser.yaml` | Modified | Added `windows` to `builds[0].goos`; added `archives[0].format_overrides` (zip for windows); added a `scoops:` block (see task 8.5's note on the corrected key name) publishing to `angeltonio/scoop-bucket` via the reused `GORELEASER_TAP_TOKEN`; expanded the top-of-file prerequisite comment to cover the Scoop bucket and its token-scope risk alongside the existing Homebrew-tap text |
+| `openspec/changes/powershell-windows/tasks.md` | Modified | Marked 8.1–8.6 as `[x]` (this batch), with inline notes correcting `scoop_buckets:` → `scoops:` and recording the token-scope risk |
 
 ## Deviations from Design
+
+**One deviation for Phase 8, a correction verified against the installed tool rather than assumed, not a design-doc change since `design.md` never named a literal GoReleaser key for Scoop**: `tasks.md` task 8.5 said to add a `scoop_buckets:` block. `goreleaser jsonschema` (installed `goreleaser 2.17.1`, matching the pinned `~> v2` line) has no `scoop_buckets` key at all; the current, non-deprecated key for this is `scoops:`. Verified two ways before writing the real config: (1) inspecting the `Project` type's schema directly, and (2) a scratch config using the singular `scoop:` failed `goreleaser check` with `field scoop not found in type config.Project`, while `scoops:` passed clean and, in a `--snapshot` build, produced a correct `dist/scoop/aliasdeck.json` (both architectures, `aliasdeck.exe`, correct license/description — inspected directly). `tasks.md` 8.5 is marked complete with an inline note explaining the correction, per this phase's "do not reintroduce a deprecated key" constraint and the general rule against silently deviating from a literal instruction without saying so.
 
 **One deviation for Phase 7, narrower-than-literal-text but design-intent-preserving, not corrected in `design.md` since it does not change decision 14's outcome — only which call reads the fields**: tasks.md 7.2 says `status` reports "git ref + staleness fields," and design decision 8 says "`status` prints edition + path + provenance," without stating explicitly that these are read from persisted `state.State` rather than a live resolve. Implemented as: `Status()` reads `SourceRef`/`SourceStale`/`SourceFetchedAt` straight off the `state.State` already loaded to compute `UpToDate` — the *last successful sync's* recorded values, not a fresh `dc.Source.Resolve` call. Reason: `status` calling `Resolve` on a `GitSource` would spawn a real `git` subprocess (network fetch) just to answer a read command, which non-negotiable constraint 4 ("Detection must not spawn a process") and design decision 14's read-only `ResolveReporter` posture (type-asserted only by `syncWithContext`, never by `status`/`doctor`) both argue against, and which would make `status` — a command explicitly meant to be safe and instant — occasionally hang or fail offline. `doctor`'s stale-`GitSource` warning follows the identical rule for the identical reason (also documented inline in `doctor.go`). This mirrors Phase 5's already-established pattern of reusing an existing read (`resolvePowerShellProfile`) rather than re-deriving state a second, possibly-disagreeing way.
 
@@ -274,6 +299,14 @@ Phases 1–2: None — implementation matches design decisions 16 and the "Windo
 One clarification worth flagging: design decision 16 and the "Windows Path Handling" table both describe `~\` recognition in terms of `os.PathSeparator`. Implemented instead as an explicit, always-recognized `~\` literal (in addition to `~/`), independent of the host OS's `os.PathSeparator`. This is a deliberate, narrower-than-literal-text but design-intent-preserving choice: `os.PathSeparator` is `/` on the macOS/Linux CI runners that run this suite today (Windows-in-CI is Phase 8, out of this batch's scope), so gating recognition on `os.PathSeparator` would make the Windows-shaped-path test un-exercisable until Phase 8 lands, and would only work when AliasDeck itself runs on Windows — not when a Windows-authored `config.yaml`/`source.path` is inspected or tested elsewhere. Recognizing the literal backslash unconditionally satisfies the task's literal acceptance criterion ("`ExpandPath` handles `~\dotfiles\aliases.yaml`") on every CI runner and matches the design rationale ("one path shape across three operating systems") more directly than a GOOS-gated check would. POSIX-authored paths (`~/...`) are unaffected.
 
 ## Issues Found
+
+**Phase 8 — three unverified-until-CI-runs items, flagged explicitly per this batch's own instructions, none of them silently absorbed as code changes:**
+
+1. **`GORELEASER_TAP_TOKEN` scope**: the reused token was originally issued as a fine-grained PAT for `angeltonio/homebrew-tap`. Whether it already covers `angeltonio/scoop-bucket` cannot be checked from this environment (no ability to query the PAT's scopes or the target repo's collaborators). If it does not, `goreleaser release` will build all six binaries and publish the GitHub release successfully, then fail at the `scoops:` push step — the exact same late-failure shape the existing Homebrew-tap comment already warns about, now duplicated for Scoop. Documented in `.goreleaser.yaml`'s top comment and `release.yml`'s `GORELEASER_TAP_TOKEN` comment; not fixed here because fixing it means widening a PAT on GitHub, outside this environment's reach.
+2. **`go test -race` on `windows-latest`**: the race detector requires a working C compiler (cgo) even though `windows/amd64` is itself a race-detector-supported platform. Whether the GitHub-hosted `windows-latest` image has a C compiler on `PATH` by default is unverified from this sandbox — this is a toolchain question, not a question about AliasDeck's own Windows behavior, so no speculative fix (e.g., pre-emptively dropping `-race` on Windows, or adding a `mingw`/compiler install step) was added without evidence it is actually needed. If the first Windows CI run fails here, the fix is CI configuration only (install a compiler, or drop `-race` for that one OS in the matrix) — not Go source, and not something this batch should guess at without a real failure to diagnose.
+3. **`make` availability on `windows-latest`**: rather than gamble on whether GNU Make is present and correctly invokes a POSIX-shell recipe on the Windows runner, the "Check formatting"/"Coverage" steps got explicit Windows-only counterparts using `gofmt`/`go tool cover` directly (`shell: bash`/`shell: pwsh`), sidestepping the question entirely instead of assuming an answer. This is a design choice, not something left unverified — flagged here only so the reasoning is visible.
+
+None of the three required touching Go source, consistent with this phase's non-negotiable constraint 2. All three are genuinely first-Windows-CI-run risks, in the spirit of the task prompt's own framing ("expect the first run to be red, and treat that as the phase working").
 
 **One inherited, not new, limitation for Phase 7**: `status`/`doctor`'s git ref/staleness fields read `state.State`, so they inherit the exact no-op-skip visibility gap Phase 6's "Issues Found" note already flagged (a git-sourced device whose content is unchanged but whose reachability changed between two `sync` runs keeps reporting the *previous* run's staleness, not the current one, until content actually changes). This batch does not fix that gap — fixing it means changing what design decision 5's no-op skip persists, a decision outside tasks.md's 7.1–7.4 scope — but it is now doubly visible: a user who runs `status` or `doctor` between two unchanged-but-reachability-flipped syncs sees the stale `sync`-time snapshot, not live reachability. Flagged again here so whoever picks up the no-op-skip fix knows `status`/`doctor` read the same field `sync` writes, and fixing one fixes both for free.
 
@@ -301,10 +334,14 @@ Note carried from Phase 3 for whoever reviews or extends this package: Go's `gof
 
 ## Remaining Tasks (not in this batch's scope)
 
-- [ ] Phase 8: CI Matrix & Release (8.1–8.6)
 - [ ] Phase 9: Docs & Final Verification (9.1–9.4)
 
 ## Workload / PR Boundary
+
+- Mode: `ask-on-risk` forecast in tasks.md remains unresolved for the overall change (chain strategy still `pending`); this batch executes the CI-matrix-and-release portion of Work Unit 6 ("CLI reporting, CI matrix, release (Phases 7–9)") — Phase 8 only, following the Phase 7 batch already landed in this working tree, and regardless of which chain strategy the orchestrator ultimately picks. This batch touches zero Go source (see "Rollback boundary" in "Unit 7 (Phase 8)" above), so it is independently revertible from every prior Go-behavior batch.
+- Current work unit: Phase 8 of Unit 6 of 6 (per the Suggested Work Units table in `tasks.md`; Phase 9 of Unit 6 remains)
+- Boundary: starts from Phase 7 complete; ends with `.github/workflows/ci.yml`/`release.yml`/`.goreleaser.yaml` updated, YAML-parse-verified, and `goreleaser check`/`--snapshot` verified locally. Isolated from Phase 9 (docs, final `make check`/`make cover` pass across the whole tree) — no Go behavior in this phase, and Phase 9 does not depend on anything in this phase beyond the same files being present.
+- Estimated review budget impact: `git diff --stat` for this phase's three modified files (`ci.yml`, `release.yml`, `.goreleaser.yaml`) plus the `tasks.md` checkbox update — CI/release YAML only, no Go diff at all; comfortably under the 400-line single-PR guard on its own.
 
 - Mode: `ask-on-risk` forecast in tasks.md remains unresolved for the overall change (chain strategy still `pending`); this batch executes the CLI-reporting portion of Work Unit 6 ("CLI reporting, CI matrix, release (Phases 7–9)") as an autonomous, revertible slice — Phase 7 only, not Phases 8–9 of that same unit — following Units 1–5 (Phases 1–6, already landed in this working tree) and regardless of which chain strategy the orchestrator ultimately picks. The orchestrator explicitly scoped this batch to "Phase 7 only," so this executor proceeded without re-raising the unresolved chain-strategy decision, consistent with how every prior batch (Phases 3, 4, 5, 6) proceeded on its own explicitly-scoped batch.
 - Current work unit: Phase 7 of Unit 6 of 6 (per the Suggested Work Units table in `tasks.md`; Phases 8–9 of Unit 6 remain)
@@ -331,6 +368,88 @@ Note carried from Phase 3 for whoever reviews or extends this package: Go's `gof
 - Unit 2 estimated review budget impact: moderate on its own (2 new source files, 1 new test file, 3 new goldens, ~60 changed lines across 3 pre-existing test/registry files) — comfortably under the 400-line guard for that unit alone, consistent with the tasks artifact's per-unit forecast.
 
 ## Verification
+
+### Phase 8 (this batch)
+
+```
+$ ruby -ryaml -e "
+['.github/workflows/ci.yml', '.github/workflows/release.yml', '.goreleaser.yaml'].each do |f|
+  YAML.load_file(f)
+  puts \"#{f}: OK\"
+end
+"
+.github/workflows/ci.yml: OK
+.github/workflows/release.yml: OK
+.goreleaser.yaml: OK
+
+$ GORELEASER_TAP_TOKEN=dummy goreleaser check
+  • checking                                  path=.goreleaser.yaml
+  • 1 configuration file(s) validated
+  • thanks for using GoReleaser!
+
+$ GORELEASER_TAP_TOKEN=dummy goreleaser release --snapshot --clean --skip=publish
+...
+  • building binaries
+    • building                                       paths=cmd/aliasdeck binaries=aliasdeck target=linux_arm64_v8.0
+    • building                                       paths=cmd/aliasdeck binaries=aliasdeck target=windows_arm64_v8.0
+    • building                                       paths=cmd/aliasdeck binaries=aliasdeck target=windows_amd64_v1
+    • building                                       paths=cmd/aliasdeck binaries=aliasdeck target=darwin_arm64_v8.0
+    • building                                       paths=cmd/aliasdeck binaries=aliasdeck target=linux_amd64_v1
+    • building                                       paths=cmd/aliasdeck binaries=aliasdeck target=darwin_amd64_v1
+  • archives
+    • archiving                                      name=dist/aliasdeck_0.1.0-SNAPSHOT-553a47d_windows_amd64.zip
+    • archiving                                      name=dist/aliasdeck_0.1.0-SNAPSHOT-553a47d_darwin_arm64.tar.gz
+    • archiving                                      name=dist/aliasdeck_0.1.0-SNAPSHOT-553a47d_linux_arm64.tar.gz
+    • archiving                                      name=dist/aliasdeck_0.1.0-SNAPSHOT-553a47d_linux_amd64.tar.gz
+    • archiving                                      name=dist/aliasdeck_0.1.0-SNAPSHOT-553a47d_windows_arm64.zip
+    • archiving                                      name=dist/aliasdeck_0.1.0-SNAPSHOT-553a47d_darwin_amd64.tar.gz
+  • calculating checksums
+  • homebrew cask
+    • writing                                        cask=dist/homebrew/Casks/aliasdeck.rb
+  • scoop manifests
+    • writing                                        manifest=dist/scoop/aliasdeck.json
+  • writing artifacts metadata
+  • release succeeded after 7s
+
+$ cat dist/scoop/aliasdeck.json
+{
+    "version": "0.1.0-SNAPSHOT-553a47d",
+    "architecture": {
+        "64bit": {
+            "url": "https://github.com/angeltonio/aliasdeck/releases/download/v0.1.0/aliasdeck_0.1.0-SNAPSHOT-553a47d_windows_amd64.zip",
+            "bin": ["aliasdeck.exe"],
+            "hash": "682fe5588a9ea4d92b2a55b68d952045632cbf646248c23e6fbdadd456515f83"
+        },
+        "arm64": {
+            "url": "https://github.com/angeltonio/aliasdeck/releases/download/v0.1.0/aliasdeck_0.1.0-SNAPSHOT-553a47d_windows_arm64.zip",
+            "bin": ["aliasdeck.exe"],
+            "hash": "ee257dc69430a37dc32869968e91e7953a17d9b73fa3f0e7747f0bd672ce3d1d"
+        }
+    },
+    "homepage": "https://github.com/angeltonio/aliasdeck",
+    "license": "MIT",
+    "description": "Your commands. Every machine. Compiles neutral aliases into shell-specific syntax."
+}
+
+$ rm -rf dist   # snapshot artifacts, not committed
+
+$ make ci
+go vet ./...
+go test -race ./...
+ok  	github.com/angeltonio/aliasdeck/cmd/aliasdeck	(cached)
+ok  	github.com/angeltonio/aliasdeck/internal/app	(cached)
+ok  	github.com/angeltonio/aliasdeck/internal/apply	(cached)
+ok  	github.com/angeltonio/aliasdeck/internal/config	(cached)
+ok  	github.com/angeltonio/aliasdeck/internal/domain	(cached)
+ok  	github.com/angeltonio/aliasdeck/internal/renderers	(cached)
+?   	github.com/angeltonio/aliasdeck/internal/shelltest	[no test files]
+ok  	github.com/angeltonio/aliasdeck/internal/source	(cached)
+ok  	github.com/angeltonio/aliasdeck/internal/state	(cached)
+ok  	github.com/angeltonio/aliasdeck/internal/validate	(cached)
+CI checks passed
+```
+
+**Not verified, and cannot be verified from this sandbox** (see "Issues Found" above for the full reasoning on each): the `windows-latest` CI job itself (matrix entry, pwsh preinstalled, `-race` toolchain availability, `Get-FileHash`/here-string syntax in the new PowerShell smoke-test step, whether `make` exists/works on that runner for comparison); whether the idempotent `pwsh`-install branch's `snap install`/`brew install --cask` commands actually succeed on a live `ubuntu-latest`/`macos-latest` runner (only the "already present" short-circuit and the YAML/shell syntax were checked locally); and whether `GORELEASER_TAP_TOKEN`'s actual scope covers `angeltonio/scoop-bucket`. All of these require a real GitHub Actions run to confirm; none of them were assumed to pass.
 
 ### Phase 7 (this batch)
 
