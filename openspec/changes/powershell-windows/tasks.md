@@ -51,12 +51,12 @@ Base ordering if Feature Branch Chain is chosen: PR1 → PR2/PR3/PR4/PR5 (parall
 
 ## Phase 3: PowerShell Renderer (golden files + real-`pwsh` test)
 
-- [ ] 3.1 RED: new `internal/renderers/powershell_test.go` — `quotePowerShell` doubling table test; byte assertion both `@args` are present (powershell-render, "Single-Quote Escaping" + "Arguments Forwarded via @args Twice").
-- [ ] 3.2 GREEN: new `internal/renderers/powershell.go` — `powershellRenderer{}`, `quotePowerShell`, `Render` (scriptblock::Create form, §6.3); register `domain.ShellPowerShell` in `registry`.
-- [ ] 3.3 Golden: add `testdata/powershell_basic.golden`, `powershell_empty.golden`, `powershell_awkward_commands.golden` (`}`,`'`,`$`,backtick) via `make golden`; inspect diff; rerun without `-update`.
-- [ ] 3.4 **Inversion, not weakening**: `renderers/posix_test.go:143` (`TestForUnsupportedShell`) — `For(ShellPowerShell)` must now succeed; `fish` stays an error.
-- [ ] 3.5 RED: new `internal/renderers/powershell_integration_test.go` (no build tag) — real `pwsh` via `shelltest.LookPath(t, "pwsh")`; `}`-bearing payloads execute nothing when dot-sourced; `git checkout <branch>` alias forwards its argument intact (powershell-render, both scenarios).
-- [ ] 3.6 GREEN: confirm 3.5 passes; add `Supported()` order coverage (zsh, bash, powershell per `domain.AllShells`).
+- [x] 3.1 RED: new `internal/renderers/powershell_test.go` — `quotePowerShell` doubling table test; byte assertion both `@args` are present (powershell-render, "Single-Quote Escaping" + "Arguments Forwarded via @args Twice").
+- [x] 3.2 GREEN: new `internal/renderers/powershell.go` — `powershellRenderer{}`, `quotePowerShell`, `Render` (scriptblock::Create form, §6.3); register `domain.ShellPowerShell` in `registry`.
+- [x] 3.3 Golden: add `testdata/powershell_basic.golden`, `powershell_empty.golden`, `powershell_awkward_commands.golden` (`}`,`'`,`$`,backtick) via `make golden`; inspect diff; rerun without `-update`.
+- [x] 3.4 **Inversion, not weakening**: `renderers/posix_test.go:143` (`TestForUnsupportedShell`) — `For(ShellPowerShell)` must now succeed; `fish` stays an error.
+- [x] 3.5 RED: new `internal/renderers/powershell_integration_test.go` (no build tag) — real `pwsh` via `shelltest.LookPath(t, "pwsh")`; `}`-bearing payloads execute nothing when dot-sourced; `git checkout <branch>` alias forwards its argument intact (powershell-render, both scenarios).
+- [x] 3.6 GREEN: confirm 3.5 passes; add `Supported()` order coverage (zsh, bash, powershell per `domain.AllShells`).
 
 ## Phase 4: Windows Apply — Defects A+B, EOL, `.ps1` Output
 
