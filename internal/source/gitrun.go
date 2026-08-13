@@ -36,6 +36,19 @@ func RunGit(ctx context.Context, dir string, args ...string) ([]byte, error) {
 
 	full := append([]string{"-C", dir}, args...)
 	cmd := exec.CommandContext(ctx, "git", full...)
+
+	// Killing git is not enough to unblock Run.
+	//
+	// exec.CommandContext kills the process when the deadline passes, but Run
+	// then waits for the output pipes to close, and git's own transport
+	// helpers inherit those handles. A killed git can leave a grandchild
+	// holding the write end open, and the copying goroutine blocks forever on
+	// a read that will never return.
+	//
+	// Measured on Windows: the timeout below fired, git died, and the test
+	// still hung until Go's own ten-minute panic. WaitDelay bounds that
+	// second wait and force-closes the pipes.
+	cmd.WaitDelay = 10 * time.Second
 	cmd.Env = append(os.Environ(),
 		"GIT_TERMINAL_PROMPT=0",
 		"GCM_INTERACTIVE=Never",

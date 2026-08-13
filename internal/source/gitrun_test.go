@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -139,17 +140,28 @@ func TestRunGitTimesOutOnAStalledRemote(t *testing.T) {
 	}
 	defer ln.Close()
 
+	// Hold accepted connections open and say nothing. Closing would let git
+	// fail fast, which is the case this test is not about.
+	var mu sync.Mutex
+	var held []net.Conn
 	go func() {
 		for {
 			conn, err := ln.Accept()
 			if err != nil {
 				return
 			}
-			// Hold it open and say nothing. Closing would let git fail fast,
-			// which is the case this test is not about.
-			t.Cleanup(func() { conn.Close() })
+			mu.Lock()
+			held = append(held, conn)
+			mu.Unlock()
 		}
 	}()
+	t.Cleanup(func() {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, c := range held {
+			c.Close()
+		}
+	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -161,7 +173,11 @@ func TestRunGitTimesOutOnAStalledRemote(t *testing.T) {
 	if err == nil {
 		t.Fatal("RunGit returned no error against a remote that never replies")
 	}
-	if elapsed := time.Since(start); elapsed > 30*time.Second {
+	// Generous, but far below Go's own ten-minute test panic: the failure this
+	// guards against is not "slightly slow", it is "never returns". The first
+	// Windows run of this test hung for the full ten minutes because killing
+	// git left its output pipes held open by a transport helper.
+	if elapsed := time.Since(start); elapsed > 60*time.Second {
 		t.Errorf("RunGit took %s to give up; the deadline was not enforced", elapsed)
 	}
 }
