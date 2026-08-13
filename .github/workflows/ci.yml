@@ -108,10 +108,14 @@ jobs:
       # point" on Windows. internal/shelltest/shelltest.go itself is
       # unmodified — this platform split comes entirely from the existing
       # build tags, not from any change to the guard.
+      # The coverage flag is quoted because this step runs under pwsh on the
+      # Windows runner, which splits `-coverprofile=coverage.out` and hands
+      # `go test` a stray `.out` to resolve as a package. Quoting passes the
+      # flag through intact on every shell.
       - name: Test
         env:
           ALIASDECK_REQUIRE_SHELLS: "1"
-        run: go test -race -coverprofile=coverage.out ./...
+        run: go test -race "-coverprofile=coverage.out" ./...
 
       - name: Coverage
         if: runner.os != 'Windows'
