@@ -56,6 +56,69 @@ func TestParseDeviceConfigUnknownBackendRejected(t *testing.T) {
 	}
 }
 
+func TestParseDeviceConfigGitSource(t *testing.T) {
+	body := `
+version: 1
+
+device:
+  name: macbook
+
+source:
+  type: git
+  git:
+    url: https://example.com/dotfiles.git
+    ref: main
+    path: config/aliases.yaml
+
+backend: native
+`
+
+	cfg, err := ParseDeviceConfig([]byte(body))
+	if err != nil {
+		t.Fatalf("ParseDeviceConfig() returned an error for a well-formed git source: %v", err)
+	}
+
+	if cfg.Source.Type != SourceTypeGit {
+		t.Errorf("Source.Type = %q, want %q", cfg.Source.Type, SourceTypeGit)
+	}
+	if cfg.Source.Git.URL != "https://example.com/dotfiles.git" {
+		t.Errorf("Source.Git.URL = %q, want %q", cfg.Source.Git.URL, "https://example.com/dotfiles.git")
+	}
+	if cfg.Source.Git.Ref != "main" {
+		t.Errorf("Source.Git.Ref = %q, want %q", cfg.Source.Git.Ref, "main")
+	}
+	if cfg.Source.Git.Path != "config/aliases.yaml" {
+		t.Errorf("Source.Git.Path = %q, want %q", cfg.Source.Git.Path, "config/aliases.yaml")
+	}
+}
+
+// TestParseDeviceConfigGitSourceRefAndPathOptional pins design decision 16:
+// source.git.path is optional (omitted means aliases.yaml at the checkout
+// root), mirroring FileSource's existing path-omitted default. source.git.ref
+// is optional too (omitted means the remote's default branch).
+func TestParseDeviceConfigGitSourceRefAndPathOptional(t *testing.T) {
+	body := "version: 1\ndevice:\n  name: macbook\nsource:\n  type: git\n  git:\n    url: https://example.com/dotfiles.git\nbackend: native\n"
+
+	cfg, err := ParseDeviceConfig([]byte(body))
+	if err != nil {
+		t.Fatalf("ParseDeviceConfig() returned an error when source.git.ref/path are omitted: %v", err)
+	}
+	if cfg.Source.Git.Ref != "" {
+		t.Errorf("Source.Git.Ref = %q, want empty when omitted", cfg.Source.Git.Ref)
+	}
+	if cfg.Source.Git.Path != "" {
+		t.Errorf("Source.Git.Path = %q, want empty when omitted", cfg.Source.Git.Path)
+	}
+}
+
+func TestParseDeviceConfigUnknownGitFieldRejected(t *testing.T) {
+	body := "version: 1\ndevice:\n  name: macbook\nsource:\n  type: git\n  git:\n    url: https://example.com/dotfiles.git\n    branch: main\nbackend: native\n"
+
+	if _, err := ParseDeviceConfig([]byte(body)); err == nil {
+		t.Fatal("ParseDeviceConfig() must reject an unknown field under source.git")
+	}
+}
+
 func TestParseDeviceConfigUnknownFieldRejected(t *testing.T) {
 	yaml := "version: 1\ndevice:\n  name: macbook\n  nickname: mac\nsource:\n  type: file\n  path: aliases.yaml\nbackend: native\n"
 
