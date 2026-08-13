@@ -74,6 +74,37 @@ func TestCredentialsFileMode0600(t *testing.T) {
 	}
 }
 
+// TestCredentialsRoundTripsSessionFields pins that SessionToken and
+// SessionExpiresAt — `login`'s own fields (design decision 17) — round-trip
+// alongside the device-token fields already covered by
+// TestCredentialsRoundTrip, and that they are distinct from DeviceToken.
+func TestCredentialsRoundTripsSessionFields(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "credentials.json")
+
+	want := sampleCredentials()
+	want.SessionToken = "ads_lookup789.secret012"
+	want.SessionExpiresAt = time.Date(2026, 1, 16, 10, 30, 0, 0, time.UTC)
+
+	if err := SaveCredentials(path, want); err != nil {
+		t.Fatalf("SaveCredentials() returned an error: %v", err)
+	}
+
+	got, err := LoadCredentials(path)
+	if err != nil {
+		t.Fatalf("LoadCredentials() returned an error: %v", err)
+	}
+	if got.SessionToken != want.SessionToken {
+		t.Errorf("SessionToken = %q, want %q", got.SessionToken, want.SessionToken)
+	}
+	if got.SessionToken == got.DeviceToken {
+		t.Fatal("SessionToken must be distinct from DeviceToken")
+	}
+	if !got.SessionExpiresAt.Equal(want.SessionExpiresAt) {
+		t.Errorf("SessionExpiresAt = %v, want %v", got.SessionExpiresAt, want.SessionExpiresAt)
+	}
+}
+
 func TestCredentialsLoadMissingFileIsToleratedAsEmpty(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "does-not-exist.json")

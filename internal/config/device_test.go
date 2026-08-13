@@ -112,6 +112,55 @@ func TestParseDeviceConfigGitSourceRefAndPathOptional(t *testing.T) {
 	}
 }
 
+// TestParseDeviceConfigServerSource pins the server source.type parse path,
+// including source.allowInsecureHTTP (design decision 13's opt-out), needed
+// by internal/app's resolveSource server arm (task 8.1).
+func TestParseDeviceConfigServerSource(t *testing.T) {
+	body := `
+version: 1
+
+device:
+  name: macbook
+
+source:
+  type: server
+  url: https://aliases.example.com
+  allowInsecureHTTP: true
+
+backend: native
+`
+
+	cfg, err := ParseDeviceConfig([]byte(body))
+	if err != nil {
+		t.Fatalf("ParseDeviceConfig() returned an error for a well-formed server source: %v", err)
+	}
+
+	if cfg.Source.Type != SourceTypeServer {
+		t.Errorf("Source.Type = %q, want %q", cfg.Source.Type, SourceTypeServer)
+	}
+	if cfg.Source.URL != "https://aliases.example.com" {
+		t.Errorf("Source.URL = %q, want %q", cfg.Source.URL, "https://aliases.example.com")
+	}
+	if !cfg.Source.AllowInsecureHTTP {
+		t.Error("Source.AllowInsecureHTTP = false, want true")
+	}
+}
+
+// TestParseDeviceConfigServerSourceAllowInsecureHTTPDefaultsFalse proves the
+// opt-out is never silently on: an omitted field must parse as false, not as
+// whatever zero-value ambiguity a looser type might allow.
+func TestParseDeviceConfigServerSourceAllowInsecureHTTPDefaultsFalse(t *testing.T) {
+	body := "version: 1\ndevice:\n  name: macbook\nsource:\n  type: server\n  url: https://aliases.example.com\nbackend: native\n"
+
+	cfg, err := ParseDeviceConfig([]byte(body))
+	if err != nil {
+		t.Fatalf("ParseDeviceConfig() returned an error: %v", err)
+	}
+	if cfg.Source.AllowInsecureHTTP {
+		t.Error("Source.AllowInsecureHTTP = true, want false when the field is omitted")
+	}
+}
+
 func TestParseDeviceConfigUnknownGitFieldRejected(t *testing.T) {
 	body := "version: 1\ndevice:\n  name: macbook\nsource:\n  type: git\n  git:\n    url: https://example.com/dotfiles.git\n    branch: main\nbackend: native\n"
 
@@ -203,6 +252,47 @@ func TestWriteThenLoadRoundTrips(t *testing.T) {
 		}
 	} else if perm := info.Mode().Perm(); perm != 0o600 {
 		t.Errorf("config.yaml mode = %o, want %o", perm, 0o600)
+	}
+}
+
+// TestWriteThenLoadRoundTripsServerSource pins that Write/Load round-trip
+// source.type: server, source.url, and source.allowInsecureHTTP together —
+// the exact shape `register` (task 8.5) writes back to config.yaml after a
+// successful enrollment.
+func TestWriteThenLoadRoundTripsServerSource(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	cfg := DeviceFileConfig{
+		Version: 1,
+		Device: DeviceConfig{
+			ID:   "macbook",
+			Name: "macbook",
+		},
+		Source: Source{
+			Type:              SourceTypeServer,
+			URL:               "https://aliases.example.com",
+			AllowInsecureHTTP: true,
+		},
+		Backend: BackendNative,
+	}
+
+	if err := Write(path, cfg); err != nil {
+		t.Fatalf("Write() returned an error: %v", err)
+	}
+
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() returned an error: %v", err)
+	}
+	if loaded.Source.Type != SourceTypeServer {
+		t.Errorf("Source.Type = %q, want %q", loaded.Source.Type, SourceTypeServer)
+	}
+	if loaded.Source.URL != cfg.Source.URL {
+		t.Errorf("Source.URL = %q, want %q", loaded.Source.URL, cfg.Source.URL)
+	}
+	if !loaded.Source.AllowInsecureHTTP {
+		t.Error("Source.AllowInsecureHTTP = false after round trip, want true")
 	}
 }
 

@@ -219,3 +219,58 @@ func TestUninstallRemovesTheSourceCache(t *testing.T) {
 		t.Errorf("the source cache still exists after uninstall: %v", err)
 	}
 }
+
+// TestUninstallRemovesCredentialsFile pins task 8.12/8.13: credentials.json
+// holds a live server session and/or device token (design decision 14), a
+// stronger case for removal than the Git cache's "may carry a URL-embedded
+// credential" — this file exists for no other reason. Uninstall must remove
+// it alongside its existing cleanup, regardless of the device's active
+// source type (a leftover credentials file can outlive a switch back to a
+// file/git source).
+func TestUninstallRemovesCredentialsFile(t *testing.T) {
+	te := newTestEnv(t)
+	seedBootstrappedDevice(t, te, "")
+	seedCredentials(t, te.Base, config.Credentials{
+		DeviceToken:      "adt_lookup.secret",
+		SessionToken:     "ads_lookup.secret",
+		SessionExpiresAt: fixedNow,
+	})
+
+	credsPath := config.CredentialsFile(te.Base)
+	if _, err := os.Stat(credsPath); err != nil {
+		t.Fatalf("fixture did not seed credentials.json: %v", err)
+	}
+
+	report, err := Uninstall(context.Background(), te.Env, UninstallOptions{Yes: true})
+	if err != nil {
+		t.Fatalf("Uninstall() returned an error: %v", err)
+	}
+	if !report.CredentialsRemoved {
+		t.Error("CredentialsRemoved = false, want true")
+	}
+	if _, err := os.Stat(credsPath); !os.IsNotExist(err) {
+		t.Errorf("credentials.json still exists after uninstall: %v", err)
+	}
+}
+
+// TestUninstallSucceedsWhenCredentialsFileNeverExisted proves the common
+// case — a device that never ran `register` and so has no credentials.json
+// at all — still uninstalls cleanly: os.Remove's ErrNotExist must be
+// tolerated identically to every other cleanup step here, not surfaced as a
+// failure.
+func TestUninstallSucceedsWhenCredentialsFileNeverExisted(t *testing.T) {
+	te := newTestEnv(t)
+	seedBootstrappedDevice(t, te, "")
+
+	if _, err := os.Stat(config.CredentialsFile(te.Base)); !os.IsNotExist(err) {
+		t.Fatalf("fixture unexpectedly has a credentials.json: %v", err)
+	}
+
+	report, err := Uninstall(context.Background(), te.Env, UninstallOptions{Yes: true})
+	if err != nil {
+		t.Fatalf("Uninstall() returned an error: %v", err)
+	}
+	if report.CredentialsRemoved {
+		t.Error("CredentialsRemoved = true, want false when no credentials file ever existed")
+	}
+}

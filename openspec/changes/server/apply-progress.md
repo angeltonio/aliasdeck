@@ -1386,3 +1386,381 @@ Remaining: Phase 8 (`internal/app`/`cmd/aliasdeck` CLI wiring — `login`,
 Phase 9 (cross-cutting verification), Phase 10 (release/CI/docs). Ready for
 `sdd-verify` on this corrected Phase 7 slice, or for the next apply batch to
 start Phase 8.
+
+## Phase 8 (second half): tasks 8.8–8.14 — server-aware status/edit/uninstall, root.go registration
+
+Tasks 8.1–8.7 (`resolveSource`'s server arm, `login`, `register`, `logout`)
+were already done by the previous batch, including all four command
+constructors in `cmd/aliasdeck/{login,register,logout}.go` — but none of the
+three were wired into `root.AddCommand` yet (each one's own doc comment said
+so explicitly). This batch closes 8.8–8.14.
+
+### 8.8/8.9 — `status` under a server source
+
+**Finding**: no production change was actually needed. `source.Descriptor`
+(design decision 11) already carries only `{Type, Ref: <URL>}` for a
+`*source.ServerSource` — `Ref` is the URL, never the token — and
+`StatusReport`/`Status()` never read `config.Credentials` at all. The
+token-leak risk this task exists to guard against was already structurally
+absent; 8.9's "GREEN" is a doc-comment addition on `StatusReport.Source`
+making that invariant explicit, not a behavior change.
+
+**Test** (`internal/app/status_test.go`):
+`TestStatusReportsServerSourceURLWithoutTheDeviceToken` — seeds
+`credentials.json` with a device token, runs `Status()` against a
+`source.type: server` config, asserts `Source.Type == "server"` and
+`Source.Ref == <URL>`, then formats the **entire** `StatusReport` with
+`"%+v"` (not just `report.Source`) and asserts the token substring is absent
+anywhere in it. Formatting the whole struct — not just the field expected to
+matter — is what makes this catch a future field added *anywhere* on
+`StatusReport` that happened to carry the token, not only a regression in
+the one field this task named.
+
+**Mutation** (see Mutation Results below): adding a `DeviceToken` field to
+`StatusReport` and populating it from `config.LoadCredentials` inside
+`Status()` fails this test, confirming it is a real detector and not
+vacuously passing because nothing in status.go touches credentials.
+
+### 8.10/8.11 — `edit` under a server source
+
+**Gap closed**: the previous pass's own comment in
+`internal/app/context.go`'s `resolveServerSource` said plainly: *"Fixing
+every remaining direct `os.ReadFile(dc.AliasesPath)` call site (edit, list)
+is task 8.10/8.11, not this one."* Confirmed empirically before fixing:
+`os.ReadFile("")` returns `open : no such file or directory` — an
+OS-level error naming nothing a user could act on, reached today because
+`resolveServerSource` returns `path = ""` for a server source and `Edit`
+used it unconditionally.
+
+**Fix** (`internal/app/edit.go`): new sentinel `ErrEditAliasesUnderServerSource`
+("aliases live on the server for this device; manage them through the
+server's API, not `aliasdeck edit`"), checked immediately after
+`loadDeviceContext` returns and **before** `path`/`$EDITOR` are touched at
+all, gated on `opts.Target != EditTargetConfig && dc.SourceDesc.Type ==
+"server"`. `--config` is unaffected — the check only fires for the aliases
+target.
+
+**Tests** (`internal/app/edit_test.go`):
+- `TestEditFailsUnderServerSourceNamingTheAPIAndOpensNoFile` — asserts the
+  exact sentinel error, that the error text names the server, and — the
+  stronger proof — that `env.LookPath` is **never called at all** under a
+  server source (a `LookPath` invocation itself fails the test, not just an
+  unwanted side effect it might have caused). This is what proves "no file
+  opened": no subprocess was ever even looked up, let alone started.
+- `TestEditConfigStillOpensLocalConfigUnderServerSource` — same
+  server-source config, `Target: EditTargetConfig`, real fake-editor script,
+  asserts it opens `config.ConfigFile(base)` and receives it as an argument,
+  exactly as it would under any other source type.
+
+**Mutation** (see below): short-circuiting the new guard with `if false &&
+...` makes `TestEditFailsUnderServerSourceNamingTheAPIAndOpensNoFile` fail —
+it reaches the real (mocked) `$EDITOR` lookup, which the test's own
+`LookPath` stub treats as a hard failure by returning an error and flipping
+`lookedUp`.
+
+### 8.12/8.13 — `uninstall` removes the credentials file
+
+**Fix** (`internal/app/uninstall.go`): new `UninstallReport.CredentialsRemoved`
+field; `os.Remove(config.CredentialsFile(dc.Base))` runs alongside the
+existing cache/output/bootstrap/state cleanup, tolerating `os.IsNotExist`
+identically to every other step in this function (so a device that never
+ran `register` still uninstalls cleanly). Placed unconditionally on source
+type — mirroring `CacheRemoved` — because a leftover `credentials.json` can
+outlive a switch back to a file/git source, and the file exists for no
+reason other than to hold a live credential (a stronger case for removal
+than the Git cache, which only *may* carry one embedded in a URL).
+
+**Tests** (`internal/app/uninstall_test.go`):
+- `TestUninstallRemovesCredentialsFile` — seeds a full `Credentials` (device
+  token + session token), asserts `CredentialsRemoved == true` and the file
+  is gone from disk.
+- `TestUninstallSucceedsWhenCredentialsFileNeverExisted` — the common case
+  (no `register` ever ran): asserts `Uninstall()` still succeeds with
+  `CredentialsRemoved == false`, no error.
+
+**Mutation** (see below): wrapping the removal block in `if false { ... }`
+fails `TestUninstallRemovesCredentialsFile` on both assertions (report field
+and file-still-exists check).
+
+### 8.14 — register `serve`/`login`/`register`/`logout` on the root command
+
+`serve` was already registered from task 4.5. This batch adds
+`newLoginCmd()`, `newRegisterCmd()`, `newLogoutCmd()` to
+`cmd/aliasdeck/root.go`'s `root.AddCommand(...)` list, and updates each of
+the three commands' own doc comments (previously "not yet registered on the
+root command — task 8.14 wires this in").
+
+**New test file** `cmd/aliasdeck/root_test.go`:
+- `TestRootCommandRegistersEveryServerCLICommand` — builds `newRootCmd()`
+  directly and asserts every command name (old and new) is present in
+  `root.Commands()`, naming exactly which one is missing on failure.
+- `TestRootCommandHelpNamesEveryServerCLICommandWithADescription` — asserts
+  every registered command has a non-empty `Short`, then runs the real
+  `aliasdeck --help` through `run()` (the same harness `main_test.go` uses)
+  and asserts the rendered help text actually lists `serve`/`login`/
+  `register`/`logout` by name.
+
+**Mutation** (see below): removing `newLogoutCmd()` from
+`root.AddCommand(...)` fails both tests, each naming `"logout"` exactly.
+
+### Mutation Results (verbatim)
+
+**1. Make `status` print the device token.**
+
+Before (`internal/app/status.go`, `StatusReport` struct):
+```go
+	State    state.State
+	UpToDate bool
+}
+```
+After (mutation applied):
+```go
+	State    state.State
+	UpToDate bool
+
+	// MUTATION: simulates a future regression leaking the device token.
+	DeviceToken string
+}
+```
+and, in `Status()`, before the PowerShell branch:
+```go
+	// MUTATION: leak the credential.
+	if creds, cErr := config.LoadCredentials(config.CredentialsFile(dc.Base)); cErr == nil {
+		report.DeviceToken = creds.DeviceToken
+	}
+```
+Result: `go test ./internal/app/... -run TestStatusReportsServerSourceURLWithoutTheDeviceToken -v`
+```
+--- FAIL: TestStatusReportsServerSourceURLWithoutTheDeviceToken (0.01s)
+    status_test.go:180: rendered status output contains the device token: {... DeviceToken:adt_verysecretlookup.verysecretvalue}
+```
+Reverted immediately after; suite confirmed green again.
+
+**2. Make `edit` open a file under a server source.**
+
+Before (`internal/app/edit.go`):
+```go
+	if opts.Target != EditTargetConfig && dc.SourceDesc.Type == "server" {
+		return EditReport{}, ErrEditAliasesUnderServerSource
+	}
+```
+After (mutation applied):
+```go
+	if false && opts.Target != EditTargetConfig && dc.SourceDesc.Type == "server" {
+		return EditReport{}, ErrEditAliasesUnderServerSource
+	}
+```
+Result: `go test ./internal/app/... -run TestEditFailsUnderServerSourceNamingTheAPIAndOpensNoFile -v`
+```
+--- FAIL: TestEditFailsUnderServerSourceNamingTheAPIAndOpensNoFile (0.02s)
+    edit_test.go:240: Edit() error = editor "some-editor" from $EDITOR is not an executable on PATH: LookPath must not be called under a server source, want ErrEditAliasesUnderServerSource
+    edit_test.go:246: Edit() must never look up $EDITOR's executable under a server source
+```
+Reverted immediately after; suite confirmed green again.
+
+**3. Make `uninstall` skip the credentials file.**
+
+Before (`internal/app/uninstall.go`):
+```go
+	credsPath := config.CredentialsFile(dc.Base)
+	if rmErr := os.Remove(credsPath); rmErr == nil {
+		report.CredentialsRemoved = true
+	} else if !os.IsNotExist(rmErr) {
+		return report, fmt.Errorf("removing %s: %w", credsPath, rmErr)
+	}
+```
+After (mutation applied):
+```go
+	credsPath := config.CredentialsFile(dc.Base)
+	if false {
+		if rmErr := os.Remove(credsPath); rmErr == nil {
+			report.CredentialsRemoved = true
+		} else if !os.IsNotExist(rmErr) {
+			return report, fmt.Errorf("removing %s: %w", credsPath, rmErr)
+		}
+	}
+```
+Result: `go test ./internal/app/... -run TestUninstallRemovesCredentialsFile -v`
+```
+--- FAIL: TestUninstallRemovesCredentialsFile (0.05s)
+    uninstall_test.go:249: CredentialsRemoved = false, want true
+    uninstall_test.go:252: credentials.json still exists after uninstall: <nil>
+```
+Reverted immediately after; suite confirmed green again.
+
+**4. Remove one command's registration from `root.go`.**
+
+Before (`cmd/aliasdeck/root.go`):
+```go
+	root.AddCommand(
+		newInitCmd(),
+		newSyncCmd(),
+		newStatusCmd(),
+		newListCmd(),
+		newDoctorCmd(),
+		newEditCmd(),
+		newUninstallCmd(),
+		newServeCmd(),
+		newLoginCmd(),
+		newRegisterCmd(),
+		newLogoutCmd(),
+	)
+```
+After (mutation applied — `newLogoutCmd()` removed):
+```go
+	root.AddCommand(
+		newInitCmd(),
+		newSyncCmd(),
+		newStatusCmd(),
+		newListCmd(),
+		newDoctorCmd(),
+		newEditCmd(),
+		newUninstallCmd(),
+		newServeCmd(),
+		newLoginCmd(),
+		newRegisterCmd(),
+	)
+```
+Result: `go test ./cmd/aliasdeck/... -run TestRootCommand -v`
+```
+--- FAIL: TestRootCommandRegistersEveryServerCLICommand (0.00s)
+    root_test.go:33: root command tree is missing "logout"; task 8.14 requires it registered in cmd/aliasdeck/root.go
+--- FAIL: TestRootCommandHelpNamesEveryServerCLICommandWithADescription (0.00s)
+    root_test.go:57: --help output does not mention "logout":
+        ...
+```
+Both tests name `logout` precisely. Reverted immediately after; suite
+confirmed green again.
+
+All four required mutations were confirmed to fail a test. None was
+unreachable or vacuous.
+
+### Scope Audit — tasks 8.1 through 8.14
+
+Every task's claim was checked against what actually exists and is
+reachable, not merely against its checkbox, per the standing instruction
+that Phase 7's `AllowInsecureHTTP` gap (claimed done, never implemented)
+was found this way.
+
+- **8.1** (`resolveSource` server arm): present and reachable —
+  `internal/app/context.go`'s `resolveServerSource`, exercised by
+  `TestResolveSourceDispatchesServerSource` and three more tests in
+  `context_test.go`. Confirmed real, not just declared.
+- **8.2/8.3** (`login`): `internal/app/login.go` + `cmd/aliasdeck/login.go`
+  exist and are tested (`login_test.go`), but — until this batch —
+  `newLoginCmd()` was never added to `root.AddCommand`, so `aliasdeck
+  login` did not exist as a user-reachable command despite the
+  implementation being complete. This is exactly the "claimed done but not
+  reachable" shape the audit was asked to watch for. **Now closed by 8.14.**
+- **8.4/8.5** (`register`): same finding as 8.2/8.3 — implementation
+  complete and tested, command not reachable until this batch's 8.14.
+- **8.6/8.7** (`logout`): same finding again — implementation complete and
+  tested (including the corrected, server-stays-live mutation-proof test
+  this project's own standard called out), command not reachable until
+  8.14.
+- **8.8/8.9** (`status`): now closed this batch. No gap found in the
+  underlying `Descriptor` design — the token was never reachable through
+  `StatusReport` in the first place.
+- **8.10/8.11** (`edit`): now closed this batch. Confirmed the previously
+  flagged gap (`os.ReadFile("")`) was real, empirically, before fixing it.
+- **8.12/8.13** (`uninstall`): now closed this batch.
+- **8.14** (root registration): now closed this batch, for all three
+  commands at once (`serve` was already registered from 4.5).
+
+**Gap found, out of this batch's assigned scope (8.8–8.14 only), not
+fixed**: `internal/app/list.go` has the identical `os.ReadFile(dc.
+AliasesPath)` problem `edit` had — confirmed empirically:
+`os.ReadFile("")` returns `open : no such file or directory`. Under a
+server source, `aliasdeck list` today fails with that raw OS error
+instead of an explicit message pointing at the API, exactly the same
+class of gap task 8.10/8.11 fixed for `edit`. This is not a security or
+data-integrity issue (`list` is read-only), but it is a real, empirically
+confirmed defect. It is **not covered by any task in `tasks.md` Phase 8**
+(8.1–8.14 names only `status`/`edit`/`uninstall`, never `list`), even
+though design.md's own File Changes table lists
+`internal/app/{doctor,status,list,edit,uninstall}.go` as "Modify" for this
+milestone — the same shape of drift between a design table's claimed scope
+and the actual task breakdown that produced the `AllowInsecureHTTP` gap in
+Phase 7. Flagging for the maintainer to add as an explicit task before
+Phase 9's cross-cutting verification, rather than silently expanding this
+batch's assigned scope to fix it.
+
+### Work Unit Evidence (tasks 8.8–8.14)
+
+| Evidence | Value |
+|---|---|
+| Focused test command and exact result | `go test -count=1 ./internal/app/... ./cmd/...` → both `ok` |
+| Runtime harness command/scenario and exact result | N/A for this batch — every new behavior is pure Go logic over `t.TempDir()`-backed fixtures and Cobra's own in-process `ExecuteC()` (`cmd/aliasdeck/main_test.go`'s `runCmd` harness); no network listener or subprocess boundary was introduced (the one subprocess boundary touched, `$EDITOR`, is proven *not* invoked under a server source, which is the point of the test) |
+| Rollback boundary | Revert `internal/app/{status,edit,uninstall}.go` and their `_test.go` files, `cmd/aliasdeck/root.go`'s three added `AddCommand` entries, the three doc-comment edits in `cmd/aliasdeck/{login,register,logout}.go`, and `cmd/aliasdeck/root_test.go`. Nothing outside `internal/app` and `cmd/aliasdeck` was touched, and nothing later in this milestone (Phase 9/10) yet exists to depend on any of it |
+
+### Verification (this batch)
+
+```
+$ go build ./...
+$ gofmt -l .
+(no output)
+$ go vet ./...
+(no output)
+$ go test -count=1 ./...
+ok  	github.com/angeltonio/aliasdeck/cmd/aliasdeck
+ok  	github.com/angeltonio/aliasdeck/internal/api
+ok  	github.com/angeltonio/aliasdeck/internal/app
+ok  	github.com/angeltonio/aliasdeck/internal/apply
+ok  	github.com/angeltonio/aliasdeck/internal/archtest
+ok  	github.com/angeltonio/aliasdeck/internal/auth
+ok  	github.com/angeltonio/aliasdeck/internal/config
+ok  	github.com/angeltonio/aliasdeck/internal/domain
+ok  	github.com/angeltonio/aliasdeck/internal/renderers
+ok  	github.com/angeltonio/aliasdeck/internal/server
+?   	github.com/angeltonio/aliasdeck/internal/shelltest	[no test files]
+ok  	github.com/angeltonio/aliasdeck/internal/source
+ok  	github.com/angeltonio/aliasdeck/internal/state
+ok  	github.com/angeltonio/aliasdeck/internal/store
+ok  	github.com/angeltonio/aliasdeck/internal/store/sqlitestore
+?   	github.com/angeltonio/aliasdeck/internal/store/storetest	[no test files]
+ok  	github.com/angeltonio/aliasdeck/internal/sync
+ok  	github.com/angeltonio/aliasdeck/internal/validate
+$ go test -count=1 -race ./internal/app/... ./cmd/...
+ok  	github.com/angeltonio/aliasdeck/internal/app
+ok  	github.com/angeltonio/aliasdeck/cmd/aliasdeck
+$ go test -count=1 ./internal/archtest
+ok  	github.com/angeltonio/aliasdeck/internal/archtest
+```
+
+Six cross-compiles, `CGO_ENABLED=0` (scratch output directory, not committed):
+
+| Target | Size | Budget (25 MB) |
+|---|---|---|
+| darwin/amd64 | 18,720,256 bytes (~17.9 MiB) | OK |
+| darwin/arm64 | 17,917,554 bytes (~17.1 MiB) | OK |
+| linux/amd64 | 18,336,289 bytes (~17.5 MiB) | OK |
+| linux/arm64 | 17,393,234 bytes (~16.6 MiB) | OK |
+| windows/amd64 | 18,843,136 bytes (~18.0 MiB) | OK |
+| windows/arm64 | 17,637,376 bytes (~16.8 MiB) | OK |
+
+## Workload / PR Boundary (tasks 8.8–8.14)
+
+- Mode: Feature Branch Chain slice, PR 8 (continues the Phase 8 work unit
+  8.1–8.7 already started)
+- Current work unit: Phase 8 second half — 8.8 status, 8.10 edit, 8.12
+  uninstall, 8.14 root registration (RED+GREEN pairs), plus root_test.go
+- Boundary: see Rollback boundary above
+- Estimated review budget impact: small — three small production diffs
+  (status.go doc-only, edit.go one guard clause + one sentinel error,
+  uninstall.go one field + one removal block), three extended test files,
+  one new test file (root_test.go), one three-line root.go change, no new
+  dependencies
+
+## Status (Phase 8 complete)
+
+Phase 8 complete (14/14: 8.1–8.7 from the previous batch, 8.8–8.14 from
+this one). Every command this milestone adds (`serve`, `login`, `register`,
+`logout`) is now reachable from `aliasdeck --help` for the first time.
+Remaining: Phase 9 (cross-cutting verification — byte-identity integration
+test, full serve→login→register→sync integration test, `archtest`/golden/
+injection-test regression sweep, `make cover`), Phase 10 (release/CI/docs).
+One gap flagged for the maintainer before Phase 9: `internal/app/list.go`
+has the same server-source `os.ReadFile("")` defect `edit` had, and no task
+in Phase 8 covers it despite design.md's File Changes table naming
+`list.go`. Ready for `sdd-verify` on this Phase 8 slice, or for the next
+apply batch to start Phase 9.

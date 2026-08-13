@@ -53,6 +53,14 @@ type Source struct {
 	Path string          // file
 	URL  string          // server
 	Git  GitSourceConfig // git
+
+	// AllowInsecureHTTP is the explicit opt-out design decision 13 requires
+	// before a non-loopback http:// server URL is accepted (server only; set
+	// only by `login --allow-insecure`). internal/source.ValidateServerURL
+	// re-checks it on every sync, not only once at login, so hand-editing
+	// this value to true is the only way a device downgrades transport
+	// security — never a silent default.
+	AllowInsecureHTTP bool
 }
 
 // GitSourceConfig is config.yaml's nested source.git: block, populated only
@@ -108,10 +116,11 @@ type deviceDTO struct {
 }
 
 type sourceDTO struct {
-	Type string       `yaml:"type"`
-	Path string       `yaml:"path"`
-	URL  string       `yaml:"url"`
-	Git  gitSourceDTO `yaml:"git"`
+	Type              string       `yaml:"type"`
+	Path              string       `yaml:"path"`
+	URL               string       `yaml:"url"`
+	Git               gitSourceDTO `yaml:"git"`
+	AllowInsecureHTTP bool         `yaml:"allowInsecureHTTP,omitempty"`
 }
 
 // gitSourceDTO mirrors config.yaml's nested source.git: block exactly, so
@@ -170,6 +179,7 @@ func ParseDeviceConfig(data []byte) (DeviceFileConfig, error) {
 				Ref:  dto.Source.Git.Ref,
 				Path: dto.Source.Git.Path,
 			},
+			AllowInsecureHTTP: dto.Source.AllowInsecureHTTP,
 		},
 		Backend: backend,
 	}, nil
@@ -236,6 +246,7 @@ func Write(path string, cfg DeviceFileConfig) error {
 				Ref:  cfg.Source.Git.Ref,
 				Path: cfg.Source.Git.Path,
 			},
+			AllowInsecureHTTP: cfg.Source.AllowInsecureHTTP,
 		},
 		Backend: string(cfg.Backend),
 	}

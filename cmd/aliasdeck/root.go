@@ -29,6 +29,9 @@ func newRootCmd() *cobra.Command {
 		newEditCmd(),
 		newUninstallCmd(),
 		newServeCmd(),
+		newLoginCmd(),
+		newRegisterCmd(),
+		newLogoutCmd(),
 	)
 	return root
 }

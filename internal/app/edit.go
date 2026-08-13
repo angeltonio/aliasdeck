@@ -33,6 +33,15 @@ type EditReport struct {
 // ErrEditorNotSet is returned when $EDITOR is unset or blank.
 var ErrEditorNotSet = errors.New("$EDITOR is not set; export EDITOR to use `aliasdeck edit`")
 
+// ErrEditAliasesUnderServerSource is returned when the edit target is
+// aliases.yaml (the default) but the active source is server: there is no
+// local aliases file for a server-backed device — aliases live on the
+// server and are managed through its API (cli-commands spec, "Editing
+// aliases under a server source is refused"). $EDITOR is never consulted
+// and no subprocess is ever started for this target.
+var ErrEditAliasesUnderServerSource = errors.New(
+	"aliases live on the server for this device; manage them through the server's API, not `aliasdeck edit`")
+
 // Edit opens the target file in $EDITOR and returns once the editor exits.
 // It never syncs, renders, or applies anything as a side effect
 // (cli-commands spec, "edit Opens $EDITOR Without Side Effects").
@@ -53,6 +62,16 @@ func Edit(_ context.Context, env Env, opts EditOptions) (EditReport, error) {
 	dc, err := loadDeviceContext(env, opts.Options)
 	if err != nil {
 		return EditReport{}, err
+	}
+
+	// A server source has no local aliases.yaml (resolveServerSource returns
+	// an empty path for exactly this reason) — this must fail before
+	// $EDITOR is even consulted or looked up on PATH, so no subprocess is
+	// ever started (cli-commands spec, "Editing aliases under a server
+	// source is refused"). `edit --config` is unaffected: config.yaml is the
+	// user's own local file regardless of source type.
+	if opts.Target != EditTargetConfig && dc.SourceDesc.Type == "server" {
+		return EditReport{}, ErrEditAliasesUnderServerSource
 	}
 
 	path := dc.AliasesPath
