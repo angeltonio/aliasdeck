@@ -61,15 +61,15 @@ Base ordering if Feature Branch Chain is chosen: PR1 → PR2 → PR3 → PR4 →
 
 ## Phase 3: Server Auth (`internal/auth`)
 
-- [ ] 3.1 RED: `internal/auth/token_test.go` — mint/parse/verify, injected `now func()`; wrong secret, expired, revoked, wrong kind for the route.
-- [ ] 3.2 GREEN: `internal/auth/token.go` — wire form `ad<k>_<lookup>.<secret>`; `lookup` UNIQUE-indexed plain text, `secret` sha256-hashed, `subtle.ConstantTimeCompare` (threat matrix: token handling).
-- [ ] 3.3 RED: `internal/auth/password_test.go` — argon2id hash/verify round trip, wrong password rejected.
-- [ ] 3.4 GREEN: `internal/auth/password.go` — `golang.org/x/crypto/argon2` for the operator password only.
-- [ ] 3.5 RED: `internal/auth/bootstrap_test.go` — first start on an empty DB creates one operator and prints a generated password once, never logged; `ALIASDECK_ADMIN_PASSWORD` honored; subsequent starts don't reprint (bounded op: zero stdin reads).
-- [ ] 3.6 GREEN: `internal/auth/bootstrap.go` — `crypto/rand` password generation, zero stdin reads.
-- [ ] 3.7 RED: `internal/auth/middleware_test.go` — per-route required token kind enforced; a device token on an operator route is refused (threat matrix: HTTP routing); expired/revoked tokens rejected.
-- [ ] 3.8 GREEN: `internal/auth/middleware.go`.
-- [ ] 3.9 RED+GREEN: threat matrix (token handling) — a replayed enrollment token is refused end-to-end; a second `register` with an already-consumed token yields no second device token.
+- [x] 3.1 RED: `internal/auth/token_test.go` — mint/parse/verify, injected `now func()`; wrong secret, expired, revoked, wrong kind for the route.
+- [x] 3.2 GREEN: `internal/auth/token.go` — wire form `ad<k>_<lookup>.<secret>`; `lookup` UNIQUE-indexed plain text, `secret` sha256-hashed, `subtle.ConstantTimeCompare` (threat matrix: token handling).
+- [x] 3.3 RED: `internal/auth/password_test.go` — argon2id hash/verify round trip, wrong password rejected.
+- [x] 3.4 GREEN: `internal/auth/password.go` — `golang.org/x/crypto/argon2` for the operator password only.
+- [x] 3.5 RED: `internal/auth/bootstrap_test.go` — first start on an empty DB creates one operator and prints a generated password once, never logged; `ALIASDECK_ADMIN_PASSWORD` honored; subsequent starts don't reprint (bounded op: zero stdin reads).
+- [x] 3.6 GREEN: `internal/auth/bootstrap.go` — `crypto/rand` password generation, zero stdin reads.
+- [x] 3.7 RED: `internal/auth/middleware_test.go` — per-route required token kind enforced; a device token on an operator route is refused (threat matrix: HTTP routing); expired/revoked tokens rejected.
+- [x] 3.8 GREEN: `internal/auth/middleware.go`.
+- [x] 3.9 RED+GREEN: threat matrix (token handling) — a replayed enrollment token is refused end-to-end; a second `register` with an already-consumed token yields no second device token. Mutation-tested against the four required mutations (constant-time compare, middleware kind check, `crypto/rand`, expiry check) — see apply-progress for verbatim results, including the one (constant-time vs. `bytes.Equal`) that produces no test failure, honestly reported as a timing property this suite cannot observe.
 
 ## Phase 4: Server Runtime (`internal/server`, `cmd/aliasdeck/serve.go`)
 
