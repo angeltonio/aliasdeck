@@ -568,10 +568,10 @@ aliasdeck/
 │   ├── config/             # config.yaml and aliases.yaml parsing
 │   ├── api/                # HTTP handlers, middleware, routing
 │   ├── store/              # repository interfaces + sqlite/postgres impls
+│   │   └── migrations/     # embedded; go:embed cannot reach outside its package
 │   ├── auth/               # sessions, device tokens
 │   └── sync/               # server-side resolution
 ├── web/                    # Vite + React app, built into internal/api/static
-├── migrations/
 ├── docs/
 │   ├── PROJECT.md
 │   ├── API.md
