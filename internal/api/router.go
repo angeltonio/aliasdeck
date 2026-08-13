@@ -47,6 +47,19 @@ type route struct {
 	Handler      http.HandlerFunc
 	RequiredKind store.TokenKind
 	Public       bool
+
+	// Refuse overrides the response auth.RequireKind writes when this route
+	// rejects a request. A nil Refuse falls back to writeUnauthorized —
+	// every route had exactly that behavior before Phase 6 (design decision
+	// 25's uniform 401 shape). syncPattern is the first route to set this:
+	// it has no operator session to fall back on, so its own Refuse
+	// (writeUnauthorizedDevice, sync.go) names the one recovery action a
+	// device has instead. It changes only the message, never the status
+	// code, Content-Type, or the property that every failure mode
+	// RequireKind can hit for one route answers identically (threat matrix:
+	// token handling) — Refuse is a per-route wording choice, not a
+	// per-failure-mode one.
+	Refuse auth.Refuse
 }
 
 // validKinds is the closed set of token kinds auth.RequireKind accepts
@@ -119,6 +132,11 @@ func (a *api) routes() []route {
 		{Method: http.MethodDelete, Pattern: devicePattern, Handler: a.handleDevicesDelete, RequiredKind: store.TokenKindSession},
 		{Method: http.MethodPost, Pattern: deviceRevokePattern, Handler: a.handleDevicesRevoke, RequiredKind: store.TokenKindSession},
 		{Method: http.MethodPost, Pattern: deviceTokenPattern, Handler: a.handleDevicesRotateToken, RequiredKind: store.TokenKindSession},
+
+		// Sync (Phase 6): the only device-gated route. Its own Refuse
+		// (sync.go's writeUnauthorizedDevice) is the first departure from
+		// every other guarded route's generic writeUnauthorized default.
+		{Method: http.MethodGet, Pattern: syncPattern, Handler: a.handleSync, RequiredKind: store.TokenKindDevice, Refuse: writeUnauthorizedDevice},
 	}
 }
 
@@ -168,7 +186,11 @@ func newRouter(rs []route, tokens auth.TokenLookup, now func() time.Time) (http.
 
 		var handler http.Handler = r.Handler
 		if !r.Public {
-			handler = auth.RequireKind(tokens, r.RequiredKind, now, writeUnauthorized)(handler)
+			refuse := r.Refuse
+			if refuse == nil {
+				refuse = writeUnauthorized
+			}
+			handler = auth.RequireKind(tokens, r.RequiredKind, now, refuse)(handler)
 		}
 		handler = withMaxBytes(handler)
 

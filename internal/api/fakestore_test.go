@@ -47,6 +47,14 @@ type fakeStore struct {
 	// exact "second, separate write in a two-step operation fails" window
 	// without touching internal/store.
 	tokenCreateErr error
+
+	// touchErr, when non-nil, is returned by exactly the next
+	// fakeDeviceRepo.Touch call and then cleared. It exists only for
+	// sync_test.go's TestSyncServesResolvedAliasesWhenTouchFails
+	// (bounded-review finding 1) to force handleSync's own bookkeeping
+	// write to fail after sync.Resolve has already succeeded, without
+	// touching internal/store.
+	touchErr error
 }
 
 func newFakeStore() *fakeStore {
@@ -299,15 +307,30 @@ func (r fakeDeviceRepo) Delete(_ context.Context, id string) error {
 	return nil
 }
 
-func (r fakeDeviceRepo) Touch(_ context.Context, id string, platform domain.Platform, sh domain.Shell, _ time.Time) error {
+// Touch mirrors sqlitestore's own behavior (design decision 10) closely
+// enough to matter: it must actually persist at into LastSeenAt/LastSyncAt,
+// not merely accept the parameter and drop it. A fake that ignores at while
+// still returning nil is exactly the "fake more permissive than the real
+// store" failure shape this project has hit before — any test asserting on
+// these two fields would pass against this fake yet tell nothing about
+// production behavior if this method silently no-op'd them.
+func (r fakeDeviceRepo) Touch(_ context.Context, id string, platform domain.Platform, sh domain.Shell, at time.Time) error {
 	s := r.s
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.touchErr != nil {
+		err := s.touchErr
+		s.touchErr = nil
+		return err
+	}
 	d, ok := s.devices[id]
 	if !ok {
 		return store.ErrNotFound
 	}
 	d.Platform, d.Shell = platform, sh
+	seenAt, syncAt := at, at
+	d.LastSeenAt = &seenAt
+	d.LastSyncAt = &syncAt
 	s.devices[id] = d
 	return nil
 }
@@ -546,6 +569,29 @@ func mintEnrollmentToken(s *fakeStore, profileIDs []string, expiresAt time.Time)
 		ExpiresAt:  expiresAt,
 	}); err != nil {
 		panic(fmt.Sprintf("test setup: persisting enrollment token: %v", err))
+	}
+	return minted.Wire
+}
+
+// mintDeviceTokenFor mints and persists a real device-kind token for
+// deviceID directly, for sync_test.go's cases that need a device already
+// authenticated without re-running the full registration exchange (whose
+// own coverage is devices_test.go's job). Using auth.Mint (production code)
+// keeps this exercising RequireKind's real parse/lookup/verify path, exactly
+// like mintSessionFor does for operator sessions.
+func mintDeviceTokenFor(s *fakeStore, deviceID string) string {
+	minted, err := auth.Mint(store.TokenKindDevice)
+	if err != nil {
+		panic(fmt.Sprintf("test setup: minting device token: %v", err))
+	}
+	if err := s.Tokens().Create(context.Background(), store.Token{
+		Kind:       store.TokenKindDevice,
+		SubjectID:  deviceID,
+		Lookup:     minted.Lookup,
+		SecretHash: minted.SecretHash,
+		CreatedAt:  time.Now(),
+	}); err != nil {
+		panic(fmt.Sprintf("test setup: persisting device token: %v", err))
 	}
 	return minted.Wire
 }

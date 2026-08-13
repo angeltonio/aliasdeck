@@ -260,6 +260,29 @@ func TestDevicesDeleteRemovesTheDevice(t *testing.T) {
 	}
 }
 
+// TestDevicesDeleteRevokesItsToken is bounded-review finding 2's own
+// store-level RED+GREEN test, sibling to TestDevicesRevokeInvalidatesItsToken:
+// deleting a device must also revoke its device-kind token, not merely
+// remove the row. Mutation this test detects: handleDevicesDelete calling
+// Devices().Delete without also calling Tokens().RevokeSubject — the token
+// would still verify (RevokedAt still zero) even though its device is gone.
+// TestSyncFailsWithADeletedDeviceTokenWithAnActionableMessage (sync_test.go)
+// is this same fix's end-to-end proof against a real device-gated route.
+func TestDevicesDeleteRevokesItsToken(t *testing.T) {
+	s, opID := newFakeStoreWithOperator("admin", "irrelevant-for-this-test")
+	session := mintSessionFor(s, opID)
+	h := newTestRouter(t, s)
+
+	deviceID, deviceToken := registerTestDevice(t, h, s)
+
+	deleteRec := doRequest(h, http.MethodDelete, "/api/v1/devices/"+deviceID, session, nil)
+	if deleteRec.Code != http.StatusNoContent {
+		t.Fatalf("DELETE /api/v1/devices/%s = %d, want %d, body=%s", deviceID, deleteRec.Code, http.StatusNoContent, deleteRec.Body.String())
+	}
+
+	assertTokenIsRevoked(t, s, deviceToken)
+}
+
 // TestDevicesRegisterLeavesADiscoverableDeviceWhenTokenIssuanceFails is
 // WARNING 4's register-side RED test (design decision 27): auth.ConsumeEnrollment
 // is atomic, but the device-token Create after it is a separate write. This

@@ -381,6 +381,56 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /api/v1/sync:
+    get:
+      summary: Resolve this device's aliases and record its reported platform/shell
+      description: >
+        The server's only resolution path (design decision 4): the store's
+        full alias set is filtered through the exact same domain.Resolve the
+        CLI's FileSource/GitSource call locally. The same request persists
+        the platform/shell it reports and stamps last_seen_at/last_sync_at
+        on the device row (design decision 10) — profile membership is
+        always read from the stored device, never from this request.
+      security:
+        - deviceToken: []
+      parameters:
+        - name: platform
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [macos, linux, windows]
+        - name: shell
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [zsh, bash, powershell]
+      responses:
+        "200":
+          description: >
+            The device's resolved, neutral configuration. Contains no
+            server-side alias id and no rendered shell syntax (design
+            decision 9) — the client renders.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SyncResponse"
+        "400":
+          description: An unknown or missing platform or shell was supplied; the response names the valid set.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: The device token is missing, invalid, expired, or revoked. The message names re-registration as the recovery action (design decision 28); a session token is refused here too.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
 components:
   securitySchemes:
     sessionToken:
@@ -391,6 +441,10 @@ components:
       type: http
       scheme: bearer
       description: A single-use enrollment token, minted by POST /api/v1/enrollment-tokens.
+    deviceToken:
+      type: http
+      scheme: bearer
+      description: A device token, minted by device registration or rotation. Accepted only by GET /api/v1/sync.
 
   parameters:
     Id:
@@ -588,6 +642,48 @@ components:
           type: string
           format: date-time
           readOnly: true
+
+    SyncResponse:
+      type: object
+      description: >
+        design decision 9's fixed wire shape. No property anywhere in this
+        schema or its children may carry a server-side alias id or rendered
+        shell syntax (server-sync spec: "Sync Response Contains No Shell
+        Syntax or Server IDs").
+      properties:
+        revision:
+          type: string
+        device:
+          type: object
+          properties:
+            id:
+              type: string
+            name:
+              type: string
+            platform:
+              type: string
+              enum: [macos, linux, windows]
+            shell:
+              type: string
+              enum: [zsh, bash, powershell]
+            profileIds:
+              type: array
+              items:
+                type: string
+        aliases:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              command:
+                type: string
+              description:
+                type: string
+        generatedAt:
+          type: string
+          format: date-time
 
     Device:
       type: object

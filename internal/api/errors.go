@@ -64,7 +64,14 @@ const (
 	// failure shapes Phase 5's auth endpoints produce outside RequireKind's
 	// own generic 401 (auth.go's login and device-registration handlers
 	// authenticate themselves out of band, so they write their own body
-	// instead of going through auth's refuse()).
+	// instead of going through auth's refuse()). Phase 6 gives codeInvalidToken
+	// a second use: sync.go's writeUnauthorizedDevice, syncPattern's own
+	// auth.Refuse, reuses it too — that call DOES go through RequireKind,
+	// just with a route-specific Refuse (router.go's route.Refuse field)
+	// instead of the generic writeUnauthorized every other guarded route
+	// gets. Both uses share the same meaning: "the bearer token presented
+	// here is not currently good for anything," which is exactly what
+	// codeInvalidToken already named.
 	codeInvalidCredentials = "invalid_credentials"
 	codeInvalidToken       = "invalid_token"
 )
