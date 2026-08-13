@@ -49,15 +49,15 @@ Base ordering if Feature Branch Chain is chosen: PR1 → PR2 → PR3 → PR4 →
 
 ## Phase 2: Server Persistence (`internal/store`)
 
-- [ ] 2.1 Write `internal/store/{store,errors}.go` — `Store`, `AliasRepo`, `DeviceRepo`, `ProfileRepo`, `TokenRepo`, `OperatorRepo`; `ErrNotFound`/`ErrConflict`; no driver type in any signature.
-- [ ] 2.2 RED: `internal/store/storetest/conformance.go` — `Run(t, newStore)`: CRUD fidelity, `ErrNotFound`/`ErrConflict`, cascade behavior, deterministic list ordering, cancelled-ctx writes nothing, two concurrent `ConsumeEnrollment` calls yield exactly one device.
-- [ ] 2.3 RED: `internal/store/migrate_test.go` — empty-DB migration, idempotent re-run, refusal to start when the DB schema is newer than the binary (threat matrix: migration execution). `t.TempDir()` database files, no sleep.
-- [ ] 2.4 GREEN: `internal/store/migrations/0001_init.sql` — `schema_migrations`, `operators`, `profiles`, `aliases`, `alias_profiles`, `alias_devices`, `devices`, `device_profiles`, `tokens`.
-- [ ] 2.5 GREEN: `internal/store/migrate.go` — runner over `embed.FS`, one transaction per file, `context.WithTimeout(ctx, 30s)` around the whole run (bounded op), newer-DB refusal.
-- [ ] 2.6 Write `internal/store/sqlitestore/query.sql` + `sqlc.yaml`; run `sqlc generate`; check in generated code (CI drift check wired in 10.3).
-- [ ] 2.7 GREEN: `internal/store/sqlitestore/*.go` — one `*sql.DB`, `SetMaxOpenConns(1)`, `journal_mode=WAL`/`busy_timeout=5000`/`foreign_keys=on` (bounded op); `ctx` first param on every method; wire `storetest.Run(t, newStore)`.
-- [ ] 2.8 RED+GREEN: threat matrix (SQL construction) — an alias name containing `'; DROP TABLE` round-trips as literal text through parameterized queries.
-- [ ] 2.9 Verify: `go test ./internal/store/...` green; `deps_test.go` (1.5) still green.
+- [x] 2.1 Write `internal/store/{store,errors}.go` — `Store`, `AliasRepo`, `DeviceRepo`, `ProfileRepo`, `TokenRepo`, `OperatorRepo`; `ErrNotFound`/`ErrConflict`; no driver type in any signature.
+- [x] 2.2 RED: `internal/store/storetest/conformance.go` — `Run(t, newStore)`: CRUD fidelity, `ErrNotFound`/`ErrConflict`, cascade behavior, deterministic list ordering, cancelled-ctx writes nothing, two concurrent `ConsumeEnrollment` calls yield exactly one device. Also includes the 2.8 SQL-metacharacter round-trip case. Unconsumed until 2.7 wires a real backend — see apply-progress for how its RED→GREEN transition was actually exercised.
+- [x] 2.3 RED: `internal/store/migrate_test.go` — empty-DB migration, idempotent re-run, refusal to start when the DB schema is newer than the binary (threat matrix: migration execution), plus a transactional-rollback-on-failure case (spec scenario, not separately listed as a task but required by server-persistence spec.md). `t.TempDir()` database files, no sleep.
+- [x] 2.4 GREEN: `internal/store/migrations/0001_init.sql` — `schema_migrations` (goose-managed version table, custom name via `goose.WithTableName`), `operators`, `profiles`, `aliases`, `alias_profiles`, `alias_devices`, `devices`, `device_profiles`, `tokens`.
+- [x] 2.5 GREEN: `internal/store/migrate.go` — runner over `embed.FS` via `goose.NewProvider` (library mode, decision 5), one transaction per file (goose default), `context.WithTimeout(ctx, 30s)` around the whole run (bounded op), newer-DB refusal via `ErrSchemaNewer`.
+- [x] 2.6 Write `internal/store/sqlitestore/query.sql` + `sqlc.yaml`; ran `sqlc generate` via `go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.29.0 generate`; generated code checked in (CI drift check wiring is task 10.3, out of this batch's scope).
+- [x] 2.7 GREEN: `internal/store/sqlitestore/*.go` — one `*sql.DB`, `SetMaxOpenConns(1)`, `journal_mode=WAL`/`busy_timeout=5000`/`foreign_keys=on` via DSN pragmas (bounded op); `ctx` first param on every method; wired `storetest.Run(t, newStore)` in `sqlitestore_test.go`.
+- [x] 2.8 RED+GREEN: threat matrix (SQL construction) — `testAliasNameWithSQLMetacharactersRoundTrips` in `storetest/conformance.go`: an alias name containing `'; DROP TABLE` round-trips as literal text through parameterized queries. Proven to fail against a deliberately concatenated (injection-vulnerable) write path — see apply-progress.
+- [x] 2.9 Verify: `go test ./internal/store/...` green; `deps_test.go` (1.5) still green (including a deliberately-broken-store proof, not just the passing run).
 
 ## Phase 3: Server Auth (`internal/auth`)
 

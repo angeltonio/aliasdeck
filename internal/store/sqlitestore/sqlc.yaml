@@ -1,0 +1,18 @@
+# sqlc is invoked via `go run github.com/sqlc-dev/sqlc/cmd/sqlc@<version>`
+# (design decision 6) — never as a go.mod tool directive. Generated code is
+# checked in; CI fails on a `sqlc generate` diff (task 10.3).
+version: "2"
+sql:
+  - engine: "sqlite"
+    queries: "query.sql"
+    schema: "../migrations"
+    gen:
+      go:
+        package: "sqlitestore"
+        out: "."
+        emit_json_tags: false
+        emit_interface: false
+        emit_exact_table_names: false
+        emit_result_struct_pointers: false
+        emit_pointers_for_null_types: true
+        output_files_suffix: ".sql"
