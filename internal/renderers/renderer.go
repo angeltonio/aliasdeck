@@ -40,8 +40,9 @@ type Renderer interface {
 // a configuration mention powershell on a machine whose CLI predates the
 // PowerShell renderer, and fail with a clear message rather than a nil map.
 var registry = map[domain.Shell]Renderer{
-	domain.ShellZsh:  posixRenderer{shell: domain.ShellZsh},
-	domain.ShellBash: posixRenderer{shell: domain.ShellBash},
+	domain.ShellZsh:        posixRenderer{shell: domain.ShellZsh},
+	domain.ShellBash:       posixRenderer{shell: domain.ShellBash},
+	domain.ShellPowerShell: powershellRenderer{},
 }
 
 // ErrUnsupportedShell is returned when no renderer exists for a shell.
