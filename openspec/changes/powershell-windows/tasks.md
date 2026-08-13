@@ -71,12 +71,12 @@ Base ordering if Feature Branch Chain is chosen: PR1 → PR2/PR3/PR4/PR5 (parall
 
 ## Phase 5: PowerShell `$PROFILE` Resolution
 
-- [ ] 5.1 RED: new `internal/app/pwshprofile_test.go` — precedence table: `--rc-file` → `$ALIASDECK_PWSH_PROFILE` → `LookPath("pwsh")`⇒Core → `LookPath("powershell")`⇒Desktop → Core default; fake `Env.LookPath` (standalone-config, "PowerShell Edition and $PROFILE Selection").
-- [ ] 5.2 RED: OneDrive redirection case — `$HOME\Documents` absent, `$OneDrive`/`$OneDriveCommercial` names an existing `Documents` (design decision 9).
-- [ ] 5.3 RED: macOS/Linux Core profile case, `~/.config/powershell/Microsoft.PowerShell_profile.ps1` — **inversion** of `app/misc_test.go:177`.
-- [ ] 5.4 GREEN: new `internal/app/pwshprofile.go` — `resolvePowerShellProfile(env) (pwshProfile, error)` returning `{Path, Edition, Provenance, OtherPath, OtherExists}`.
-- [ ] 5.5 GREEN: `internal/app/rcpath.go` — `resolveRCPath` delegates to `resolvePowerShellProfile` for `ShellPowerShell` on every platform; `--rc-file` still overrides.
-- [ ] 5.6 Update `app/misc_test.go:177` to expect the Core profile path instead of an error; label inversion in the test comment.
+- [x] 5.1 RED: new `internal/app/pwshprofile_test.go` — precedence table: `--rc-file` → `$ALIASDECK_PWSH_PROFILE` → `LookPath("pwsh")`⇒Core → `LookPath("powershell")`⇒Desktop → Core default; fake `Env.LookPath` (standalone-config, "PowerShell Edition and $PROFILE Selection").
+- [x] 5.2 RED: OneDrive redirection case — `$HOME\Documents` absent, `$OneDrive`/`$OneDriveCommercial` names an existing `Documents` (design decision 9).
+- [x] 5.3 RED: macOS/Linux Core profile case, `~/.config/powershell/Microsoft.PowerShell_profile.ps1` — **inversion** of `app/misc_test.go:177`.
+- [x] 5.4 GREEN: new `internal/app/pwshprofile.go` — `resolvePowerShellProfile(env) (pwshProfile, error)` returning `{Path, Edition, Provenance, OtherPath, OtherExists}`.
+- [x] 5.5 GREEN: `internal/app/rcpath.go` — `resolveRCPath` delegates to `resolvePowerShellProfile` for `ShellPowerShell` on every platform; `--rc-file` still overrides.
+- [x] 5.6 Update `app/misc_test.go:177` to expect the Core profile path instead of an error; label inversion in the test comment.
 
 ## Phase 6: GitSource (`internal/source`) + State Staleness
 
