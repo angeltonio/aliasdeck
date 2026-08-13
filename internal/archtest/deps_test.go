@@ -102,15 +102,31 @@ func listPackages(t *testing.T, patterns ...string) []string {
 	return fields
 }
 
-// depsOf returns the transitive import list of pkg, exactly as `go list
-// -deps` reports it (the package itself, every internal package it imports,
-// and every third-party/stdlib package in between).
+// depsOf returns the transitive import list of pkg — the package itself,
+// every internal package it imports, and every third-party/stdlib package in
+// between — including the imports of its test files.
+//
+// The -test flag is load-bearing. Without it `go list -deps` reports only a
+// package's non-test sources, so a forbidden import placed in a _test.go file
+// is invisible and this guard passes. Measured: a blank import of
+// internal/renderers in internal/store/leak_probe_test.go produced a clean
+// `go list -deps` and a green guard, and appeared immediately under -test.
+//
+// A test file is not a lesser place to break the boundary. It compiles against
+// the same package, and an import that exists only to make a test convenient
+// is exactly how a rule starts eroding — someone reaches for renderers.Render
+// to build an expectation, and the next person moves that helper into
+// production code because it was already there.
+//
+// This is the second hole found in this guard, after the test-cache replay the
+// comment on registerGuardedSourcesWithTestCache describes. Both had the same
+// shape: the guard could not observe the violation it was named for.
 func depsOf(t *testing.T, pkg string) []string {
 	t.Helper()
 
-	out, err := exec.Command("go", "list", "-deps", pkg).Output()
+	out, err := exec.Command("go", "list", "-deps", "-test", pkg).Output()
 	if err != nil {
-		t.Fatalf("go list -deps %s: %v", pkg, err)
+		t.Fatalf("go list -deps -test %s: %v", pkg, err)
 	}
 
 	return strings.Fields(string(out))
