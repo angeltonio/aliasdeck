@@ -130,7 +130,22 @@ func (a *api) handleDevicesRotateToken(w http.ResponseWriter, r *http.Request) {
 		SecretHash: minted.SecretHash,
 		CreatedAt:  now,
 	}); err != nil {
-		writeStoreError(w, err)
+		// Deliberately accepted, not reordered (bounded-review finding,
+		// WARNING 4; design decision 27). If this write fails after
+		// RevokeSubject above already succeeded, the device is left with
+		// zero valid device-kind tokens until this endpoint is called
+		// again. That retry is safe by construction: RevokeSubject only
+		// touches rows with revoked_at IS NULL, so a retry finds nothing
+		// left to revoke (a no-op) and proceeds straight to minting the
+		// replacement — no manual cleanup required. Reordering to
+		// mint-then-revoke was considered and rejected: RevokeSubject's own
+		// filter (kind + subjectID + unrevoked) cannot distinguish an old
+		// token from the brand-new one for the same device without a
+		// store-side change, which is out of this correction's scope
+		// (internal/store unchanged) — mint-then-revoke as written would
+		// revoke the token it just minted.
+		writeError(w, http.StatusInternalServerError, codeInternal,
+			"the previous device token was revoked but a replacement could not be issued; retry this request", map[string]any{"deviceId": id})
 		return
 	}
 

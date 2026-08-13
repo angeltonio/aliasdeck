@@ -105,3 +105,96 @@ func TestAliasesCreateRejectsDanglingProfileReference(t *testing.T) {
 		t.Fatalf("error.code = %q, want %q", decoded.Error.Code, codeInvalidReference)
 	}
 }
+
+// createTestProfile creates a profile through the real handler and returns
+// its assigned id, mirroring aliases_test.go's createTestAlias.
+func createTestProfile(t *testing.T, h http.Handler, token, name string) string {
+	t.Helper()
+	body, _ := json.Marshal(domain.Profile{Name: name})
+	rec := doRequest(h, http.MethodPost, "/api/v1/profiles", token, body)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("POST /api/v1/profiles(%q) = %d, want %d, body=%s", name, rec.Code, http.StatusCreated, rec.Body.String())
+	}
+	var created domain.Profile
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decoding create response: %v", err)
+	}
+	if created.ID == "" {
+		t.Fatalf("created profile %q has no id", name)
+	}
+	return created.ID
+}
+
+// TestProfilesGetReturnsTheRequestedProfileByID is WARNING 3's own RED
+// test for handleProfilesGet: two distinct profiles, GET by the second
+// id must return exactly that one. Mutation this test detects: a handler
+// ignoring r.PathValue("id") and returning some fixed profile instead.
+func TestProfilesGetReturnsTheRequestedProfileByID(t *testing.T) {
+	s, opID := newFakeStoreWithOperator("admin", "irrelevant-for-this-test")
+	token := mintSessionFor(s, opID)
+	h := newTestRouter(t, s)
+
+	_ = createTestProfile(t, h, token, "Homelab")
+	workID := createTestProfile(t, h, token, "Work")
+
+	rec := doRequest(h, http.MethodGet, "/api/v1/profiles/"+workID, token, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/v1/profiles/%s = %d, want %d, body=%s", workID, rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var got domain.Profile
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decoding get response: %v", err)
+	}
+	if got.ID != workID || got.Name != "Work" {
+		t.Fatalf("GET /api/v1/profiles/%s returned %+v, want the profile named %q with that id", workID, got, "Work")
+	}
+}
+
+// TestProfilesUpdateAppliesTheRequestBody is WARNING 3's own RED test for
+// handleProfilesUpdate: a PUT changing Description must be reflected on a
+// subsequent GET. Mutation this test detects: a handler that decodes the
+// body but discards it instead of calling Profiles().Update with it.
+func TestProfilesUpdateAppliesTheRequestBody(t *testing.T) {
+	s, opID := newFakeStoreWithOperator("admin", "irrelevant-for-this-test")
+	token := mintSessionFor(s, opID)
+	h := newTestRouter(t, s)
+
+	id := createTestProfile(t, h, token, "Homelab")
+
+	body, _ := json.Marshal(domain.Profile{Name: "Homelab", Description: "self-hosted machines, updated"})
+	updateRec := doRequest(h, http.MethodPut, "/api/v1/profiles/"+id, token, body)
+	if updateRec.Code != http.StatusOK {
+		t.Fatalf("PUT /api/v1/profiles/%s = %d, want %d, body=%s", id, updateRec.Code, http.StatusOK, updateRec.Body.String())
+	}
+
+	getRec := doRequest(h, http.MethodGet, "/api/v1/profiles/"+id, token, nil)
+	var got domain.Profile
+	if err := json.Unmarshal(getRec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decoding get response: %v", err)
+	}
+	if got.Description != "self-hosted machines, updated" {
+		t.Fatalf("Description after update = %q, want %q — the update body was not applied", got.Description, "self-hosted machines, updated")
+	}
+}
+
+// TestProfilesDeleteRemovesTheProfile is WARNING 3's own RED test for
+// handleProfilesDelete: a subsequent GET after delete must 404. Mutation
+// this test detects: a no-op handler answering 204 without ever calling
+// Profiles().Delete.
+func TestProfilesDeleteRemovesTheProfile(t *testing.T) {
+	s, opID := newFakeStoreWithOperator("admin", "irrelevant-for-this-test")
+	token := mintSessionFor(s, opID)
+	h := newTestRouter(t, s)
+
+	id := createTestProfile(t, h, token, "Homelab")
+
+	deleteRec := doRequest(h, http.MethodDelete, "/api/v1/profiles/"+id, token, nil)
+	if deleteRec.Code != http.StatusNoContent {
+		t.Fatalf("DELETE /api/v1/profiles/%s = %d, want %d, body=%s", id, deleteRec.Code, http.StatusNoContent, deleteRec.Body.String())
+	}
+
+	getRec := doRequest(h, http.MethodGet, "/api/v1/profiles/"+id, token, nil)
+	if getRec.Code != http.StatusNotFound {
+		t.Fatalf("GET a deleted profile = %d, want %d — the delete did not actually remove it", getRec.Code, http.StatusNotFound)
+	}
+}

@@ -37,17 +37,42 @@ type TokenLookup interface {
 	ByLookup(ctx context.Context, lookup string) (store.Token, error)
 }
 
+// Refuse writes the response body and status for a request RequireKind
+// rejects. internal/auth deliberately has no opinion of its own about what
+// shape that response takes: the caller supplies it, so this package never
+// has to know whether it fronts a JSON API, a plain-text one, or anything
+// else (bounded-review finding, WARNING 2: guarded routes were answering
+// 401 in a different shape — text/plain via http.Error — than the rest of
+// the API's own {"error":{...}} JSON shape, because this package used to
+// hardcode that choice itself). This mirrors decision 24's own reasoning
+// about which package owns what: a route's own response-shape opinion
+// stays with the caller that owns the route, not the lower-level package
+// it merely calls to authenticate one.
+type Refuse func(w http.ResponseWriter)
+
+// defaultRefuse is RequireKind's fallback when the caller passes a nil
+// Refuse — this package's own previous, zero-dependency behavior,
+// preserved as a usable default for any caller with no response shape of
+// its own to enforce.
+func defaultRefuse(w http.ResponseWriter) {
+	http.Error(w, ErrUnauthorized.Error(), http.StatusUnauthorized)
+}
+
 // RequireKind returns middleware that accepts only a bearer token of
 // exactly kind, current (per now()) and unrevoked. Every other case —
 // missing header, malformed token, unknown lookup, wrong secret, wrong
-// kind, expired, revoked — is refused identically with 401 and the
-// wrapped handler is never invoked, so a device token can never reach an
-// operator-only route and vice versa (threat matrix: HTTP routing).
+// kind, expired, revoked — is refused identically via refuse (401, and the
+// wrapped handler is never invoked), so a device token can never reach an
+// operator-only route and vice versa (threat matrix: HTTP routing). A nil
+// refuse falls back to defaultRefuse.
 //
 // now is always the caller's injected clock (server.Run wires time.Now;
 // tests wire a fixed instant), so expiry is deterministic and this
 // middleware never needs to sleep to be tested.
-func RequireKind(tokens TokenLookup, kind store.TokenKind, now func() time.Time) func(http.Handler) http.Handler {
+func RequireKind(tokens TokenLookup, kind store.TokenKind, now func() time.Time, refuse Refuse) func(http.Handler) http.Handler {
+	if refuse == nil {
+		refuse = defaultRefuse
+	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			wire, ok := bearerToken(r)
@@ -96,12 +121,4 @@ func bearerToken(r *http.Request) (string, bool) {
 	}
 	token := strings.TrimPrefix(header, prefix)
 	return token, token != ""
-}
-
-// refuse writes the one response every authentication failure produces.
-// It deliberately carries no detail about which check failed — a
-// malformed token, an unknown lookup, and a wrong secret all look
-// identical to the caller (threat matrix: token handling).
-func refuse(w http.ResponseWriter) {
-	http.Error(w, ErrUnauthorized.Error(), http.StatusUnauthorized)
 }

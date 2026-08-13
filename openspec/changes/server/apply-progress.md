@@ -796,10 +796,315 @@ flags then).
   milestone's Feature Branch Chain; the maintainer already has size:exception
   context via the chain strategy rather than a single-PR budget decision
 
-## Status
+## Status (superseded by the Phase 5 correction pass below for current totals)
 
 Phases 1–4 complete (30/30). Phase 5 complete (15/15, including task 5.15
 added for the `internal/server.Run` wiring). Remaining: Phases 6–10
 (`internal/sync`, `ServerSource`/credentials, CLI wiring, cross-cutting
 verification, release/CI/docs). Ready for `sdd-verify` on this slice, or for
 the next apply batch to start Phase 6.
+
+## Phase 5 — Bounded-Review Correction Pass (third pass, four-lens)
+
+**Scope**: a four-lens review of the already-complete Phase 5
+(`internal/api`) found 1 CRITICAL and 6 WARNING findings. All were fixed in
+this batch. `tasks.md` 5.16 records the batch-level summary at its natural
+location; this section is the full detail. `internal/domain`,
+`internal/validate`, `internal/renderers`, and `internal/store` were read
+but not modified. The one permitted excursion into `internal/auth` is
+scoped to exactly `internal/auth/middleware.go`'s refusal mechanism
+(WARNING 2) — no other file in that package was touched.
+
+### CRITICAL 1 — the login semaphore acquire was not context-aware
+
+**Finding**: `internal/api/auth.go`'s `handleLogin` acquired its login
+semaphore with a bare `a.loginSem <- struct{}{}` send. Design decision 24
+claimed, in writing, that overflow was "bounded in turn by the handler's
+existing `http.TimeoutHandler` 20s bound … never a second, separate
+timeout." That claim was false as shipped: `http.TimeoutHandler` cancels
+the request context and writes its own response when its deadline fires,
+but does not interrupt a handler goroutine that never observes that
+cancellation. A goroutine parked on a bare send stays parked — past both an
+ordinary 20s timeout and an earlier client disconnect — until it eventually
+wins a slot, regardless of whether its own client is still there.
+
+**Fix**: the acquire is now `select { case a.loginSem <- struct{}{}: case
+<-r.Context().Done(): writeError(...503...); return }`. `design.md` decision
+24 and the Bounded Operations table's "Concurrent password verification"
+row are both corrected to state the previous claim was false and describe
+the actual fix, rather than silently updating the code while leaving a
+design document asserting a bound it did not implement.
+
+**On the requested demonstration and its two false starts, both reported
+honestly per the correction prompt's own instruction**:
+
+1. A context cancelled *before* `ByUsername` proves nothing: `ByUsername`
+   itself fails fast on a dead context, before the acquire is ever reached.
+   The real window is narrower — a client that disconnects *after*
+   `ByUsername` succeeds and *while* queued on the send.
+2. The first working construction of that narrower window used a real
+   `httptest.Server` and a client-side `context.CancelFunc`, synchronized via
+   a test-only `fakeStore.byUsernameHook`. It was **not deterministic**: a
+   client-side context cancellation only reaches the server by the OS
+   actually tearing down the TCP connection and the server's own background
+   reader noticing it — an inherently asynchronous, best-effort race with no
+   assertable bound. Empirically, this version's "free the filler slots,
+   then assert no further entrant" step raced the server's own disconnect
+   detection and produced a **false failure** (the target request grabbing a
+   freed slot via the legitimate `select`-send branch, not a bug) — captured
+   directly:
+
+   ```
+   DEBUG before select for target len= 4 cap= 4 ctxerr= <nil>
+   DEBUG acquired via slot for target
+       auth_test.go:409: the target request entered verifyPassword after its
+       own context was already cancelled and its client had given up — the
+       semaphore acquire did not observe context cancellation
+   --- FAIL: TestLoginSemaphoreAcquireObservesContextCancellationAfterUsernameLookup
+   ```
+
+   against the *already-fixed* production code — proving the test, not the
+   fix, was wrong. Root cause: the test froze the fillers' slots only after
+   the *client* saw its own request error, which happens purely client-side
+   and does not wait for the server to have noticed anything.
+3. **Final, deterministic construction**: call `(*api).handleLogin` directly
+   (not through `NewRouter`/`http.TimeoutHandler`/a real listener), with a
+   request already carrying a test-owned `context.WithCancel`. This makes
+   `r.Context().Done()` the exact same channel the test's own `cancel()`
+   closes — synchronous, in-process, no network layer, no propagation delay
+   to race against. This also sidesteps a second, subtler false-positive
+   risk: `http.TimeoutHandler` derives its own child context and reacts to
+   the same cancellation independently, so calling through the full router
+   could make the outer `ServeHTTP` call return regardless of whether this
+   package's own semaphore acquire ever observed anything — exactly a
+   "passes for an unrelated reason" result.
+
+Filed as `TestLoginSemaphoreAcquireObservesContextCancellationAfterUsernameLookup`
+(`internal/api/auth_test.go`).
+
+### WARNING 2 — 18 of 22 routes answered 401 in a different shape
+
+**Finding**: `internal/auth/middleware.go`'s `refuse()` used `http.Error`
+(`text/plain`), while every other response in this API answers
+`application/json` with the `{"error":{...}}` shape `docs/openapi.yaml`
+itself declares.
+
+**Fix**: inverted control. `internal/auth.RequireKind` gained a `Refuse
+func(http.ResponseWriter)` parameter; a nil value falls back to the old
+plain-text `defaultRefuse`, so every pre-existing caller (all of
+`middleware_test.go`, updated mechanically to pass `nil`) keeps its exact
+prior behavior. `internal/api/router.go` supplies a new `writeUnauthorized`
+(`errors.go`) using this package's own shape. No other file in
+`internal/auth` was touched. Recorded as `design.md` decision 25.
+
+**Closing the coverage gap the finding named** ("the bidirectional coverage
+test compares route existence, so it cannot see response-shape drift"):
+added `TestGuardedRoutesReturn401InTheStandardErrorShape`
+(`internal/api/router_test.go`), which walks the real, production
+`(*api).routes()` table and asserts every non-`Public` route's `401` is
+`application/json` and decodes as the standard error shape — 18 subtests,
+one per guarded route.
+
+### WARNING 3 — 10 of 22 handlers were never invoked authenticated
+
+**Finding**: `handleAliasesGet/Update/Delete`, `handleProfilesGet/Update/
+Delete`, `handleDevicesList/Get/Update/Delete` were only ever reached by
+unauthenticated-rejection tests, which return `401` before the handler body
+runs. On inspection, none of the three hypothetical defects the review
+described as illustrative risk ("a no-op delete", "a body-discarding
+update", "an id-ignoring get") were actually present in the shipped code —
+but nothing proved that before this batch.
+
+**Fix**: ten new authenticated round-trip tests (`aliases_test.go`,
+`profiles_test.go`, `devices_test.go`), each mutation-verified against the
+exact defect shape the review named. One test bug was caught and fixed
+during this process: `TestDevicesGetReturnsTheRequestedDeviceByID`
+originally registered "laptop" then "desktop" and requested the second
+(`desktop`) — but `fakeDeviceRepo.List` sorts by name, so `desktop` sorts
+first, meaning an id-ignoring `list[0]` mutation coincidentally returned
+the *correct* device and the test passed for the wrong reason (confirmed
+empirically — see the mutation table below, first attempt). Fixed by
+requesting the alphabetically-non-first device instead; the corrected test
+does catch the mutation.
+
+### WARNING 4 — partial state on a failed second step
+
+**Finding**: `handleDevicesRegister`'s device-token `Create` (after the
+atomic `auth.ConsumeEnrollment`) and `handleDevicesRotateToken`'s
+replacement-token `Create` (after `Tokens().RevokeSubject`) are each a
+separate, non-atomic write. A failure in either leaves partial state: an
+orphaned device with no token, or a device with zero valid tokens.
+
+**Decision**: accept and document both, not compensate or reorder — recorded
+as `design.md` decision 27. Compensating (deleting the orphaned device) was
+rejected as a *third* unguarded write racing the same failure class it
+tries to undo, for a device that is already recoverable without it
+(`POST devices/{id}/token` mints a working token with no need to repeat the
+single-use enrollment exchange). Reordering rotation (mint-then-revoke) was
+rejected because `RevokeSubject`'s filter (kind + subjectID + unrevoked)
+cannot distinguish the brand-new token from the old one without a
+`internal/store` change, out of this correction's scope.
+
+**Fix**: both failure responses now name the affected device's id in
+`details.deviceId`, and the doc comments state the recovery path plainly.
+`fakeStore` gained a test-only `tokenCreateErr` (returned once, then
+cleared) to force this exact window deterministically. Two new tests:
+`TestDevicesRegisterLeavesADiscoverableDeviceWhenTokenIssuanceFails` (proves
+the device is discoverable and rotate-token recovers it) and
+`TestDevicesRotateTokenIsSafeToRetryWhenTokenIssuanceFails` (proves a bare
+retry succeeds, because `RevokeSubject` on an already-fully-revoked device
+is a no-op).
+
+### WARNING 5 — list endpoints unbounded and unowned
+
+**Finding**: `validate.MaxAliases` (design decision 4's own stated
+assumption — "already bounds the set size") was never actually enforced
+from the API's create path, only from client-side `config.yaml` parsing,
+which a server-created alias never passes through.
+
+**Fix**: `handleAliasesCreate` now calls a new `checkAliasCapacity`, which
+lists the current alias count and rejects (`400`, `codeTooManyAliases`)
+once it reaches `validate.MaxAliases`. Devices and profiles remain
+unbounded, deliberately: recorded as `design.md` decision 26 as an accepted,
+owned decision for a single-operator control plane (server-auth spec, "One
+Operator Account"), not a silent gap. `TestAliasesCreateRejectsOnceAtMaxAliases`
+seeds the store directly to the cap (bypassing HTTP, for speed) and asserts
+the 5001st create through the real handler is rejected with the alias count
+left unchanged.
+
+### WARNING 6 — `decodeJSON` accepted unknown fields
+
+**Fix**: `dec.DisallowUnknownFields()` added to `decodeJSON`, applying to
+every route including the two unauthenticated ones (login, device
+registration). Verified against the complete pre-existing test suite with
+no legitimate request breaking (`go test -count=1 ./...` green both before
+and after). New `internal/api/json_test.go`:
+`TestDecodeJSONRejectsUnknownFields` (RED) and
+`TestDecodeJSONAcceptsAKnownFieldBody` (GREEN-path counterpart).
+
+### WARNING 7 — a test comment claimed a property the code does not have
+
+**Finding**: `TestLoginRejectsWrongPassword`'s doc comment said an unknown
+username "is refused identically" with "no signal to distinguish" it from a
+wrong password. False: an unknown username returns in roughly the time of a
+map/index lookup, while a real operator's wrong password pays the full
+~12.8 ms argon2id cost (design's Bounded Operations table) — a real, known
+timing oracle.
+
+**Fix**: rewrote the comment to state the actual, measured property and why
+it is accepted rather than fixed: equalizing the timing (routing every
+username through `verifyPassword` regardless of existence) would let an
+attacker exhaust the `loginConcurrency` semaphore with garbage usernames
+alone — trading a harmless oracle for a real availability problem. It leaks
+nothing today specifically because design decision 20 fixes and publishes
+the only operator account at `admin`; the comment now says to revisit this
+acceptance if that constraint ever changes. No code changed for this
+finding — comment-only, per the correction prompt's own instruction not to
+"fix" it by equalizing timing.
+
+### Mutation Evidence (all seven findings, verbatim)
+
+Every mutation below was applied directly to the production file (or, for
+CRITICAL 1's first construction attempt, to the *test* — see above),
+confirmed to fail the named test with `go test`, then reverted and the full
+package re-verified green (`go build ./...` after every revert).
+
+| # | Finding | Mutation | Verbatim result |
+|---|---|---|---|
+| 1 | CRITICAL 1 | Reverted `handleLogin`'s acquire from `select{...}` back to a bare `a.loginSem <- struct{}{}` | `--- FAIL: TestLoginSemaphoreAcquireObservesContextCancellationAfterUsernameLookup` — `auth_test.go:400: handleLogin never returned after its own context was cancelled while queued on the semaphore — it stayed parked on a bare send` (5.02s, hit the test's own 5s bound) |
+| 2 | WARNING 2 | `router.go`: `auth.RequireKind(tokens, r.RequiredKind, now, writeUnauthorized)` → `auth.RequireKind(tokens, r.RequiredKind, now, nil)` | `TestGuardedRoutesReturn401InTheStandardErrorShape`: all 17 non-health-adjacent guarded-route subtests FAIL on `Content-Type = "text/plain; charset=utf-8", want "application/json; charset=utf-8"` |
+| 3 | WARNING 3 (aliases) | `handleAliasesGet` → `List()[0]`; `handleAliasesUpdate` → `Update(domain.Alias{ID: in.ID})` (drops every other field); `handleAliasesDelete` → no-op `204` | Three separate FAILs: `returned {...Name:first...}, want the alias named "second"`; `Command after update = "", want "git status -sb"`; `GET a deleted alias = 200, want 404` |
+| 4 | WARNING 3 (profiles) | Same three shapes applied to `handleProfilesGet/Update/Delete` | Three separate FAILs, same pattern: wrong profile returned, `Description` not applied, deleted profile still `GET`-able |
+| 5 | WARNING 3 (devices) | Same shapes applied to `handleDevicesList/Get/Update/Delete` | Four separate FAILs — including the corrected `Get` test only after fixing its own alphabetical-order bug (see WARNING 3 discussion above; the *first* attempt at this mutation produced a false PASS, itself captured as evidence that the original test needed fixing) |
+| 6 | WARNING 4 (register) | `handleDevicesRegister`'s failing-`Create` branch reverted to bare `writeStoreError(w, err)` | `TestDevicesRegisterLeavesADiscoverableDeviceWhenTokenIssuanceFails` FAILs: `error response did not name the orphaned device id: {"error":{"code":"internal","message":"internal error"}}` |
+| 7 | WARNING 4 (rotate) | `handleDevicesRotateToken`'s failing-`Create` branch reverted to bare `writeStoreError(w, err)` | `TestDevicesRotateTokenIsSafeToRetryWhenTokenIssuanceFails` FAILs: `error response deviceId = "", want "<uuid>"` |
+| 8 | WARNING 5 | Removed the `checkAliasCapacity` call from `handleAliasesCreate` | `TestAliasesCreateRejectsOnceAtMaxAliases` FAILs: `POST /api/v1/aliases at the MaxAliases cap = 201, want 400` |
+| 9 | WARNING 6 | Removed `dec.DisallowUnknownFields()` from `decodeJSON` | `TestDecodeJSONRejectsUnknownFields` FAILs: `decodeJSON with an unknown field = true, want false; decoded into {Command:echo hi}` |
+
+No mutation in this table failed to produce a failure once corrected —
+every one had teeth, including the one (#5) whose first draft did not and
+was fixed before being reported as evidence.
+
+### Verification (this batch)
+
+```
+$ go test -count=1 ./...
+ok  	github.com/angeltonio/aliasdeck/cmd/aliasdeck
+ok  	github.com/angeltonio/aliasdeck/internal/api
+ok  	github.com/angeltonio/aliasdeck/internal/app
+ok  	github.com/angeltonio/aliasdeck/internal/apply
+ok  	github.com/angeltonio/aliasdeck/internal/archtest
+ok  	github.com/angeltonio/aliasdeck/internal/auth
+ok  	github.com/angeltonio/aliasdeck/internal/config
+ok  	github.com/angeltonio/aliasdeck/internal/domain
+ok  	github.com/angeltonio/aliasdeck/internal/renderers
+ok  	github.com/angeltonio/aliasdeck/internal/server
+?   	github.com/angeltonio/aliasdeck/internal/shelltest	[no test files]
+ok  	github.com/angeltonio/aliasdeck/internal/source
+ok  	github.com/angeltonio/aliasdeck/internal/state
+ok  	github.com/angeltonio/aliasdeck/internal/store
+ok  	github.com/angeltonio/aliasdeck/internal/store/sqlitestore
+?   	github.com/angeltonio/aliasdeck/internal/store/storetest	[no test files]
+?   	github.com/angeltonio/aliasdeck/internal/sync	[no test files]
+ok  	github.com/angeltonio/aliasdeck/internal/validate
+
+$ go test -count=1 -race ./internal/api/...
+ok  	github.com/angeltonio/aliasdeck/internal/api
+
+$ gofmt -l .
+(no output)
+
+$ go vet ./...
+(no output)
+
+$ go test -count=1 ./internal/archtest
+ok  	github.com/angeltonio/aliasdeck/internal/archtest
+```
+
+Six-target `CGO_ENABLED=0` cross-compile (no `-ldflags`, unstripped,
+ephemeral scratch output paths, no fixed port bound anywhere, no
+long-running process started or stopped by this batch):
+
+| Target | Bytes | MiB |
+|---|---|---|
+| darwin/amd64 | 17,902,208 | 17.07 |
+| darwin/arm64 | 17,150,914 | 16.36 |
+| linux/amd64 | 17,546,255 | 16.73 |
+| linux/arm64 | 16,712,560 | 15.94 |
+| windows/amd64 | 18,039,296 | 17.20 |
+| windows/arm64 | 16,890,880 | 16.11 |
+
+All six well under the 25 MB CI budget, essentially unchanged from the
+prior Phase 5 batch (this pass added test code and a handful of small
+production-code additions, not new dependencies).
+
+## Work Unit Evidence (Phase 5 correction pass)
+
+| Evidence | Value |
+|---|---|
+| Focused test command and exact result | `go test -count=1 ./internal/api/...` and `go test -count=1 ./internal/auth/...` → both `ok`, all tests pass including under `-race` for `internal/api` |
+| Runtime harness command/scenario and exact result | N/A beyond `internal/api`'s own `httptest.NewRecorder`/direct-handler-call harness (already the smallest correct harness for CRITICAL 1's context-cancellation property, per the test-construction discussion above); no new real-listener runtime path was introduced by this batch |
+| Rollback boundary | Revert `internal/api/{auth,devices,aliases,errors,json,router}.go` and their `_test.go` siblings, `internal/api/json_test.go` (new file), `internal/auth/middleware.go` and `middleware_test.go`, plus the `design.md`/`tasks.md` doc edits (decisions 25–27, 5.16). Nothing outside `internal/api` and `internal/auth/middleware.go` was touched; Phases 6–10 do not exist yet to depend on any of it |
+
+## Workload / PR Boundary (Phase 5 correction pass)
+
+- Mode: Feature Branch Chain slice, continuing PR 5's boundary (this is a
+  correction pass over the same work unit, not a new one)
+- Current work unit: Phase 5 correction — 1 CRITICAL + 6 WARNING findings,
+  all fixed
+- Boundary: see Rollback boundary above
+- Estimated review budget impact: moderate — one new test file, ten new
+  authenticated-round-trip tests, two new WARNING-4 tests, one new
+  CRITICAL-1 test, a handful of small production-code changes (a
+  `select`/`ctx.Done()` acquire, a `Refuse` parameter inversion, a capacity
+  check, two enriched error responses, one `DisallowUnknownFields` call);
+  no new dependencies, no new files outside `internal/api` and one test
+  file in `internal/auth`
+
+## Status
+
+Phases 1–4 complete (30/30). Phase 5 complete (16/16, including this
+correction pass as task 5.16). Remaining: Phases 6–10 (`internal/sync`,
+`ServerSource`/credentials, CLI wiring, cross-cutting verification,
+release/CI/docs). Ready for `sdd-verify` on this corrected slice, or for the
+next apply batch to start Phase 6.

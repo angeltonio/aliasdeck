@@ -28,6 +28,25 @@ type fakeStore struct {
 	devices   map[string]domain.Device
 	operators map[string]store.Operator
 	tokens    map[string]store.Token // keyed by Lookup, matching ByLookup's real access pattern
+
+	// byUsernameHook, when non-nil, is invoked by fakeOperatorRepo.ByUsername
+	// with the looked-up username immediately after a successful lookup,
+	// before returning. It exists only for
+	// TestLoginSemaphoreAcquireObservesContextCancellationAfterUsernameLookup
+	// (auth_test.go) to signal a test goroutine at the exact instant
+	// handleLogin is about to reach its semaphore acquire, so that test can
+	// cancel the calling request's own context from precisely that window —
+	// after ByUsername succeeded, before the acquire — and nowhere else.
+	byUsernameHook func(username string)
+
+	// tokenCreateErr, when non-nil, is returned by exactly the next
+	// fakeTokenRepo.Create call and then cleared. It exists only for
+	// devices_test.go's two WARNING-4 tests
+	// (TestDevicesRegisterLeavesADiscoverableDeviceWhenTokenIssuanceFails,
+	// TestDevicesRotateTokenIsSafeToRetryWhenTokenIssuanceFails) to force the
+	// exact "second, separate write in a two-step operation fails" window
+	// without touching internal/store.
+	tokenCreateErr error
 }
 
 func newFakeStore() *fakeStore {
@@ -342,6 +361,9 @@ func (r fakeOperatorRepo) ByUsername(_ context.Context, username string) (store.
 	defer s.mu.Unlock()
 	for _, o := range s.operators {
 		if o.Username == username {
+			if s.byUsernameHook != nil {
+				s.byUsernameHook(username)
+			}
 			return o, nil
 		}
 	}
@@ -363,6 +385,11 @@ func (r fakeTokenRepo) Create(_ context.Context, t store.Token) error {
 	s := r.s
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.tokenCreateErr != nil {
+		err := s.tokenCreateErr
+		s.tokenCreateErr = nil
+		return err
+	}
 	if t.ID == "" {
 		t.ID = uuid.NewString()
 	}

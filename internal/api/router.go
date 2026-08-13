@@ -168,7 +168,7 @@ func newRouter(rs []route, tokens auth.TokenLookup, now func() time.Time) (http.
 
 		var handler http.Handler = r.Handler
 		if !r.Public {
-			handler = auth.RequireKind(tokens, r.RequiredKind, now)(handler)
+			handler = auth.RequireKind(tokens, r.RequiredKind, now, writeUnauthorized)(handler)
 		}
 		handler = withMaxBytes(handler)
 

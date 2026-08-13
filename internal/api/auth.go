@@ -39,10 +39,16 @@ const defaultEnrollmentTTL = 15 * time.Minute
 // own. Sized in the low single digits: comfortably more than one operator's
 // login is ever queued behind in practice, small enough that the worst case
 // (loginConcurrency stacked argon2id blocks) stays a bounded, known cost.
-// Excess attempts queue on a.loginSem, bounded in turn by the handler's own
-// http.TimeoutHandler 20s bound (router.go) — never a second, separate
-// timeout, which would just be a new unbounded-operation risk in place of
-// the one being fixed.
+// Excess attempts queue on a.loginSem — but a bare, unconditional channel
+// send does not observe context cancellation on its own, so handleLogin's
+// acquire below selects on r.Context().Done() as well. That is what
+// actually makes the wait bounded by the same deadline http.TimeoutHandler
+// (router.go) already attaches to the request context, for both an
+// ordinary 20s timeout and an earlier client disconnect; a bare send would
+// stay parked past both, blocked on a client that is already gone, until it
+// eventually won a slot. (A four-lens correction pass found this package's
+// own comment previously asserting that bound already existed, when the
+// code did not implement it — corrected here and in design.md decision 24.)
 const loginConcurrency = 4
 
 // verifyPassword is auth.VerifyPassword through a package-level seam so
@@ -70,6 +76,20 @@ type loginResponse struct {
 // The loginSem acquire/release brackets only the verifyPassword call
 // (design decision 24): an unknown username is refused before ever
 // touching the semaphore or the KDF.
+//
+// The acquire is a select on r.Context().Done(), not a bare channel send.
+// The narrow, real failure window this closes: a client disconnects after
+// ByUsername has already succeeded (a dead context fails ByUsername on its
+// own, before the acquire is ever reached, so an already-cancelled request
+// never demonstrates this at all) while every loginSem slot is held by
+// other in-flight logins. A bare send would leave that goroutine parked
+// until it eventually won a slot — long after its own client was gone —
+// which is exactly the "sixth unbounded operation" this correction exists
+// to close. On cancellation this returns before ever calling
+// verifyPassword; the write below is a best-effort courtesy to a caller
+// that is typically already gone (http.TimeoutHandler's own wrapped
+// ResponseWriter silently discards a write arriving after its own timeout
+// fired, so this is never a double-response panic either way).
 func (a *api) handleLogin(w http.ResponseWriter, r *http.Request) {
 	var in loginRequest
 	if !decodeJSON(w, r, &in) {
@@ -82,7 +102,12 @@ func (a *api) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	a.loginSem <- struct{}{}
+	select {
+	case a.loginSem <- struct{}{}:
+	case <-r.Context().Done():
+		writeError(w, http.StatusServiceUnavailable, codeTimeout, "the request was cancelled while waiting to verify credentials", nil)
+		return
+	}
 	ok, verr := verifyPassword(in.Password, string(op.PasswordHash))
 	<-a.loginSem
 
@@ -254,7 +279,23 @@ func (a *api) handleDevicesRegister(w http.ResponseWriter, r *http.Request) {
 		SecretHash: minted.SecretHash,
 		CreatedAt:  a.now(),
 	}); err != nil {
-		writeStoreError(w, err)
+		// Deliberately accepted, not compensated (bounded-review finding,
+		// WARNING 4; design decision 27). auth.ConsumeEnrollment above is
+		// atomic (design's Interfaces section), but this Create is a
+		// separate write against a different repo: if it fails, the device
+		// row already exists — the enrollment token is spent and cannot be
+		// replayed to try again — while the operator holding this response
+		// only sees a failure. A compensating delete here would be a THIRD
+		// unguarded write racing the same failure class it is trying to
+		// undo, for a device that is already recoverable without it: an
+		// operator who lists devices, finds this one lacking a live token,
+		// and calls POST devicesPattern/{id}/token (rotate) mints it a
+		// fresh, usable device token with no need to repeat the (single-use,
+		// already-consumed) enrollment exchange. Naming the orphaned
+		// device's id in the response is what makes that recovery path
+		// discoverable from the error itself, not just this comment.
+		writeError(w, http.StatusInternalServerError, codeInternal,
+			"the device was registered but its token could not be issued; retry by rotating its token", map[string]any{"deviceId": registered.ID})
 		return
 	}
 

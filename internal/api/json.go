@@ -26,8 +26,18 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 // not a new failure mode this function needs to special-case: it still
 // reports false and writes codeInvalidBody, which is accurate — the body
 // that arrived, truncated or not, did not decode.
+//
+// DisallowUnknownFields (bounded-review finding, WARNING 6) rejects any
+// field not present in v's own JSON tags, on every route including the two
+// unauthenticated ones (login, device registration). Beyond the decode-cost
+// argument, silently ignoring an unknown field means a client that typos a
+// field name (e.g. "commnad") gets a 201 with no effect from the field it
+// meant to set, discovering nothing was wrong until it looks for a value
+// that was never applied.
 func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
-	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil {
 		writeError(w, http.StatusBadRequest, codeInvalidBody, "the request body is not valid JSON", nil)
 		return false
 	}

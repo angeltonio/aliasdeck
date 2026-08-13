@@ -54,6 +54,12 @@ const (
 	// example.
 	codeInvalidRequest = "invalid_request"
 
+	// codeTooManyAliases is handleAliasesCreate's own rejection when the
+	// store already holds validate.MaxAliases aliases (bounded-review
+	// finding, WARNING 5; design decision 4's own assumption that this
+	// bound exists, finally enforced from the API's create path).
+	codeTooManyAliases = "too_many_aliases"
+
 	// codeInvalidCredentials and codeInvalidToken are the two authentication
 	// failure shapes Phase 5's auth endpoints produce outside RequireKind's
 	// own generic 401 (auth.go's login and device-registration handlers
@@ -87,6 +93,23 @@ func writeError(w http.ResponseWriter, status int, code, message string, details
 // Any other error — a raw driver error, a wrapped fmt.Errorf, anything not
 // one of the three sentinels — maps to a generic 500 with a fixed message.
 // Its own Error() text is never placed in the response body.
+// writeUnauthorized is the internal/auth.Refuse this package hands to
+// auth.RequireKind (router.go): every route RequireKind guards must answer
+// a rejection in this package's own {"error":{...}} shape, exactly like
+// every other error this server returns, never internal/auth's own
+// plain-text http.Error default (bounded-review finding, WARNING 2 — 18 of
+// this server's 22 routes were answering 401 in a different Content-Type
+// than the rest of the API, because internal/auth used to hardcode that
+// choice itself; docs/openapi.yaml declares application/json with the
+// Error schema for exactly these responses). It deliberately carries no
+// detail about which check failed inside RequireKind — a malformed token,
+// an unknown lookup, and a wrong secret all still look identical to the
+// caller (threat matrix: token handling) — this only changes the wire
+// shape, not what information it carries.
+func writeUnauthorized(w http.ResponseWriter) {
+	writeError(w, http.StatusUnauthorized, codeUnauthorized, "unauthorized", nil)
+}
+
 func writeStoreError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, store.ErrNotFound):

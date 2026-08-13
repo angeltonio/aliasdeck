@@ -2,7 +2,9 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
+	"sort"
 	"testing"
 	"time"
 
@@ -40,9 +42,18 @@ func TestDevicesEndpointsRejectUnauthenticatedRequests(t *testing.T) {
 // enrolled, exactly like a real one would be.
 func registerTestDevice(t *testing.T, h http.Handler, s *fakeStore) (deviceID, deviceToken string) {
 	t.Helper()
+	return registerTestDeviceNamed(t, h, s, "laptop")
+}
+
+// registerTestDeviceNamed is registerTestDevice with a caller-chosen name,
+// for WARNING 3's own tests that need two distinguishable devices (e.g. to
+// prove a Get-by-id handler does not ignore the id and return some other
+// device instead).
+func registerTestDeviceNamed(t *testing.T, h http.Handler, s *fakeStore, name string) (deviceID, deviceToken string) {
+	t.Helper()
 	enrollment := mintEnrollmentToken(s, nil, time.Now().Add(15*time.Minute))
 
-	body, _ := json.Marshal(registerRequest{Name: "laptop", Platform: domain.PlatformMacOS, Shell: domain.ShellZsh})
+	body, _ := json.Marshal(registerRequest{Name: name, Platform: domain.PlatformMacOS, Shell: domain.ShellZsh})
 	rec := doRequest(h, http.MethodPost, devicesRegisterPattern, enrollment, body)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("POST %s = %d, want %d, body=%s", devicesRegisterPattern, rec.Code, http.StatusCreated, rec.Body.String())
@@ -129,4 +140,208 @@ func TestDevicesRevokeInvalidatesItsToken(t *testing.T) {
 	}
 
 	assertTokenIsRevoked(t, s, deviceToken)
+}
+
+// TestDevicesListReturnsRegisteredDevices is WARNING 3's own RED test for
+// handleDevicesList: it registers two devices and asserts an authenticated
+// list returns exactly those two, by name. Mutation this test detects: a
+// handler returning an empty slice, a hard-coded single entry, or ignoring
+// the store entirely.
+func TestDevicesListReturnsRegisteredDevices(t *testing.T) {
+	s, opID := newFakeStoreWithOperator("admin", "irrelevant-for-this-test")
+	session := mintSessionFor(s, opID)
+	h := newTestRouter(t, s)
+
+	registerTestDeviceNamed(t, h, s, "laptop")
+	registerTestDeviceNamed(t, h, s, "desktop")
+
+	rec := doRequest(h, http.MethodGet, "/api/v1/devices", session, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/v1/devices = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var got []domain.Device
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decoding list response: %v", err)
+	}
+	names := make([]string, len(got))
+	for i, d := range got {
+		names[i] = d.Name
+	}
+	sort.Strings(names)
+	want := []string{"desktop", "laptop"}
+	if len(names) != len(want) || names[0] != want[0] || names[1] != want[1] {
+		t.Fatalf("device names = %v, want exactly %v", names, want)
+	}
+}
+
+// TestDevicesGetReturnsTheRequestedDeviceByID is WARNING 3's own RED test
+// for handleDevicesGet: two distinct registered devices, GET by id must
+// return exactly the one asked for. It deliberately requests "laptop",
+// not "desktop": fakeDeviceRepo.List (like the real backend) orders
+// deterministically by name, so "desktop" sorts first — a handler that
+// ignores r.PathValue("id") and returns list[0] by mistake would still
+// look correct if this test asked for the alphabetically-first device,
+// passing for the wrong reason. Asking for the device that is NOT first
+// in that order is what actually exercises the id lookup. Mutation this
+// test detects: a handler ignoring r.PathValue("id") and returning some
+// other device (e.g. the first one in a list).
+func TestDevicesGetReturnsTheRequestedDeviceByID(t *testing.T) {
+	s, opID := newFakeStoreWithOperator("admin", "irrelevant-for-this-test")
+	session := mintSessionFor(s, opID)
+	h := newTestRouter(t, s)
+
+	registerTestDeviceNamed(t, h, s, "desktop")
+	laptopID, _ := registerTestDeviceNamed(t, h, s, "laptop")
+
+	rec := doRequest(h, http.MethodGet, "/api/v1/devices/"+laptopID, session, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/v1/devices/%s = %d, want %d, body=%s", laptopID, rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var got domain.Device
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decoding get response: %v", err)
+	}
+	if got.ID != laptopID || got.Name != "laptop" {
+		t.Fatalf("GET /api/v1/devices/%s returned %+v, want the device named %q with that id", laptopID, got, "laptop")
+	}
+}
+
+// TestDevicesUpdateAppliesNameAndProfileIDs is WARNING 3's own RED test for
+// handleDevicesUpdate: a PUT changing Name and ProfileIDs must be reflected
+// on a subsequent GET (DeviceRepo.Update's own documented scope — name and
+// profile membership only). Mutation this test detects: a handler that
+// decodes the body but discards it instead of calling Devices().Update.
+func TestDevicesUpdateAppliesNameAndProfileIDs(t *testing.T) {
+	s, opID := newFakeStoreWithOperator("admin", "irrelevant-for-this-test")
+	session := mintSessionFor(s, opID)
+	h := newTestRouter(t, s)
+
+	deviceID, _ := registerTestDevice(t, h, s)
+	profileID := createTestProfile(t, h, session, "Homelab")
+
+	body, _ := json.Marshal(domain.Device{Name: "renamed-laptop", ProfileIDs: []string{profileID}})
+	updateRec := doRequest(h, http.MethodPut, "/api/v1/devices/"+deviceID, session, body)
+	if updateRec.Code != http.StatusOK {
+		t.Fatalf("PUT /api/v1/devices/%s = %d, want %d, body=%s", deviceID, updateRec.Code, http.StatusOK, updateRec.Body.String())
+	}
+
+	getRec := doRequest(h, http.MethodGet, "/api/v1/devices/"+deviceID, session, nil)
+	var got domain.Device
+	if err := json.Unmarshal(getRec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decoding get response: %v", err)
+	}
+	if got.Name != "renamed-laptop" {
+		t.Fatalf("Name after update = %q, want %q — the update body was not applied", got.Name, "renamed-laptop")
+	}
+	if len(got.ProfileIDs) != 1 || got.ProfileIDs[0] != profileID {
+		t.Fatalf("ProfileIDs after update = %v, want exactly [%q]", got.ProfileIDs, profileID)
+	}
+}
+
+// TestDevicesDeleteRemovesTheDevice is WARNING 3's own RED test for
+// handleDevicesDelete: a subsequent GET after delete must 404. Mutation
+// this test detects: a no-op handler answering 204 without ever calling
+// Devices().Delete.
+func TestDevicesDeleteRemovesTheDevice(t *testing.T) {
+	s, opID := newFakeStoreWithOperator("admin", "irrelevant-for-this-test")
+	session := mintSessionFor(s, opID)
+	h := newTestRouter(t, s)
+
+	deviceID, _ := registerTestDevice(t, h, s)
+
+	deleteRec := doRequest(h, http.MethodDelete, "/api/v1/devices/"+deviceID, session, nil)
+	if deleteRec.Code != http.StatusNoContent {
+		t.Fatalf("DELETE /api/v1/devices/%s = %d, want %d, body=%s", deviceID, deleteRec.Code, http.StatusNoContent, deleteRec.Body.String())
+	}
+
+	getRec := doRequest(h, http.MethodGet, "/api/v1/devices/"+deviceID, session, nil)
+	if getRec.Code != http.StatusNotFound {
+		t.Fatalf("GET a deleted device = %d, want %d — the delete did not actually remove it", getRec.Code, http.StatusNotFound)
+	}
+}
+
+// TestDevicesRegisterLeavesADiscoverableDeviceWhenTokenIssuanceFails is
+// WARNING 4's register-side RED test (design decision 27): auth.ConsumeEnrollment
+// is atomic, but the device-token Create after it is a separate write. This
+// forces exactly that second write to fail once and asserts the deliberate,
+// documented response: the device is already discoverable (ConsumeEnrollment's
+// own atomicity already committed it), the error names its id, and the
+// documented recovery path (rotate-token) actually works with no need to
+// repeat the single-use enrollment exchange.
+func TestDevicesRegisterLeavesADiscoverableDeviceWhenTokenIssuanceFails(t *testing.T) {
+	s, opID := newFakeStoreWithOperator("admin", "irrelevant-for-this-test")
+	session := mintSessionFor(s, opID)
+	h := newTestRouter(t, s)
+
+	enrollment := mintEnrollmentToken(s, nil, time.Now().Add(15*time.Minute))
+	s.tokenCreateErr = errors.New("simulated token store failure")
+
+	body, _ := json.Marshal(registerRequest{Name: "laptop", Platform: domain.PlatformMacOS, Shell: domain.ShellZsh})
+	rec := doRequest(h, http.MethodPost, devicesRegisterPattern, enrollment, body)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("register with a failing token Create = %d, want %d, body=%s", rec.Code, http.StatusInternalServerError, rec.Body.String())
+	}
+
+	var decoded struct {
+		Error struct {
+			Code    string         `json:"code"`
+			Details map[string]any `json:"details"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &decoded); err != nil {
+		t.Fatalf("decoding error body: %v", err)
+	}
+	deviceID, _ := decoded.Error.Details["deviceId"].(string)
+	if deviceID == "" {
+		t.Fatalf("error response did not name the orphaned device id: %s", rec.Body.String())
+	}
+
+	getRec := doRequest(h, http.MethodGet, "/api/v1/devices/"+deviceID, session, nil)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("GET the orphaned device = %d, want %d — ConsumeEnrollment's own atomicity should have already committed it", getRec.Code, http.StatusOK)
+	}
+
+	rotateRec := doRequest(h, http.MethodPost, "/api/v1/devices/"+deviceID+"/token", session, nil)
+	if rotateRec.Code != http.StatusOK {
+		t.Fatalf("recovery rotate-token = %d, want %d, body=%s — the documented recovery path did not work", rotateRec.Code, http.StatusOK, rotateRec.Body.String())
+	}
+}
+
+// TestDevicesRotateTokenIsSafeToRetryWhenTokenIssuanceFails is WARNING 4's
+// rotate-side RED test (design decision 27): the old device-kind token(s)
+// are revoked before the replacement is minted, so a failure in between
+// leaves the device with zero valid tokens until this endpoint is retried.
+// This forces exactly that failure once, asserts the documented error names
+// the device, then retries the identical request and asserts it succeeds —
+// RevokeSubject's own "revoked_at IS NULL" filter makes the retry's own
+// revoke step a no-op rather than a second failure mode.
+func TestDevicesRotateTokenIsSafeToRetryWhenTokenIssuanceFails(t *testing.T) {
+	s, opID := newFakeStoreWithOperator("admin", "irrelevant-for-this-test")
+	session := mintSessionFor(s, opID)
+	h := newTestRouter(t, s)
+
+	deviceID, oldToken := registerTestDevice(t, h, s)
+
+	s.tokenCreateErr = errors.New("simulated token store failure")
+	failRec := doRequest(h, http.MethodPost, "/api/v1/devices/"+deviceID+"/token", session, nil)
+	if failRec.Code != http.StatusInternalServerError {
+		t.Fatalf("rotate with a failing token Create = %d, want %d, body=%s", failRec.Code, http.StatusInternalServerError, failRec.Body.String())
+	}
+	var decoded struct {
+		Error struct {
+			Details map[string]any `json:"details"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(failRec.Body.Bytes(), &decoded); err != nil {
+		t.Fatalf("decoding error body: %v", err)
+	}
+	if got, _ := decoded.Error.Details["deviceId"].(string); got != deviceID {
+		t.Fatalf("error response deviceId = %q, want %q", got, deviceID)
+	}
+	assertTokenIsRevoked(t, s, oldToken)
+
+	retryRec := doRequest(h, http.MethodPost, "/api/v1/devices/"+deviceID+"/token", session, nil)
+	if retryRec.Code != http.StatusOK {
+		t.Fatalf("retrying rotate after the forced failure = %d, want %d, body=%s — the documented retry path did not work", retryRec.Code, http.StatusOK, retryRec.Body.String())
+	}
 }

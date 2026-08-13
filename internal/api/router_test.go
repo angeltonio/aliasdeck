@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -166,5 +167,53 @@ func TestNewRouterRefusesAHealthRouteMissingItsPublicDeclaration(t *testing.T) {
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("%s %s guarded by RequiredKind without auth = %d, want %d — the router itself must not treat this path as special", healthMethod, healthPattern, rec.Code, http.StatusUnauthorized)
+	}
+}
+
+// TestGuardedRoutesReturn401InTheStandardErrorShape is WARNING 2's own
+// closing test: it walks the real, production (*api).routes() table and
+// asserts that every non-Public route's unauthenticated 401 uses this
+// package's own {"error":{"code","message","details"}} JSON shape
+// (errors.go) — not internal/auth's previous plain-text http.Error
+// default. This is the check the milestone's own bidirectional OpenAPI
+// coverage test (openapi_coverage_test.go) cannot perform: that test
+// compares route *existence* against docs/openapi.yaml, which says
+// nothing about whether a route's actual response body matches the
+// Content-Type and Error schema openapi.yaml itself declares. Mutation
+// this test detects: router.go passing nil (or omitting the argument
+// entirely) instead of writeUnauthorized to auth.RequireKind — every
+// subtest here would fail on Content-Type, and most would fail to decode
+// as this package's own errorBody shape at all.
+func TestGuardedRoutesReturn401InTheStandardErrorShape(t *testing.T) {
+	a := &api{store: newFakeStore(), now: time.Now, loginSem: make(chan struct{}, loginConcurrency)}
+	h, err := newRouter(a.routes(), a.store.Tokens(), a.now)
+	if err != nil {
+		t.Fatalf("newRouter(a.routes(), ...) = %v, want nil", err)
+	}
+
+	for _, rt := range a.routes() {
+		if rt.Public {
+			continue
+		}
+		t.Run(rt.Method+" "+rt.Pattern, func(t *testing.T) {
+			req := httptest.NewRequest(rt.Method, rt.Pattern, nil)
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("%s %s without auth = %d, want %d", rt.Method, rt.Pattern, rec.Code, http.StatusUnauthorized)
+			}
+			if ct := rec.Header().Get("Content-Type"); ct != "application/json; charset=utf-8" {
+				t.Fatalf("%s %s Content-Type = %q, want %q — a guarded route's 401 must match every other response this API returns, per docs/openapi.yaml's own Error schema", rt.Method, rt.Pattern, ct, "application/json; charset=utf-8")
+			}
+
+			var decoded decodedError
+			if err := json.Unmarshal(rec.Body.Bytes(), &decoded); err != nil {
+				t.Fatalf("%s %s body %q did not decode as the standard error shape: %v", rt.Method, rt.Pattern, rec.Body.String(), err)
+			}
+			if decoded.Error.Code == "" {
+				t.Fatalf("%s %s error.code is empty, want a machine-readable code", rt.Method, rt.Pattern)
+			}
+		})
 	}
 }
