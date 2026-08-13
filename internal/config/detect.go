@@ -51,6 +51,8 @@ func DetectPlatform(configOverride string, getenv func(string) string, goos stri
 		return PlatformDetection{Platform: domain.PlatformMacOS, Provenance: "runtime.GOOS"}, nil
 	case "linux":
 		return PlatformDetection{Platform: domain.PlatformLinux, Provenance: "runtime.GOOS"}, nil
+	case "windows":
+		return PlatformDetection{Platform: domain.PlatformWindows, Provenance: "runtime.GOOS"}, nil
 	default:
 		return PlatformDetection{}, fmt.Errorf("unsupported operating system %q", goos)
 	}

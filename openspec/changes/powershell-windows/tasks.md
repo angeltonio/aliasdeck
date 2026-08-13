@@ -38,16 +38,16 @@ Base ordering if Feature Branch Chain is chosen: PR1 → PR2/PR3/PR4/PR5 (parall
 
 ## Phase 1: Open Decision — `source.git.path` — and Config Schema
 
-- [ ] 1.1 Decide `source.git.path`: OPTIONAL; omitted ⇒ `aliases.yaml` at the checkout root (mirrors `FileSource`'s existing path-omitted default). Record as design decision 16 in `design.md` and add scenarios to `specs/config-source/spec.md` (path omitted / path present, must resolve inside the cache).
-- [ ] 1.2 RED: `internal/config/device_test.go` — parse `source: {type: git, url, ref?, path?}`; unknown field under `source.git` rejected (standalone-config).
-- [ ] 1.3 GREEN: `internal/config/device.go` — add `Git struct{ URL, Ref, Path string }` to `Source`/`sourceDTO` (nested `git:` YAML key), strict `KnownFields` still rejects unknowns.
+- [x] 1.1 Decide `source.git.path`: OPTIONAL; omitted ⇒ `aliases.yaml` at the checkout root (mirrors `FileSource`'s existing path-omitted default). Record as design decision 16 in `design.md` and add scenarios to `specs/config-source/spec.md` (path omitted / path present, must resolve inside the cache).
+- [x] 1.2 RED: `internal/config/device_test.go` — parse `source: {type: git, url, ref?, path?}`; unknown field under `source.git` rejected (standalone-config).
+- [x] 1.3 GREEN: `internal/config/device.go` — add `Git struct{ URL, Ref, Path string }` to `Source`/`sourceDTO` (nested `git:` YAML key), strict `KnownFields` still rejects unknowns.
 
 ## Phase 2: Windows Platform Detection & Paths
 
-- [ ] 2.1 RED: `internal/config/detect_test.go` — `DetectPlatform` accepts `GOOS=="windows"` and `$ALIASDECK_PLATFORM=windows` (standalone-config).
-- [ ] 2.2 GREEN: `internal/config/detect.go` — add `case "windows": PlatformWindows`.
-- [ ] 2.3 RED: `internal/config/paths_test.go` — `ExpandPath` handles `~\dotfiles\aliases.yaml` (backslash after `~`).
-- [ ] 2.4 GREEN: `internal/config/paths.go` — `ExpandPath` recognizes `~` + `os.PathSeparator`, not only `~/`.
+- [x] 2.1 RED: `internal/config/detect_test.go` — `DetectPlatform` accepts `GOOS=="windows"` and `$ALIASDECK_PLATFORM=windows` (standalone-config).
+- [x] 2.2 GREEN: `internal/config/detect.go` — add `case "windows": PlatformWindows`.
+- [x] 2.3 RED: `internal/config/paths_test.go` — `ExpandPath` handles `~\dotfiles\aliases.yaml` (backslash after `~`).
+- [x] 2.4 GREEN: `internal/config/paths.go` — `ExpandPath` recognizes `~` + `os.PathSeparator`, not only `~/`.
 
 ## Phase 3: PowerShell Renderer (golden files + real-`pwsh` test)
 

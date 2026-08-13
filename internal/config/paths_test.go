@@ -200,6 +200,7 @@ func TestExpandPath(t *testing.T) {
 	}{
 		{"bare tilde", "~", home},
 		{"tilde slash prefix", "~/dotfiles/aliases.yaml", filepath.Join(home, "dotfiles", "aliases.yaml")},
+		{"tilde backslash prefix (Windows-shaped path)", `~\dotfiles\aliases.yaml`, filepath.Join(home, "dotfiles", "aliases.yaml")},
 		{"embedded $HOME", "$HOME/dotfiles/aliases.yaml", filepath.Join(home, "dotfiles", "aliases.yaml")},
 		{"no expansion needed", "/etc/aliasdeck/aliases.yaml", "/etc/aliasdeck/aliases.yaml"},
 		{"empty path", "", ""},

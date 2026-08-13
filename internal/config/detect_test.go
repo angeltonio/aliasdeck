@@ -48,6 +48,19 @@ func TestDetectPlatformPrecedence(t *testing.T) {
 			wantProvenance: "runtime.GOOS",
 		},
 		{
+			name:           "windows maps to windows via runtime.GOOS",
+			goos:           "windows",
+			wantPlatform:   domain.PlatformWindows,
+			wantProvenance: "runtime.GOOS",
+		},
+		{
+			name:           "ALIASDECK_PLATFORM=windows is accepted as a test seam",
+			vars:           map[string]string{"ALIASDECK_PLATFORM": "windows"},
+			goos:           "darwin",
+			wantPlatform:   domain.PlatformWindows,
+			wantProvenance: "$ALIASDECK_PLATFORM",
+		},
+		{
 			name:    "unrecognized GOOS is an error",
 			goos:    "plan9",
 			wantErr: true,
