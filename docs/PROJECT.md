@@ -558,8 +558,7 @@ Milestone 1 (the renderer core: `internal/domain`, `internal/renderers`, `intern
 ```text
 aliasdeck/
 ├── cmd/
-│   ├── aliasdeck/          # CLI binary
-│   └── aliasdeck-server/   # server binary
+│   └── aliasdeck/          # the single binary: CLI and `aliasdeck serve`
 ├── internal/
 │   ├── domain/             # entities, shared by server and CLI
 │   ├── renderers/          # shell renderers (bash, zsh, powershell)
