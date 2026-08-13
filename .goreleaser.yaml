@@ -1,38 +1,31 @@
 # GoReleaser configuration for AliasDeck (PROJECT.md §9.5, §16 Milestones 2-3).
 #
-# RELEASE PREREQUISITE — READ BEFORE TAGGING v0.1
+# RELEASE PREREQUISITE — READ BEFORE TAGGING
 #
-# The `homebrew_casks:` block below publishes a cask to angeltonio/homebrew-tap.
-# That repository now exists with a `main` branch; GoReleaser creates the
-# `Casks/` directory and commits into it.
+# `homebrew_casks:` publishes a cask to angeltonio/homebrew-tap and `scoops:`
+# publishes a manifest to angeltonio/scoop-bucket. Both repositories exist with
+# a `main` branch; GoReleaser creates `Casks/` and `bucket/` and commits into
+# them.
 #
-# The `scoops:` block below publishes a manifest to angeltonio/scoop-bucket
-# the same way (`scoops` is the current, non-deprecated key for this in
-# GoReleaser v2 — verified against the installed `goreleaser jsonschema`;
-# there is no separate `scoop_buckets`/`scoop` key to confuse it with). That
-# repository now exists too, with a `main` branch and a README; GoReleaser
-# creates the `bucket/` directory and commits into it.
+# (`scoops` is the current, non-deprecated key — verified against the installed
+# `goreleaser jsonschema`. There is no `scoop_buckets` or singular `scoop`.)
 #
-# What is still required for BOTH is a token that can push there. The
-# GITHUB_TOKEN GitHub Actions injects is scoped to the repository running the
-# workflow and cannot write to either the tap or the bucket. Releasing from
-# CI needs a separate PAT (classic with `repo`, or fine-grained with
-# Contents: write on the target repo) exposed as GORELEASER_TAP_TOKEN, reused
-# for both `homebrew_casks` and `scoops` below rather than a second secret —
-# same as the tap, one PAT covers both, provided its fine-grained scope is
-# widened to include angeltonio/scoop-bucket. If that scope has not been
-# widened yet, the Scoop push fails exactly the way an unset token fails the
-# Homebrew step: late, after the binaries and GitHub release already
-# published.
+# Both need a token that can push outside this repository. The GITHUB_TOKEN
+# Actions injects is scoped to the workflow's own repository and can write to
+# neither. GORELEASER_PUBLISH_TOKEN supplies it, and one token serves both
+# blocks rather than one each: the same workflow uses them in the same step for
+# the same purpose, so a second secret would add an expiry to track without
+# isolating anything. Its fine-grained scope names both repositories, and any
+# repository added below has to be added there too.
 #
-# Getting this wrong fails late and confusingly: the binaries build, the
-# GitHub release publishes, and only then does the Homebrew or Scoop step
-# reject the push — leaving a half-finished release to unpick from a CI log.
+# Getting that wrong fails late and confusingly: the binaries build, the GitHub
+# release publishes, and only then does the Homebrew or Scoop step reject the
+# push — leaving a half-finished release to unpick from a CI log.
 #
-# Releasing locally from a machine whose gh token already carries `repo`
-# scope needs no PAT — just point the same variable at it:
+# Releasing locally from a machine whose gh token already carries `repo` scope
+# needs no PAT — point the same variable at it:
 #
-#   export GORELEASER_TAP_TOKEN=$(gh auth token)
+#   export GORELEASER_PUBLISH_TOKEN=$(gh auth token)
 #
 # Either way, run `goreleaser release --snapshot --clean` first to check the
 # build without publishing anything.
@@ -109,9 +102,9 @@ homebrew_casks:
       # GITHUB_TOKEN, which in Actions is scoped to this repository and cannot
       # push to the tap.
       #
-      # Locally:  export GORELEASER_TAP_TOKEN=$(gh auth token)
-      # In CI:    a PAT stored as the GORELEASER_TAP_TOKEN secret
-      token: "{{ .Env.GORELEASER_TAP_TOKEN }}"
+      # Locally:  export GORELEASER_PUBLISH_TOKEN=$(gh auth token)
+      # In CI:    a PAT stored as the GORELEASER_PUBLISH_TOKEN secret
+      token: "{{ .Env.GORELEASER_PUBLISH_TOKEN }}"
     homepage: "https://github.com/angeltonio/aliasdeck"
     description: "Your commands. Every machine. Compiles neutral aliases into shell-specific syntax."
     url:
@@ -146,11 +139,10 @@ scoops:
       owner: angeltonio
       name: scoop-bucket
       branch: main
-      # Reuses the same GORELEASER_TAP_TOKEN as homebrew_casks rather than a
-      # second secret. See the top-of-file comment: its fine-grained scope
-      # may need widening to cover angeltonio/scoop-bucket too, since it was
-      # originally issued for angeltonio/homebrew-tap only.
-      token: "{{ .Env.GORELEASER_TAP_TOKEN }}"
+      # Reuses the same GORELEASER_PUBLISH_TOKEN as homebrew_casks rather than
+      # a second secret; see the top-of-file comment for why. Its scope names
+      # this repository as well as the tap.
+      token: "{{ .Env.GORELEASER_PUBLISH_TOKEN }}"
     homepage: "https://github.com/angeltonio/aliasdeck"
     description: "Your commands. Every machine. Compiles neutral aliases into shell-specific syntax."
     license: MIT

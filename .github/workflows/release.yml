@@ -54,8 +54,7 @@ jobs:
           # the GITHUB_TOKEN above is scoped to this repository and cannot
           # push to either. Without this secret the run fails at the
           # Homebrew or Scoop step, after the binaries and the GitHub release
-          # have already been published. See .goreleaser.yaml's top-of-file
-          # comment: this PAT's fine-grained scope may need widening to cover
-          # angeltonio/scoop-bucket, since it was originally issued for
-          # angeltonio/homebrew-tap only.
-          GORELEASER_TAP_TOKEN: ${{ secrets.GORELEASER_TAP_TOKEN }}
+          # have already been published. One token serves both the Homebrew
+          # tap and the Scoop bucket; its scope names both repositories. See
+          # .goreleaser.yaml's top-of-file comment for why it is not two.
+          GORELEASER_PUBLISH_TOKEN: ${{ secrets.GORELEASER_PUBLISH_TOKEN }}
