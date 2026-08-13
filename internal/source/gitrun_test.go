@@ -166,9 +166,20 @@ func TestRunGitTimesOutOnAStalledRemote(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
+	// Not t.TempDir(): on Windows a directory cannot be removed while any
+	// handle to it is open, and the git this test deliberately kills may still
+	// hold one when the test ends. t.TempDir()'s cleanup fails the test for
+	// that, which would report a fixture problem as a product failure.
+	// Cleanup here is best-effort for the same reason.
+	workDir, err := os.MkdirTemp("", "aliasdeck-gittimeout")
+	if err != nil {
+		t.Fatalf("creating work dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(workDir) })
+
 	start := time.Now()
-	_, err = RunGit(ctx, t.TempDir(), "clone", "--quiet", "--",
-		"git://"+ln.Addr().String()+"/repo", filepath.Join(t.TempDir(), "checkout"))
+	_, err = RunGit(ctx, workDir, "clone", "--quiet", "--",
+		"git://"+ln.Addr().String()+"/repo", filepath.Join(workDir, "checkout"))
 
 	if err == nil {
 		t.Fatal("RunGit returned no error against a remote that never replies")
