@@ -78,23 +78,31 @@ func TestBootstrapLine(t *testing.T) {
 			home:          filepath.Join("C:", "Users", "bob"),
 			want:          `if (Test-Path -LiteralPath "$HOME/.config/aliasdeck/aliases.ps1") { . "$HOME/.config/aliasdeck/aliases.ps1" }`,
 		},
+		// The "want" strings below are built with escapePowerShellDoubleQuoted,
+		// never fmt.Sprintf's %q: %q is Go escaping, which turns '\' into
+		// "\\" — a form PowerShell reads as two literal backslashes, since it
+		// has no backslash escape at all in a double-quoted string. Using %q
+		// here would only pass by accident on a host where filepath.Join
+		// happens to emit '/' (macOS/Linux CI); bootstrapLinePowerShell
+		// deliberately does not escape '\', and this expectation must match
+		// that, not Go's own quoting convention.
 		{
 			name:          "powershell: Windows-shaped path outside $HOME is used verbatim",
 			shell:         domain.ShellPowerShell,
 			generatedPath: filepath.Join("C:", "Windows", "aliasdeck", "aliases.ps1"),
 			home:          filepath.Join("C:", "Users", "bob"),
-			want: fmt.Sprintf(`if (Test-Path -LiteralPath %q) { . %q }`,
-				filepath.Join("C:", "Windows", "aliasdeck", "aliases.ps1"),
-				filepath.Join("C:", "Windows", "aliasdeck", "aliases.ps1")),
+			want: fmt.Sprintf(`if (Test-Path -LiteralPath "%s") { . "%s" }`,
+				escapePowerShellDoubleQuoted(filepath.Join("C:", "Windows", "aliasdeck", "aliases.ps1")),
+				escapePowerShellDoubleQuoted(filepath.Join("C:", "Windows", "aliasdeck", "aliases.ps1"))),
 		},
 		{
 			name:          "powershell: home empty uses the path verbatim",
 			shell:         domain.ShellPowerShell,
 			generatedPath: filepath.Join("C:", "Users", "bob", "aliases.ps1"),
 			home:          "",
-			want: fmt.Sprintf(`if (Test-Path -LiteralPath %q) { . %q }`,
-				filepath.Join("C:", "Users", "bob", "aliases.ps1"),
-				filepath.Join("C:", "Users", "bob", "aliases.ps1")),
+			want: fmt.Sprintf(`if (Test-Path -LiteralPath "%s") { . "%s" }`,
+				escapePowerShellDoubleQuoted(filepath.Join("C:", "Users", "bob", "aliases.ps1")),
+				escapePowerShellDoubleQuoted(filepath.Join("C:", "Users", "bob", "aliases.ps1"))),
 		},
 		{
 			// Double-quoted-context escaper (design decision 5), applied

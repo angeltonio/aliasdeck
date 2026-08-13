@@ -101,7 +101,11 @@ func TestInitPromptsBeforeBootstrapAndAddsOnConsent(t *testing.T) {
 		t.Error("BootstrapAdded = false, want true after consent")
 	}
 
-	rcPath := te.Home + "/.zshrc"
+	// filepath.Join, not a literal "/" concatenation: state.Bootstrap.RCPath
+	// is built by production code with filepath.Join, which uses the native
+	// separator, so a literal "/" here would only match by accident on a
+	// host whose native separator is "/".
+	rcPath := filepath.Join(te.Home, ".zshrc")
 	data, err := os.ReadFile(rcPath)
 	if err != nil {
 		t.Fatalf("reading rc file: %v", err)

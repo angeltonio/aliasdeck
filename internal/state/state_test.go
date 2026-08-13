@@ -3,6 +3,7 @@ package state
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -156,6 +157,21 @@ func TestStateSaveSetsFileMode0600(t *testing.T) {
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatalf("stat: %v", err)
+	}
+	// Windows has no Unix permission bits: Go reports 0666 for any writable
+	// file regardless of what Chmod was asked for, because there is nothing
+	// else to report.
+	//
+	// This assertion guards something real on POSIX — state.json can hold a
+	// source URL carrying credentials, and 0600 keeps it out of other
+	// accounts' reach. That protection genuinely does not exist on Windows
+	// through file modes, so this asserts the closest available property
+	// there rather than pretending the guarantee holds.
+	if runtime.GOOS == "windows" {
+		if info.Mode().Perm()&0o200 == 0 {
+			t.Errorf("state.json mode = %o, want a writable file", info.Mode().Perm())
+		}
+		return
 	}
 	if info.Mode().Perm() != 0o600 {
 		t.Errorf("state.json mode = %o, want %o", info.Mode().Perm(), 0o600)

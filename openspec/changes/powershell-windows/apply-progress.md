@@ -973,3 +973,111 @@ ok  	github.com/angeltonio/aliasdeck/internal/source	0.240s
 ```
 
 No git commit was created. Changes are left in the working tree per the orchestrator's delivery-strategy instructions.
+
+## Batch 8 (this batch): First Windows CI Run — Six Failures Fixed
+
+**Trigger**: the first real `windows-latest` CI run (Phase 8's matrix, landed in Batch 7) surfaced six failures. All six were investigated against the governing principle "default to the assumption that the test is wrong and the production code is right" — and in every case, that assumption held: **no production code was changed in this batch.** All six fixes are test-only.
+
+### Verdict table (test defect vs. production defect)
+
+| # | Test | Verdict |
+|---|---|---|
+| 1 | `internal/apply/bootstrap_test.go` — `TestBootstrapLine`, two PowerShell subtests | **Test defect.** Expectation was built with `fmt.Sprintf("%q", path)` (Go escaping, turns `\` into `\\`); `escapePowerShellDoubleQuoted` correctly does not do that. Passed on macOS only because `filepath.Join` there never emits a backslash for `%q` to mis-escape. |
+| 2 | `internal/config/paths_test.go` — `TestExpandPath/embedded_$HOME` | **Test defect.** `ExpandPath`'s textual `$HOME` substitution is correct as designed (mirrors the "~\\" prefix rationale: a config is authored on its own platform); the test's `want` assumed a fully `filepath.Join`-normalized result the function never promised. |
+| 3 | `internal/apply/atomic_test.go` — `TestWriteFileAtomicSuccess` (mode 666 vs 644) | **Test defect** (encodes a POSIX-only fact). Windows has no Unix permission bits; Go reports `0666` for any writable file regardless of the requested `Chmod` mode. Assertion is now POSIX-exact, Windows-writable-only. |
+| 4 | `internal/config/device_test.go` — `TestWriteThenLoadRoundTrips` (mode 666 vs 600) | **Test defect**, same root cause as #3. See "Issues Found" below — this one guards a real security property that Windows genuinely cannot provide via this mechanism. |
+| 5 | `internal/app/edit_test.go` — `TestEditHasNoSyncSideEffect` | **Test defect.** The fixture was an extension-less POSIX shebang script; `os/exec.Command` on Windows resolves an extension-less executable name against `%PATHEXT%` even for an already-absolute path, so it was never "found." Fixed with a platform-appropriate fixture (`.cmd` on Windows, shebang script elsewhere) rather than skipping. |
+| 6 | `internal/app/init_test.go` — `TestInitPromptsBeforeBootstrapAndAddsOnConsent` | **Test defect.** `rcPath` was built by literal `"/"` concatenation; production's `state.Bootstrap.RCPath` is built with `filepath.Join` (native separator). Fixed to use `filepath.Join`. |
+
+### Fixes applied (all test-only)
+
+| File | Change |
+|---|---|
+| `internal/apply/bootstrap_test.go` | The two PowerShell "outside `$HOME`" / "`home==""`" cases now build `want` by calling `escapePowerShellDoubleQuoted` directly (same package) instead of `fmt.Sprintf("%q", ...)`. Comment added explaining the Go-vs-PowerShell escaping mismatch. |
+| `internal/config/paths_test.go` | "embedded $HOME" case's `want` changed from `filepath.Join(home, "dotfiles", "aliases.yaml")` to `home + "/dotfiles/aliases.yaml"`, matching what `strings.ReplaceAll` actually produces. Comment explains why `ExpandPath` deliberately does not normalize the remainder, and why a mixed-separator result still resolves correctly (every Go file API accepts `/` on Windows). |
+| `internal/apply/atomic_test.go` | `TestWriteFileAtomicSuccess`'s mode assertion is now `runtime.GOOS`-gated: exact `0o644` on POSIX, "is writable" (`perm&0o200 != 0`) on Windows. Comment states plainly that Windows has no Unix permission bits. |
+| `internal/config/device_test.go` | Same pattern for `TestWriteThenLoadRoundTrips`'s `0o600` assertion. Comment explicitly names the security property (keeping a config.yaml that may embed a source URL out of other local users' reach) and states it is **not available on Windows via this mechanism** — see "Issues Found." |
+| `internal/app/edit_test.go` | New helper `writeNoOpEditorScript(t, dir)`: writes `true-editor.cmd` (`@exit /b 0`) on Windows, the pre-existing shebang script elsewhere. `TestEditHasNoSyncSideEffect` now uses it instead of skipping — unlike `TestEditMultiWordEditorPassesThrough`/`TestEditGitSourcePerformsNoGitWrite` (pre-existing, untouched), which still skip on Windows because they genuinely need a POSIX shell to prove argv-splitting/git-avoidance specifics that a `.cmd` fixture cannot exercise. |
+| `internal/app/init_test.go` | `TestInitPromptsBeforeBootstrapAndAddsOnConsent`'s `rcPath` now built with `filepath.Join(te.Home, ".zshrc")` instead of `te.Home + "/.zshrc"`. |
+
+### Issues Found — file-mode security reliance audit (explicitly requested)
+
+Searched the codebase for every place a file mode encodes a security property (`Chmod`, `0o600`, `0o644` literals in production code):
+
+- `internal/config/device.go` (`Write`, config.yaml at `0o600`) — **security-relevant**: config.yaml can hold `source.git.url`, which may embed credentials. Covered by the now-fixed `TestWriteThenLoadRoundTrips` (#4 above).
+- `internal/state/state.go` (`Save`, state.json at `0o600`) — **security-relevant, same gap, not yet hit by CI**: `state.State.SourceRef` (`internal/state/state.go:31`) records `<url>#<ref>@<short-sha>` (design decision 14), which is the same potentially credential-bearing URL as config.yaml's. `internal/state/state_test.go:148` (`TestStateSaveSetsFileMode0600`) asserts the identical `perm != 0o600` pattern as #4 and has **not yet been exercised by a Windows CI run in this batch's scope** (this batch only fixes the six failures the first run actually reported) — it is very likely to fail the *next* Windows run for the exact same reason. **Flagged explicitly, not fixed here**, since it was outside the six named failures; recommend the same `runtime.GOOS`-gated pattern applied to #3/#4 be applied there too, in a follow-up.
+- `internal/app/init.go` (`createIfAbsent`, aliases.yaml at `0o600`) — aliases.yaml holds no secret (alias definitions only); no test currently asserts its exact mode, so no corresponding CI risk today.
+- `internal/apply/native.go` / `internal/apply/atomic.go` (generated `aliases.<ext>` at `0o644`, rc file at `0o644` via `resolveRCPath`'s default) — not security-relevant (not secret; world-readable is the intended state for a file a shell sources).
+
+**The real gap, stated plainly**: on Windows, a config.yaml or state.json containing a credential-bearing git URL is **not** protected from other local users the way it is on POSIX — Windows reports every writable file as `0666` regardless of `Chmod`, and there is no equivalent of Unix "owner-only" bits via this code path. Real protection on Windows would require ACL-based APIs (e.g. `golang.org/x/sys/windows` DACL manipulation), which this change does not add. This is a genuine, named gap — not something the test changes above paper over.
+
+### Work Unit Evidence
+
+| Evidence | Value |
+|---|---|
+| Focused test command and exact result | `go test ./internal/apply/... -run 'TestBootstrapLine$\|TestWriteFileAtomicSuccess$' -v` and `go test ./internal/config/... -run 'TestExpandPath$\|TestWriteThenLoadRoundTrips$' -v` and `go test ./internal/app/... -run 'TestEditHasNoSyncSideEffect$\|TestInitPromptsBeforeBootstrapAndAddsOnConsent$' -v` — all PASS (see full transcript below) |
+| Runtime integration harness | N/A for this batch — every fix is a test-file change; no production behavior changed, so there is no new runtime boundary to exercise. `GOOS=windows go build ./... && GOOS=windows go vet ./...` was run as a cross-compilation sanity check (both clean) since no real Windows machine is available in this environment; final judgment is deferred to the next real Windows CI run, per the task's own framing. |
+| Rollback boundary | Revert the six test files listed in the table above. Zero production files were touched, so this reverts with zero behavioral impact — only the six specific assertions return to their prior (Windows-broken) form. |
+
+Full verification transcript:
+
+```
+$ go build ./...
+(clean)
+$ go vet ./...
+(clean)
+$ GOOS=windows go build ./... && GOOS=windows go vet ./...
+(clean — cross-compiles and vets for windows/amd64)
+
+$ go test ./internal/apply/... ./internal/config/... ./internal/app/... -v
+... (full suite, all PASS, including all six previously-failing cases)
+
+$ make ci
+go vet ./...
+go test -race ./...
+ok  	github.com/angeltonio/aliasdeck/cmd/aliasdeck	(cached)
+ok  	github.com/angeltonio/aliasdeck/internal/app	4.515s
+ok  	github.com/angeltonio/aliasdeck/internal/apply	2.337s
+ok  	github.com/angeltonio/aliasdeck/internal/config	1.874s
+ok  	github.com/angeltonio/aliasdeck/internal/domain	(cached)
+ok  	github.com/angeltonio/aliasdeck/internal/renderers	(cached)
+?   	github.com/angeltonio/aliasdeck/internal/shelltest	[no test files]
+ok  	github.com/angeltonio/aliasdeck/internal/source	(cached)
+ok  	github.com/angeltonio/aliasdeck/internal/state	(cached)
+ok  	github.com/angeltonio/aliasdeck/internal/validate	(cached)
+CI checks passed
+
+$ make cover
+go test -cover ./...
+ok  	github.com/angeltonio/aliasdeck/cmd/aliasdeck	(cached)	coverage: 58.4% of statements
+ok  	github.com/angeltonio/aliasdeck/internal/app	4.018s	coverage: 83.1% of statements
+ok  	github.com/angeltonio/aliasdeck/internal/apply	0.870s	coverage: 84.9% of statements
+ok  	github.com/angeltonio/aliasdeck/internal/config	0.320s	coverage: 88.2% of statements
+ok  	github.com/angeltonio/aliasdeck/internal/domain	(cached)	coverage: 70.4% of statements
+ok  	github.com/angeltonio/aliasdeck/internal/renderers	1.307s	coverage: 92.0% of statements
+	github.com/angeltonio/aliasdeck/internal/shelltest		coverage: 0.0% of statements
+ok  	github.com/angeltonio/aliasdeck/internal/source	(cached)	coverage: 87.0% of statements
+ok  	github.com/angeltonio/aliasdeck/internal/state	(cached)	coverage: 73.0% of statements
+ok  	github.com/angeltonio/aliasdeck/internal/validate	(cached)	coverage: 87.7% of statements
+```
+
+### Files Changed (this batch)
+
+| File | Action | What Was Done |
+|---|---|---|
+| `internal/apply/bootstrap_test.go` | Modified | Fixed two `%q`-based PowerShell expectations to use `escapePowerShellDoubleQuoted` |
+| `internal/config/paths_test.go` | Modified | Fixed "embedded $HOME" expectation to match textual substitution, not full normalization |
+| `internal/apply/atomic_test.go` | Modified | Made file-mode assertion POSIX-exact / Windows-writable-only |
+| `internal/config/device_test.go` | Modified | Same POSIX-exact / Windows-writable-only pattern for config.yaml's `0o600` |
+| `internal/app/edit_test.go` | Modified | New `writeNoOpEditorScript` helper; cross-platform editor fixture, no skip |
+| `internal/app/init_test.go` | Modified | `rcPath` built with `filepath.Join` instead of literal `"/"` concatenation |
+
+### Remaining Tasks
+
+- [ ] 9.1 `README.md` — update the PowerShell/Windows support status.
+- [ ] 9.2 `docs/PROJECT.md` §16 — mark Milestone 3 items complete.
+- [ ] 9.3 Run `make check` and `make cover`; confirm ≥70% on `renderers`, `apply`, `app`, `source`, `config`. (Coverage confirmed above in this batch; `make check`'s `gofmt -l -w .`/`go vet`/`go test` step not yet re-run standalone after this batch's edits — `make ci`, run above, covers the equivalent `vet` + `test -race`.)
+- [ ] 9.4 Confirm zsh/bash goldens and `shell_integration_test.go` are untouched and still green. (Untouched by this batch; `TestSyncedFileSourcesCleanlyInRealShells` passed above.)
+- [ ] Follow-up (new, discovered this batch): apply the same `runtime.GOOS`-gated file-mode assertion fix to `internal/state/state_test.go:148` (`TestStateSaveSetsFileMode0600`) before the next Windows CI run, for the identical reason as #3/#4 above.
+
+No git commit was created in this batch either, per the explicit instruction not to commit.

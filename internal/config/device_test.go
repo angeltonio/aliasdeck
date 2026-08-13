@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -187,7 +188,20 @@ func TestWriteThenLoadRoundTrips(t *testing.T) {
 	if err != nil {
 		t.Fatalf("os.Stat() returned an error: %v", err)
 	}
-	if perm := info.Mode().Perm(); perm != 0o600 {
+	// config.yaml is written at 0600 specifically to keep a file that may
+	// embed a source URL (potentially credential-bearing, e.g. a git remote)
+	// out of other local users' reach. Windows has no Unix permission bits:
+	// Go reports 0666 for any writable file regardless of the mode passed to
+	// Chmod, so that protection genuinely does not exist there via this
+	// mechanism — this is not a test artifact to paper over, it is a real
+	// gap, see the apply-progress report's "Issues Found" section. The
+	// assertion below therefore only enforces the POSIX guarantee on
+	// platforms that can provide it.
+	if runtime.GOOS == "windows" {
+		if perm := info.Mode().Perm(); perm&0o200 == 0 {
+			t.Errorf("config.yaml mode = %o, want a writable file", perm)
+		}
+	} else if perm := info.Mode().Perm(); perm != 0o600 {
 		t.Errorf("config.yaml mode = %o, want %o", perm, 0o600)
 	}
 }
