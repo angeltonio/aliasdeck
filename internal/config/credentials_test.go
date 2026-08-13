@@ -164,6 +164,14 @@ func TestCredentialsSaveFailsWhenTempFileCannotBeCreated(t *testing.T) {
 // destination is already a directory, which os.Rename refuses to replace
 // with a file on every supported OS) — SaveCredentials must still remove
 // its own temp file rather than leaving it behind in the target directory.
+//
+// This construction cannot also seed a real pre-existing credentials.json
+// at path first: path is deliberately a directory here, not a file, so
+// there is no prior file content to compare afterward. That other half of
+// the atomic-write guarantee — that a failed write leaves an *existing*
+// credentials.json byte-for-byte untouched — is
+// TestCredentialsSaveFailsWhenTheDirectoryCannotBeWrittenToPreservesExistingCredentials's
+// job, immediately below.
 func TestCredentialsSaveCleansUpTempFileOnRenameFailure(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "credentials.json")
@@ -183,5 +191,84 @@ func TestCredentialsSaveCleansUpTempFileOnRenameFailure(t *testing.T) {
 		if e.Name() != "credentials.json" {
 			t.Errorf("leftover temp file after a failed SaveCredentials(): %s", e.Name())
 		}
+	}
+}
+
+// TestCredentialsSaveFailsWhenTheDirectoryCannotBeWrittenToPreservesExistingCredentials
+// closes the gap bounded-review WARNING 3 found in both failure tests above:
+// neither ever seeded a real pre-existing credentials.json before inducing
+// its failure (one gives the file a parent that never exists as a
+// directory; the other replaces the destination itself with a directory),
+// so neither could prove anything about what a failed write does to a
+// credentials file that was already there. Proving "no temp file leaks" is
+// only half of what an atomic write exists to guarantee — the other half is
+// that a device's already-registered, real credentials survive a write that
+// fails, which is exactly the situation a second `register` or a token
+// rotation attempt would hit if it failed partway.
+//
+// This seeds a real credentials.json with known content via a first
+// successful SaveCredentials call, then makes its directory unwritable so
+// neither a new temp file nor the final rename can be created there —
+// dir's write permission is what both operations need, on POSIX, to modify
+// any directory entry — and asserts the original file's bytes, and the
+// values LoadCredentials returns for it, are unchanged afterward.
+//
+// Windows is skipped: Go's Chmod there only toggles the read-only attribute
+// and does not reliably block file creation within a directory the way a
+// POSIX write-permission bit does — the same reason
+// state.TestStateSaveFailsWhenTempFileCannotBeCreated's own history gives
+// for abandoning a directory-permission-based induction in favor of a
+// parent-is-a-regular-file one; that alternative is not available here
+// because it precludes ever having a real pre-existing file at path in the
+// first place, which is the exact property this test needs.
+func TestCredentialsSaveFailsWhenTheDirectoryCannotBeWrittenToPreservesExistingCredentials(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("directory write-permission bits are not reliably enforced on Windows")
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "credentials.json")
+
+	original := sampleCredentials()
+	if err := SaveCredentials(path, original); err != nil {
+		t.Fatalf("seeding the original credentials file: %v", err)
+	}
+	wantBytes, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading the seeded credentials file: %v", err)
+	}
+
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatalf("making the directory read-only: %v", err)
+	}
+	t.Cleanup(func() { os.Chmod(dir, 0o755) })
+
+	attempt := sampleCredentials()
+	attempt.DeviceToken = "add_shouldnotland.secret"
+	if err := SaveCredentials(path, attempt); err == nil {
+		t.Fatal("SaveCredentials() must return an error when its directory cannot be written to")
+	}
+
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatalf("restoring directory permissions: %v", err)
+	}
+
+	gotBytes, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading credentials.json after the failed write: %v", err)
+	}
+	if string(gotBytes) != string(wantBytes) {
+		t.Errorf("credentials.json changed after a failed write:\nbefore: %s\nafter:  %s", wantBytes, gotBytes)
+	}
+
+	got, err := LoadCredentials(path)
+	if err != nil {
+		t.Fatalf("LoadCredentials() after the failed write returned an error: %v", err)
+	}
+	if got.DeviceToken != original.DeviceToken {
+		t.Errorf("DeviceToken after a failed write = %q, want the original %q (unchanged)", got.DeviceToken, original.DeviceToken)
+	}
+	if !got.ObtainedAt.Equal(original.ObtainedAt) {
+		t.Errorf("ObtainedAt after a failed write = %v, want the original %v (unchanged)", got.ObtainedAt, original.ObtainedAt)
 	}
 }

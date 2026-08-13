@@ -301,20 +301,41 @@ func TestHostilePowerShellReservedWordDroppedIdenticallyToFileSource(t *testing.
 
 // TestHostileServerAliasNeverBypassesFilterValid is the negative control:
 // it directly proves ServerSource.Resolve calls validate.FilterValid by
-// checking that domain.Resolve alone (no filtering) would have kept a
+// checking that domain.Resolve alone (no filtering) would have kept every
 // hostile alias — establishing that the drop above is validate.FilterValid's
 // doing, not an accident of how the fixture happened to be shaped.
+//
+// This runs the full hostileAliasCases table, not one representative entry
+// (bounded-review correction, WARNING 2): the absence assertion in
+// TestHostileServerAliasDroppedIdenticallyToFileSource cannot by itself
+// distinguish "FilterValid dropped this row" from "this row never arrived
+// intact for some unrelated reason" (a malformed fixture entry that falls
+// out during parsing or resolution would make that test pass while proving
+// nothing about the defense for that row). Checking every row here — that
+// domain.Resolve alone keeps it, and only validate.FilterValid then reports
+// an issue for it — closes that gap for all 17 shapes, not just the one
+// ("evil;rm-rf") this test originally covered.
 func TestHostileServerAliasNeverBypassesFilterValid(t *testing.T) {
 	dev := domain.Device{Platform: domain.PlatformLinux, Shell: domain.ShellBash}
-	hostile := domain.Alias{Name: "evil;rm-rf", Command: "echo hi", Enabled: true}
 
-	unfiltered := domain.Resolve(dev, []domain.Alias{hostile})
-	if len(unfiltered.Aliases) != 1 {
-		t.Fatalf("test fixture is broken: domain.Resolve alone dropped the hostile alias before FilterValid ran")
-	}
+	for _, c := range hostileAliasCases {
+		t.Run(c.label, func(t *testing.T) {
+			hostile := c.alias
+			hostile.Enabled = true
 
-	_, issues := validate.FilterValid(unfiltered)
-	if !issues.HasErrors() {
-		t.Fatal("validate.FilterValid reported no errors for a hostile alias name; the fixture no longer exercises what this test claims to")
+			unfiltered := domain.Resolve(dev, []domain.Alias{hostile})
+			if len(unfiltered.Aliases) != 1 {
+				t.Fatalf(
+					"test fixture is broken: domain.Resolve alone dropped %q (%s) before FilterValid ran",
+					c.alias.Name, c.label)
+			}
+
+			_, issues := validate.FilterValid(unfiltered)
+			if !issues.HasErrors() {
+				t.Fatalf(
+					"validate.FilterValid reported no errors for %q (%s); the fixture no longer exercises what this test claims to",
+					c.alias.Name, c.label)
+			}
+		})
 	}
 }

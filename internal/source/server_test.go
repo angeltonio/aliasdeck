@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -302,6 +303,120 @@ func TestServerSourceResolveUnfilteredMakesOneRequest(t *testing.T) {
 	}
 	if got := calls.Load(); got != 1 {
 		t.Errorf("handler was called %d times, want exactly 1", got)
+	}
+}
+
+// schemeRoutingTransport lets a test construct a request whose *logical*
+// URL (what Go's own redirect bookkeeping in net/http/client.go compares —
+// req.URL, never touched by a RoundTripper) names one shared host:port
+// string for both an https:// leg and an http:// leg, exactly the shape a
+// same-host scheme-downgrading redirect takes, while every actual byte on
+// the wire is dialed to whichever real httptest server matches that leg's
+// scheme. No fixed port is ever bound: the shared host:port string never
+// has anything listening on it at all, real or otherwise — only tls and
+// plain, each on their own ephemeral httptest listener, ever accept a
+// connection.
+type schemeRoutingTransport struct {
+	tls   *httptest.Server
+	plain *httptest.Server
+}
+
+func (t schemeRoutingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	out := req.Clone(req.Context())
+
+	var target *url.URL
+	var base http.RoundTripper
+	if req.URL.Scheme == "https" {
+		u, err := url.Parse(t.tls.URL)
+		if err != nil {
+			return nil, err
+		}
+		target = u
+		base = t.tls.Client().Transport
+	} else {
+		u, err := url.Parse(t.plain.URL)
+		if err != nil {
+			return nil, err
+		}
+		target = u
+		base = t.plain.Client().Transport
+	}
+
+	out.URL.Scheme = target.Scheme
+	out.URL.Host = target.Host
+	out.Host = ""
+	return base.RoundTrip(out)
+}
+
+// TestServerSourceRefusesRedirectToADifferentSchemeSameHost is the
+// regression test for the Phase 7 bounded-review correction pass, CRITICAL
+// 1: Go's default redirect handling forwards the Authorization header
+// whenever the redirect target's canonical host:port matches the original
+// request's — a comparison that never looks at scheme — so a same-host
+// https:// -> http:// redirect kept re-sending this device's bearer token in
+// cleartext even though ValidateServerURL had already approved the
+// configured https:// URL. ValidateServerURL never sees this: it only
+// inspects the configured base URL before the request leaves, never a
+// Location header the server returns afterward.
+//
+// Both legs are modelled with real httptest servers (one TLS, one plain);
+// schemeRoutingTransport routes each leg's actual dial to whichever one
+// matches its scheme, while both legs' req.URL name the identical
+// sharedHostPort string — the exact comparison shouldCopyHeaderOnRedirect
+// makes internally. Before this correction, this test reproduced the
+// finding's own report verbatim: the plain-http leg was reached once and
+// received the device's Authorization header in cleartext. After it,
+// ServerSource must refuse the redirect outright, before the plain leg is
+// ever dialed.
+func TestServerSourceRefusesRedirectToADifferentSchemeSameHost(t *testing.T) {
+	dev := testDevice()
+	const sharedHostPort = "same-host.invalid:443"
+
+	var plainCalls atomic.Int32
+	var authReceivedInCleartext string
+	plainSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		plainCalls.Add(1)
+		authReceivedInCleartext = r.Header.Get("Authorization")
+		w.Write(validSyncBody(t, dev, nil))
+	}))
+	t.Cleanup(plainSrv.Close)
+
+	var tlsCalls atomic.Int32
+	tlsSrv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tlsCalls.Add(1)
+		http.Redirect(w, r, "http://"+sharedHostPort+r.URL.RequestURI(), http.StatusFound)
+	}))
+	t.Cleanup(tlsSrv.Close)
+
+	s := &ServerSource{
+		URL:   "https://" + sharedHostPort,
+		Token: "add_test.secret",
+		Client: &http.Client{
+			Transport: schemeRoutingTransport{tls: tlsSrv, plain: plainSrv},
+			Timeout:   5 * time.Second,
+		},
+	}
+
+	_, err := s.Resolve(context.Background(), dev)
+	if err == nil {
+		t.Fatal("Resolve() = nil error, want a rejection for a redirect")
+	}
+	if !strings.Contains(err.Error(), "redirect") {
+		t.Errorf("Resolve() error = %q, want it to name the refused redirect", err)
+	}
+
+	if got := plainCalls.Load(); got != 0 {
+		t.Errorf(
+			"the cleartext (http) leg was reached %d times, want 0: refusing the redirect must stop "+
+				"the request before it is ever re-sent to the downgraded target", got)
+	}
+	if authReceivedInCleartext != "" {
+		t.Errorf(
+			"the device token reached the cleartext leg (%q) — this is the exact same-host scheme "+
+				"downgrade CRITICAL 1 fixes", authReceivedInCleartext)
+	}
+	if got := tlsCalls.Load(); got != 1 {
+		t.Errorf("the https leg was called %d times, want exactly 1", got)
 	}
 }
 
