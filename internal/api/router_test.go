@@ -126,7 +126,7 @@ func TestNewRouterAppliesRequireKindToGuardedRoutes(t *testing.T) {
 // generic "some public route exists" check — re-guarding healthPattern
 // behind a token kind in routes() fails this exact test.
 func TestHealthRouteIsReachableWithoutAuthentication(t *testing.T) {
-	h, err := NewRouter(fakeTokenLookup{}, time.Now)
+	h, err := NewRouter(newFakeStore(), time.Now)
 	if err != nil {
 		t.Fatalf("NewRouter(...) = %v, want nil", err)
 	}

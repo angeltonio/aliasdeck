@@ -59,15 +59,66 @@ var validKinds = map[store.TokenKind]bool{
 	store.TokenKindDevice:     true,
 }
 
+// api is the composed set of dependencies every handler added in this
+// package's second half (aliases, profiles, devices, auth) closes over: the
+// store, an injectable clock (auth.RequireKind's own now, and every
+// timestamp a handler writes), and the login concurrency semaphore (design
+// decision 24). It is deliberately unexported: internal/server is the only
+// caller outside this package, and it reaches these handlers only through
+// NewRouter, never by constructing an api value itself.
+type api struct {
+	store    store.Store
+	now      func() time.Time
+	loginSem chan struct{}
+}
+
 // routes is the complete, explicit route table this server exposes.
 // Design decision 15 (route slice/OpenAPI coverage) and decision 23
 // (health route ownership) both name this table directly: healthPattern
-// is Public here and every route Phase 5's later tasks add to this slice
-// must declare a RequiredKind — there is no other, implicit way for a
-// route to become reachable.
-func routes() []route {
+// is Public here and every route declares a RequiredKind — there is no
+// other, implicit way for a route to become reachable. This is also the
+// exact slice internal/api/openapi_coverage_test.go compares, bidirectionally,
+// against docs/openapi.yaml (decision 15).
+func (a *api) routes() []route {
 	return []route{
 		{Method: healthMethod, Pattern: healthPattern, Handler: handleHealth, Public: true},
+		{Method: http.MethodGet, Pattern: openapiPattern, Handler: a.handleOpenAPISpec, Public: true},
+
+		// Auth (5.9/5.10): login and the enrollment-token exchange
+		// authenticate themselves out of band (a password in the body, an
+		// enrollment token as a bearer credential consumed by the handler
+		// itself), so both are Public at the router level — RequireKind has
+		// no bearer *session*/*device* token to check before the handler
+		// even runs. logout and minting a new enrollment token both require
+		// an existing operator session.
+		{Method: http.MethodPost, Pattern: loginPattern, Handler: a.handleLogin, Public: true},
+		{Method: http.MethodPost, Pattern: logoutPattern, Handler: a.handleLogout, RequiredKind: store.TokenKindSession},
+		{Method: http.MethodPost, Pattern: enrollmentTokensPattern, Handler: a.handleEnrollmentTokensCreate, RequiredKind: store.TokenKindSession},
+		{Method: http.MethodPost, Pattern: devicesRegisterPattern, Handler: a.handleDevicesRegister, Public: true},
+
+		// Aliases (5.7/5.8).
+		{Method: http.MethodGet, Pattern: aliasesPattern, Handler: a.handleAliasesList, RequiredKind: store.TokenKindSession},
+		{Method: http.MethodPost, Pattern: aliasesPattern, Handler: a.handleAliasesCreate, RequiredKind: store.TokenKindSession},
+		{Method: http.MethodGet, Pattern: aliasPattern, Handler: a.handleAliasesGet, RequiredKind: store.TokenKindSession},
+		{Method: http.MethodPut, Pattern: aliasPattern, Handler: a.handleAliasesUpdate, RequiredKind: store.TokenKindSession},
+		{Method: http.MethodDelete, Pattern: aliasPattern, Handler: a.handleAliasesDelete, RequiredKind: store.TokenKindSession},
+
+		// Profiles (5.7/5.8).
+		{Method: http.MethodGet, Pattern: profilesPattern, Handler: a.handleProfilesList, RequiredKind: store.TokenKindSession},
+		{Method: http.MethodPost, Pattern: profilesPattern, Handler: a.handleProfilesCreate, RequiredKind: store.TokenKindSession},
+		{Method: http.MethodGet, Pattern: profilePattern, Handler: a.handleProfilesGet, RequiredKind: store.TokenKindSession},
+		{Method: http.MethodPut, Pattern: profilePattern, Handler: a.handleProfilesUpdate, RequiredKind: store.TokenKindSession},
+		{Method: http.MethodDelete, Pattern: profilePattern, Handler: a.handleProfilesDelete, RequiredKind: store.TokenKindSession},
+
+		// Devices (5.7/5.8). No POST /api/v1/devices: a device is born only
+		// through devicesRegisterPattern's enrollment-token exchange
+		// (design's Interfaces section — DeviceRepo has no Create).
+		{Method: http.MethodGet, Pattern: devicesPattern, Handler: a.handleDevicesList, RequiredKind: store.TokenKindSession},
+		{Method: http.MethodGet, Pattern: devicePattern, Handler: a.handleDevicesGet, RequiredKind: store.TokenKindSession},
+		{Method: http.MethodPut, Pattern: devicePattern, Handler: a.handleDevicesUpdate, RequiredKind: store.TokenKindSession},
+		{Method: http.MethodDelete, Pattern: devicePattern, Handler: a.handleDevicesDelete, RequiredKind: store.TokenKindSession},
+		{Method: http.MethodPost, Pattern: deviceRevokePattern, Handler: a.handleDevicesRevoke, RequiredKind: store.TokenKindSession},
+		{Method: http.MethodPost, Pattern: deviceTokenPattern, Handler: a.handleDevicesRotateToken, RequiredKind: store.TokenKindSession},
 	}
 }
 
@@ -84,16 +135,23 @@ func handleHealth(w http.ResponseWriter, _ *http.Request) {
 	io.WriteString(w, `{"status":"ok"}`+"\n")
 }
 
-// NewRouter builds the complete internal/api handler from routes(): every
-// route wrapped in auth.RequireKind(tokens, r.RequiredKind, now) unless it
-// is Public, every request body bounded by withMaxBytes, the whole mux
-// bounded by handlerTimeout. It returns a non-nil error — and a nil
-// handler — if any route in the table declares neither Public nor a valid
-// RequiredKind, so registration itself fails; there is no path through
-// this function that hands back a serving handler built from an invalid
-// table.
-func NewRouter(tokens auth.TokenLookup, now func() time.Time) (http.Handler, error) {
-	return newRouter(routes(), tokens, now)
+// NewRouter builds the complete internal/api handler: every route in
+// (*api).routes() wrapped in auth.RequireKind(st.Tokens(), r.RequiredKind,
+// now) unless it is Public, every request body bounded by withMaxBytes, the
+// whole mux bounded by handlerTimeout. It returns a non-nil error — and a
+// nil handler — if any route in the table declares neither Public nor a
+// valid RequiredKind, so registration itself fails; there is no path
+// through this function that hands back a serving handler built from an
+// invalid table.
+//
+// st is the one store.Store every handler in this package reads and writes
+// through; now is the injected clock RequireKind and every handler that
+// stamps a timestamp use — production wires time.Now (internal/server.Run),
+// tests wire a fixed instant so expiry and token timestamps stay
+// deterministic without sleeping.
+func NewRouter(st store.Store, now func() time.Time) (http.Handler, error) {
+	a := &api{store: st, now: now, loginSem: make(chan struct{}, loginConcurrency)}
+	return newRouter(a.routes(), st.Tokens(), now)
 }
 
 // newRouter is NewRouter's table-injectable core: production code always

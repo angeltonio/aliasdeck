@@ -1,0 +1,623 @@
+openapi: 3.0.3
+info:
+  title: AliasDeck Server API
+  version: "0.3.0"
+  description: >
+    The /api/v1 control-plane surface exposed by `aliasdeck serve`: CRUD for
+    aliases, profiles and devices; operator session auth; single-use
+    enrollment tokens for device registration; device token rotation and
+    revocation. This document is embedded in the server binary
+    (internal/api/openapi.go) and served at GET /api/v1/openapi.yaml; a
+    bidirectional coverage test (internal/api/openapi_coverage_test.go)
+    fails if this file and the router's own route table ever disagree.
+servers:
+  - url: /api/v1
+
+security:
+  - sessionToken: []
+
+paths:
+  /api/v1/health:
+    get:
+      summary: Liveness check
+      security: []
+      responses:
+        "200":
+          description: The server is up.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+
+  /api/v1/openapi.yaml:
+    get:
+      summary: This document
+      security: []
+      responses:
+        "200":
+          description: The OpenAPI document itself.
+          content:
+            application/yaml:
+              schema:
+                type: string
+
+  /api/v1/auth/login:
+    post:
+      summary: Authenticate the operator and mint a session token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: A session token, valid for 24 hours from mint.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionToken"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/auth/logout:
+    post:
+      summary: Revoke the calling session token
+      responses:
+        "204":
+          description: The session was revoked.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/enrollment-tokens:
+    post:
+      summary: Mint a single-use enrollment token for device registration
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnrollmentTokenRequest"
+      responses:
+        "201":
+          description: A single-use enrollment token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnrollmentToken"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/devices/register:
+    post:
+      summary: Exchange a single-use enrollment token for a device token
+      security:
+        - enrollmentToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterRequest"
+      responses:
+        "201":
+          description: The registered device's id and its device token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeviceToken"
+        "401":
+          description: The enrollment token is malformed, unknown, wrong-kind, or already consumed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /api/v1/aliases:
+    get:
+      summary: List every alias
+      responses:
+        "200":
+          description: Every alias, targeting intact.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Alias"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      summary: Create an alias
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Alias"
+      responses:
+        "201":
+          description: The created alias, plus any non-blocking name warnings.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AliasWithWarnings"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/InvalidReference"
+
+  /api/v1/aliases/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      summary: Get one alias
+      responses:
+        "200":
+          description: The alias.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Alias"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    put:
+      summary: Replace an alias
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Alias"
+      responses:
+        "200":
+          description: The updated alias, plus any non-blocking name warnings.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AliasWithWarnings"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/InvalidReference"
+    delete:
+      summary: Delete an alias
+      responses:
+        "204":
+          description: The alias was deleted.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/profiles:
+    get:
+      summary: List every profile
+      responses:
+        "200":
+          description: Every profile.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Profile"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      summary: Create a profile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Profile"
+      responses:
+        "201":
+          description: The created profile.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Profile"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /api/v1/profiles/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      summary: Get one profile
+      responses:
+        "200":
+          description: The profile.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Profile"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    put:
+      summary: Replace a profile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Profile"
+      responses:
+        "200":
+          description: The updated profile.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Profile"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+    delete:
+      summary: Delete a profile
+      responses:
+        "204":
+          description: The profile was deleted.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/devices:
+    get:
+      summary: List every device
+      responses:
+        "200":
+          description: Every device.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Device"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/devices/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      summary: Get one device
+      responses:
+        "200":
+          description: The device.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Device"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    put:
+      summary: Rename a device or change its profile membership
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Device"
+      responses:
+        "200":
+          description: The updated device.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Device"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/InvalidReference"
+    delete:
+      summary: Delete a device
+      responses:
+        "204":
+          description: The device was deleted.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/devices/{id}/revoke:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      summary: Revoke a device and every device-kind token it holds
+      responses:
+        "204":
+          description: The device and its tokens were revoked.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/devices/{id}/token:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      summary: Revoke a device's existing token(s) and issue a new one
+      responses:
+        "200":
+          description: The device's id and its new device token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeviceToken"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+components:
+  securitySchemes:
+    sessionToken:
+      type: http
+      scheme: bearer
+      description: An operator session token, minted by POST /api/v1/auth/login.
+    enrollmentToken:
+      type: http
+      scheme: bearer
+      description: A single-use enrollment token, minted by POST /api/v1/enrollment-tokens.
+
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+
+  responses:
+    BadRequest:
+      description: The request body failed validation.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Unauthorized:
+      description: No valid session (or, for device registration, enrollment token) was presented.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: No resource with that id exists.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Conflict:
+      description: The write collides with an existing resource's name.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    InvalidReference:
+      description: The write names another resource (a profile or device id) that does not exist.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            details:
+              type: object
+
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+
+    SessionToken:
+      type: object
+      properties:
+        token:
+          type: string
+          description: The session's wire token, `ads_<lookup>.<secret>`. Shown once.
+        expiresAt:
+          type: string
+          format: date-time
+
+    EnrollmentTokenRequest:
+      type: object
+      properties:
+        profileIds:
+          type: array
+          items:
+            type: string
+        ttlSeconds:
+          type: integer
+          description: Defaults to 900 (15 minutes) when omitted or zero.
+
+    EnrollmentToken:
+      type: object
+      properties:
+        token:
+          type: string
+          description: The enrollment wire token, `ade_<lookup>.<secret>`. Shown once.
+        expiresAt:
+          type: string
+          format: date-time
+
+    RegisterRequest:
+      type: object
+      required: [name, platform, shell]
+      properties:
+        name:
+          type: string
+        platform:
+          type: string
+          enum: [macos, linux, windows]
+        shell:
+          type: string
+          enum: [zsh, bash, powershell]
+        clientVersion:
+          type: string
+
+    DeviceToken:
+      type: object
+      properties:
+        deviceId:
+          type: string
+        deviceToken:
+          type: string
+          description: The device's wire token, `add_<lookup>.<secret>`. Shown once.
+
+    Alias:
+      type: object
+      properties:
+        id:
+          type: string
+          readOnly: true
+        name:
+          type: string
+        command:
+          type: string
+        description:
+          type: string
+        enabled:
+          type: boolean
+        tags:
+          type: array
+          items:
+            type: string
+        platforms:
+          type: array
+          items:
+            type: string
+            enum: [macos, linux, windows]
+        shells:
+          type: array
+          items:
+            type: string
+            enum: [zsh, bash, powershell]
+        profileIds:
+          type: array
+          items:
+            type: string
+        deviceIds:
+          type: array
+          items:
+            type: string
+        createdAt:
+          type: string
+          format: date-time
+          readOnly: true
+        updatedAt:
+          type: string
+          format: date-time
+          readOnly: true
+
+    AliasWithWarnings:
+      allOf:
+        - $ref: "#/components/schemas/Alias"
+        - type: object
+          properties:
+            nameWarnings:
+              type: array
+              items:
+                type: string
+              description: >
+                Non-blocking validate.Name issues, one per shell in the
+                server's local shell list, that did not stop this alias
+                from being written (design decision 16).
+
+    Profile:
+      type: object
+      properties:
+        id:
+          type: string
+          readOnly: true
+        name:
+          type: string
+        description:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+          readOnly: true
+        updatedAt:
+          type: string
+          format: date-time
+          readOnly: true
+
+    Device:
+      type: object
+      properties:
+        id:
+          type: string
+          readOnly: true
+        name:
+          type: string
+        hostname:
+          type: string
+        platform:
+          type: string
+          enum: [macos, linux, windows]
+        shell:
+          type: string
+          enum: [zsh, bash, powershell]
+        architecture:
+          type: string
+        profileIds:
+          type: array
+          items:
+            type: string
+        lastSeenAt:
+          type: string
+          format: date-time
+          readOnly: true
+        lastSyncAt:
+          type: string
+          format: date-time
+          readOnly: true
+        clientVersion:
+          type: string

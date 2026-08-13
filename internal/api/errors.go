@@ -34,6 +34,33 @@ const (
 	codeBodyTooLarge     = "body_too_large"
 	codeTimeout          = "timeout"
 	codeInternal         = "internal"
+
+	// codeInvalidBody is a request body that failed to decode as JSON at
+	// all — distinct from a body that decoded fine but failed a field-level
+	// rule (codeInvalidCommand, codeInvalidDescription, codeInvalidRequest).
+	codeInvalidBody = "invalid_body"
+
+	// codeInvalidCommand and codeInvalidDescription are the two blocking
+	// write-validation failures design decision 16 names explicitly:
+	// validate.Command and validate.Description errors are 400s. Notably
+	// absent is a "codeInvalidName" — an alias name that trips
+	// validate.Name over serverValidationShells is a warning, never a
+	// rejection (decision 16), so it never reaches writeError at all.
+	codeInvalidCommand     = "invalid_command"
+	codeInvalidDescription = "invalid_description"
+
+	// codeInvalidRequest is a field-level rejection that isn't Command or
+	// Description — an unknown platform/shell on device registration, for
+	// example.
+	codeInvalidRequest = "invalid_request"
+
+	// codeInvalidCredentials and codeInvalidToken are the two authentication
+	// failure shapes Phase 5's auth endpoints produce outside RequireKind's
+	// own generic 401 (auth.go's login and device-registration handlers
+	// authenticate themselves out of band, so they write their own body
+	// instead of going through auth's refuse()).
+	codeInvalidCredentials = "invalid_credentials"
+	codeInvalidToken       = "invalid_token"
 )
 
 // writeError writes errorBody to w with status. It is the only function in
