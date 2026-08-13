@@ -69,8 +69,27 @@ func (a *api) handleDevicesUpdate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+// handleDevicesDelete revokes id's device-kind token(s) before removing the
+// device row (design decision 30, bounded-review correction). Deleting the
+// row alone left a deleted device's token passing authentication in full —
+// unrevoked, unexpired, the correct kind — and failing only incidentally,
+// because handleSync happens to load the device row afterward and gets a
+// 404 there; a future device-gated route that doesn't load the row first
+// would accept the token outright. Revoking first, deleting second mirrors
+// handleDevicesRevoke's own ordering and design decision 27's retry
+// pattern: RevokeSubject only touches rows with revoked_at IS NULL, so a
+// retry after a failed Delete below is a safe no-op, and the credential is
+// already dead the instant RevokeSubject succeeds, regardless of whether
+// Delete itself later fails. The reverse order (delete then revoke) would
+// leave no route left to retry the revoke through once the row is gone.
 func (a *api) handleDevicesDelete(w http.ResponseWriter, r *http.Request) {
-	if err := a.store.Devices().Delete(r.Context(), r.PathValue("id")); err != nil {
+	id := r.PathValue("id")
+
+	if err := a.store.Tokens().RevokeSubject(r.Context(), store.TokenKindDevice, id, a.now()); err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	if err := a.store.Devices().Delete(r.Context(), id); err != nil {
 		writeStoreError(w, err)
 		return
 	}

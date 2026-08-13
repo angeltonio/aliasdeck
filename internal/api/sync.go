@@ -2,6 +2,7 @@ package api
 
 import (
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -128,10 +129,22 @@ func (a *api) handleSync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Touch is access bookkeeping, not resource mutation (design decision
+	// 10) — the aliases above are already resolved and sitting in memory,
+	// so a transient failure recording last_seen_at/last_sync_at (lock
+	// contention on the single connection, a disk error, the device row
+	// vanishing between Get and Touch) must not turn a successful sync
+	// into a 500. The wrong trade is the other direction too: silently
+	// dropping the failure would leave an operator with no way to learn a
+	// device's bookkeeping has drifted from its actual sync history.
+	// slog.Default() (stderr by default — this project introduces no other
+	// logging sink) records it at Error level with the device id and the
+	// underlying error; the aliases are still served (design decision 29,
+	// bounded-review correction). Mutation-verified: see apply-progress.
 	now := a.now()
 	if err := a.store.Devices().Touch(r.Context(), subj.SubjectID, platform, shell, now); err != nil {
-		writeStoreError(w, err)
-		return
+		slog.Default().Error("sync: failed to persist device bookkeeping",
+			"deviceId", subj.SubjectID, "error", err)
 	}
 
 	aliases := make([]syncAlias, 0, len(resolved.Aliases))

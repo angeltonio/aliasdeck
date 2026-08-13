@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -314,6 +315,72 @@ func TestSyncFailsWithARotatedDeviceTokenWithAnActionableMessage(t *testing.T) {
 	if newRec.Code != http.StatusOK {
 		t.Fatalf("GET %s with the freshly rotated token = %d, want %d, body=%s", syncPattern, newRec.Code, http.StatusOK, newRec.Body.String())
 	}
+}
+
+// TestSyncServesResolvedAliasesWhenTouchFails is bounded-review finding 1's
+// own RED+GREEN test: the aliases are already resolved and sitting in
+// memory by the time Devices().Touch runs, so a transient failure recording
+// last_seen_at/last_sync_at must not throw that work away and answer the
+// device with a 500. Mutation this test detects: handleSync returning
+// writeStoreError(w, err) (the pre-correction behavior) when Touch fails —
+// this test would then see a 500 instead of 200 with the resolved alias.
+func TestSyncServesResolvedAliasesWhenTouchFails(t *testing.T) {
+	s, opID := newFakeStoreWithOperator("admin", "irrelevant-for-this-test")
+	session := mintSessionFor(s, opID)
+	h := newTestRouter(t, s)
+
+	_, deviceToken := registerSyncTestDevice(t, h, s, "laptop", domain.PlatformMacOS, domain.ShellZsh, nil)
+
+	createRec := doRequest(h, http.MethodPost, aliasesPattern, session, mustJSON(domain.Alias{
+		Name: "dps", Command: "docker ps", Enabled: true,
+	}))
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("POST %s = %d, want %d, body=%s", aliasesPattern, createRec.Code, http.StatusCreated, createRec.Body.String())
+	}
+
+	s.touchErr = errors.New("simulated transient touch failure")
+
+	rec := doRequest(h, http.MethodGet, syncPattern+"?platform=macos&shell=zsh", deviceToken, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET %s with a failing Touch = %d, want %d (a bookkeeping failure must not discard a resolved sync), body=%s",
+			syncPattern, rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decoding sync response: %v", err)
+	}
+	aliases, ok := body["aliases"].([]any)
+	if !ok || len(aliases) != 1 {
+		t.Fatalf("aliases = %v, want exactly the one resolved alias despite the Touch failure", body["aliases"])
+	}
+}
+
+// TestSyncFailsWithADeletedDeviceTokenWithAnActionableMessage is
+// bounded-review finding 2's own RED+GREEN test: a deleted device's own
+// token must fail sync exactly the same actionable way a revoked one does
+// (401, codeInvalidToken, actionable message) — not merely a 404 because
+// the device row is gone, which would mean the token itself was still a
+// live, unrevoked credential and only failed to authenticate this one
+// route by accident (because handleSync happens to load the device row).
+// Mutation this test detects: handleDevicesDelete calling
+// Devices().Delete without first calling Tokens().RevokeSubject — the
+// token would still verify, and this GET would reach the device lookup and
+// fail with 404 instead of 401 here.
+func TestSyncFailsWithADeletedDeviceTokenWithAnActionableMessage(t *testing.T) {
+	s, opID := newFakeStoreWithOperator("admin", "irrelevant-for-this-test")
+	session := mintSessionFor(s, opID)
+	h := newTestRouter(t, s)
+
+	deviceID, deviceToken := registerSyncTestDevice(t, h, s, "laptop", domain.PlatformMacOS, domain.ShellZsh, nil)
+
+	deleteRec := doRequest(h, http.MethodDelete, "/api/v1/devices/"+deviceID, session, nil)
+	if deleteRec.Code != http.StatusNoContent {
+		t.Fatalf("DELETE /api/v1/devices/%s = %d, want %d, body=%s", deviceID, deleteRec.Code, http.StatusNoContent, deleteRec.Body.String())
+	}
+
+	rec := doRequest(h, http.MethodGet, syncPattern+"?platform=macos&shell=zsh", deviceToken, nil)
+	assertActionableDeviceUnauthorized(t, rec)
 }
 
 func assertActionableDeviceUnauthorized(t *testing.T, rec *httptest.ResponseRecorder) {

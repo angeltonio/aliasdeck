@@ -25,6 +25,24 @@ import (
 // and the enabled flag. DeviceIDs pinning has no equivalent in this file
 // format (PROJECT.md §5: "In standalone mode ... DeviceIDs is unused"), so
 // that dimension is covered separately below, directly in domain terms.
+//
+// linuxonly and zshonly (bounded-review finding 5, post-Phase-6 correction)
+// exist so platform and shell each have at least one alias/device pair
+// where that single dimension is the SOLE discriminator between inclusion
+// and exclusion — every other alias in this fixture couples its platform
+// restriction to a shell or profile restriction too (dcu, pve, winonly), or
+// its shell restriction to every shell there is (dps's
+// [zsh, bash, powershell] is domain.AllShells verbatim, so it never
+// actually excludes anyone). Before this correction, forcing every alias's
+// Platforms to nil inside sync.Resolve (a reviewer's disproven CRITICAL
+// claim, see apply-progress) only ever changed a field's *content* on an
+// alias that was included either way (dcu for dev-macos-zsh-dev, winonly
+// for dev-windows-pwsh-none) — reflect.DeepEqual caught that, but not
+// because platform ever changed which aliases were included. linuxonly
+// (platform-restricted, no shell restriction) closes that gap: mutating
+// platform targeting now changes the *included alias set itself* for
+// dev-linux-bash-homelab, not merely a struct field on an alias that was
+// going to be included regardless.
 const fixtureYAML = `version: 1
 
 profiles:
@@ -54,6 +72,14 @@ aliases:
     command: Get-Process
     platforms: [windows]
     shells: [powershell]
+
+  - name: linuxonly
+    command: echo linux, any shell, any profile
+    platforms: [linux]
+
+  - name: zshonly
+    command: echo zsh, any platform, any profile
+    shells: [zsh]
 
   - name: retired
     command: echo this should never appear

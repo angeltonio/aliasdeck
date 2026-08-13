@@ -47,6 +47,14 @@ type fakeStore struct {
 	// exact "second, separate write in a two-step operation fails" window
 	// without touching internal/store.
 	tokenCreateErr error
+
+	// touchErr, when non-nil, is returned by exactly the next
+	// fakeDeviceRepo.Touch call and then cleared. It exists only for
+	// sync_test.go's TestSyncServesResolvedAliasesWhenTouchFails
+	// (bounded-review finding 1) to force handleSync's own bookkeeping
+	// write to fail after sync.Resolve has already succeeded, without
+	// touching internal/store.
+	touchErr error
 }
 
 func newFakeStore() *fakeStore {
@@ -310,6 +318,11 @@ func (r fakeDeviceRepo) Touch(_ context.Context, id string, platform domain.Plat
 	s := r.s
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.touchErr != nil {
+		err := s.touchErr
+		s.touchErr = nil
+		return err
+	}
 	d, ok := s.devices[id]
 	if !ok {
 		return store.ErrNotFound
