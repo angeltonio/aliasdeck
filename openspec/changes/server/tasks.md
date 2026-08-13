@@ -111,15 +111,15 @@ Base ordering if Feature Branch Chain is chosen: PR1 → PR2 → PR3 → PR4 →
 
 ## Phase 7: ServerSource & Credentials (`internal/source`, `internal/config`)
 
-- [ ] 7.1 RED: `internal/source/url_test.go` — `ValidateServerURL`: https accepted, loopback http accepted, remote http refused, opt-out accepted, unparseable/non-http scheme rejected.
-- [ ] 7.2 GREEN: `internal/source/url.go` — `ValidateServerURL(raw, allowHTTP)` (design decision 13); checked at `login` and re-checked on every `sync`.
-- [ ] 7.3 RED: `internal/config/credentials_test.go` — round trip, `0600`, atomic-write cleanup on failure (`t.TempDir()`).
-- [ ] 7.4 GREEN: `internal/config/credentials.go` + `CredentialsFile(base)` in `paths.go` (design decision 14).
-- [ ] 7.5 RED: `internal/source/server_test.go` — `httptest.NewServer` scripted: revision mismatch rejected; oversize body truncated-and-failed via `io.LimitReader(resp.Body, 1<<20)` (bounded op); non-2xx mapped; offline hard error naming the URL, no cache; `Stale` always false; `http.Client{Timeout:30s}`, no retries (bounded op).
-- [ ] 7.6 GREEN: `internal/source/server.go` — `ServerSource{URL,Token,Client,AllowHTTP}` implementing `Resolve` verbatim + optional `ResolveReporter`.
-- [ ] 7.7 RED+GREEN: threat matrix (sync response as hostile input, client side) — a hostile server-stored alias is dropped by `validate.FilterValid` identically to `FileSource`/`GitSource`.
-- [ ] 7.8 RED: `internal/app/doctor_test.go` (server-source case) — `Doctor` explains exactly what `FilterValid` dropped, using the unfiltered alias set.
-- [ ] 7.9 GREEN (same pair as 7.8, design decision 12): add `source.UnfilteredResolver{ ResolveUnfiltered(ctx, dev) (domain.ResolvedConfig, error) }`; `ServerSource` implements it; `internal/app/doctor.go` type-asserts it, mirroring `ResolveReporter` (M3 decision 14). Do not land this interface without this `Doctor` use.
+- [x] 7.1 RED: `internal/source/url_test.go` — `ValidateServerURL`: https accepted, loopback http accepted, remote http refused, opt-out accepted, unparseable/non-http scheme rejected.
+- [x] 7.2 GREEN: `internal/source/url.go` — `ValidateServerURL(raw, allowHTTP)` (design decision 13); checked at `login` and re-checked on every `sync`.
+- [x] 7.3 RED: `internal/config/credentials_test.go` — round trip, `0600`, atomic-write cleanup on failure (`t.TempDir()`).
+- [x] 7.4 GREEN: `internal/config/credentials.go` + `CredentialsFile(base)` in `paths.go` (design decision 14).
+- [x] 7.5 RED: `internal/source/server_test.go` — `httptest.NewServer` scripted: revision mismatch rejected; oversize body truncated-and-failed via `io.LimitReader(resp.Body, 1<<20)` (bounded op, proven with an endless-body `infiniteReader` so the test cannot pass regardless of the bound — see apply-progress); non-2xx mapped; offline hard error naming the URL, no cache; `Stale` always false; `http.Client{Timeout:30s}`, no retries (bounded op).
+- [x] 7.6 GREEN: `internal/source/server.go` — `ServerSource{URL,Token,Client,AllowHTTP}` implementing `Resolve` verbatim + optional `ResolveReporter`.
+- [x] 7.7 RED+GREEN: threat matrix (sync response as hostile input, client side) — a hostile server-stored alias is dropped by `validate.FilterValid` identically to `FileSource`/`GitSource`. Shared table (`internal/source/hostile_test.go`) of 17 hostile shapes (shell metacharacters, command substitution, newline/CR in name and command, non-identifier names, POSIX/PowerShell-reserved words, oversized command/description, quote/brace-breaking characters) run through both `ServerSource` and `FileSource`, asserting the identical surviving set. Mutation-verified: see apply-progress.
+- [x] 7.8 RED: `internal/app/doctor_test.go` (server-source case) — `Doctor` explains exactly what `FilterValid` dropped, using the unfiltered alias set.
+- [x] 7.9 GREEN (same pair as 7.8, design decision 12): added `source.UnfilteredResolver{ ResolveUnfiltered(ctx, dev) (domain.ResolvedConfig, error) }`; `ServerSource` implements it; `internal/app/doctor.go` type-asserts it, mirroring `ResolveReporter` (M3 decision 14). **Refactor note**: extracted `doctorFromContext(ctx, env, dc deviceContext)` so the server-source branch is testable against a fake `source.UnfilteredResolver` without depending on Phase 8's `resolveSource` server-type wiring (task 8.1, not yet landed) — `Doctor` itself is now a thin wrapper calling `loadDeviceContext` then `doctorFromContext`.
 
 ## Phase 8: CLI Wiring (`internal/app`, `cmd/aliasdeck`)
 

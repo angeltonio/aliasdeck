@@ -58,6 +58,12 @@ func AliasesFile(base string) string { return filepath.Join(base, "aliases.yaml"
 // StateFile returns the path to state.json under base.
 func StateFile(base string) string { return filepath.Join(base, "state.json") }
 
+// CredentialsFile returns the path to credentials.json under base (design
+// decision 14): the device's server-issued token, stored separately from
+// config.yaml and state.json so a live credential never travels alongside a
+// file users are encouraged to inspect and paste into an issue.
+func CredentialsFile(base string) string { return filepath.Join(base, "credentials.json") }
+
 // ExpandPath expands a leading "~" and any embedded "$HOME" in path against
 // env's home directory. It is used both for Base's overrides and for
 // user-supplied paths such as config.yaml's source.path (PROJECT.md §7.3).

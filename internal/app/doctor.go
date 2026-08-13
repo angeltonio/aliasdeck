@@ -8,6 +8,7 @@ import (
 
 	"github.com/angeltonio/aliasdeck/internal/config"
 	"github.com/angeltonio/aliasdeck/internal/domain"
+	"github.com/angeltonio/aliasdeck/internal/source"
 	"github.com/angeltonio/aliasdeck/internal/state"
 	"github.com/angeltonio/aliasdeck/internal/validate"
 )
@@ -36,29 +37,57 @@ type DoctorReport struct {
 	Warnings []string
 }
 
-// Doctor performs its own independent read-and-validate pass over the
-// active aliases.yaml: the same domain.Resolve → validate.Config sequence
-// FileSource.Resolve runs internally, except the issues are returned
-// instead of discarded. It never calls Source.Resolve and never writes
-// anything.
-func Doctor(_ context.Context, env Env, opts Options) (DoctorReport, error) {
+// Doctor performs its own independent read-and-validate pass: the same
+// domain.Resolve → validate.Config sequence a ConfigSource's Resolve runs
+// internally, except the issues are returned instead of discarded.
+//
+// For a file-backed or Git-backed device it re-reads aliases.yaml directly
+// and never calls Source.Resolve, so it stays read-only and offline for
+// those sources. A server-backed device has no local file to re-read, so
+// when Source implements source.UnfilteredResolver (design decision 12,
+// ServerSource's additive interface), Doctor calls ResolveUnfiltered
+// instead: the same resolved-but-not-yet-filtered configuration Resolve
+// itself would have filtered, letting Doctor explain exactly what
+// validate.FilterValid would drop and why (server-source spec's success
+// criterion 3) without a second HTTP call and without widening
+// ConfigSource.Resolve's own signature.
+func Doctor(ctx context.Context, env Env, opts Options) (DoctorReport, error) {
 	dc, err := loadDeviceContext(env, opts)
 	if err != nil {
 		return DoctorReport{}, err
 	}
+	return doctorFromContext(ctx, env, dc)
+}
 
-	data, err := os.ReadFile(dc.AliasesPath)
-	if err != nil {
-		return DoctorReport{}, fmt.Errorf("reading %s: %w", dc.AliasesPath, err)
-	}
-	doc, err := config.ParseAliases(data)
-	if err != nil {
-		return DoctorReport{}, ConfigError{Err: fmt.Errorf("parsing %s: %w", dc.AliasesPath, err)}
-	}
+// doctorFromContext is Doctor's implementation over an already-resolved
+// deviceContext, so a test can exercise the server-source branch (task 7.8)
+// against a fake source.UnfilteredResolver without needing config.yaml's
+// source.type: server to already resolve through resolveSource — that
+// wiring is Phase 8's own task (8.1), not this one.
+func doctorFromContext(ctx context.Context, env Env, dc deviceContext) (DoctorReport, error) {
+	var issues validate.Issues
+	var profileWarnings []string
 
-	resolved := domain.Resolve(dc.Device, doc.Aliases)
-	issues := validate.Config(resolved)
-	profileWarnings := config.ProfileWarnings(doc.Profiles, doc.Aliases)
+	if ur, ok := dc.Source.(source.UnfilteredResolver); ok {
+		resolved, err := ur.ResolveUnfiltered(ctx, dc.Device)
+		if err != nil {
+			return DoctorReport{}, err
+		}
+		issues = validate.Config(resolved)
+	} else {
+		data, err := os.ReadFile(dc.AliasesPath)
+		if err != nil {
+			return DoctorReport{}, fmt.Errorf("reading %s: %w", dc.AliasesPath, err)
+		}
+		doc, err := config.ParseAliases(data)
+		if err != nil {
+			return DoctorReport{}, ConfigError{Err: fmt.Errorf("parsing %s: %w", dc.AliasesPath, err)}
+		}
+
+		resolved := domain.Resolve(dc.Device, doc.Aliases)
+		issues = validate.Config(resolved)
+		profileWarnings = config.ProfileWarnings(doc.Profiles, doc.Aliases)
+	}
 
 	var warnings []string
 

@@ -2,12 +2,14 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/angeltonio/aliasdeck/internal/config"
+	"github.com/angeltonio/aliasdeck/internal/domain"
 	"github.com/angeltonio/aliasdeck/internal/source"
 	"github.com/angeltonio/aliasdeck/internal/state"
 )
@@ -240,4 +242,96 @@ func dirEntryNames(entries []os.DirEntry) []string {
 		names = append(names, e.Name())
 	}
 	return names
+}
+
+// fakeUnfilteredSource is a minimal source.ConfigSource + source.
+// UnfilteredResolver double for task 7.8: Doctor must call ResolveUnfiltered
+// for a server-backed source (design decision 12), never Resolve, because
+// Resolve returns the already-filtered set and would leave Doctor with
+// nothing left to explain.
+type fakeUnfilteredSource struct {
+	unfiltered    domain.ResolvedConfig
+	unfilteredErr error
+	calls         int
+}
+
+func (f *fakeUnfilteredSource) Resolve(context.Context, domain.Device) (domain.ResolvedConfig, error) {
+	return domain.ResolvedConfig{}, fmt.Errorf("Resolve must not be called by Doctor for a source.UnfilteredResolver")
+}
+
+func (f *fakeUnfilteredSource) ResolveUnfiltered(context.Context, domain.Device) (domain.ResolvedConfig, error) {
+	f.calls++
+	if f.unfilteredErr != nil {
+		return domain.ResolvedConfig{}, f.unfilteredErr
+	}
+	return f.unfiltered, nil
+}
+
+var (
+	_ source.ConfigSource       = (*fakeUnfilteredSource)(nil)
+	_ source.UnfilteredResolver = (*fakeUnfilteredSource)(nil)
+)
+
+// TestDoctorExplainsWhatFilterValidWouldDropForAServerSource is task 7.8's
+// RED test: for a source.UnfilteredResolver, Doctor must use the unfiltered
+// alias set to explain exactly what validate.FilterValid would drop and
+// why (server-source spec's success criterion 3), rather than reading a
+// local aliases.yaml that a server-backed device does not have.
+func TestDoctorExplainsWhatFilterValidWouldDropForAServerSource(t *testing.T) {
+	te := newTestEnv(t)
+	dev := domain.Device{ID: "dev-1", Platform: domain.PlatformLinux, Shell: domain.ShellBash}
+
+	hostile := domain.Alias{Name: "evil;rm", Command: "echo hi", Enabled: true}
+	safe := domain.Alias{Name: "safe", Command: "echo safe", Enabled: true}
+	fake := &fakeUnfilteredSource{
+		unfiltered: domain.ResolvedConfig{Device: dev, Aliases: []domain.Alias{safe, hostile}},
+	}
+
+	dc := deviceContext{
+		Base:       te.Base,
+		Device:     dev,
+		Source:     fake,
+		SourceDesc: source.Descriptor{Type: "server", Ref: "https://aliases.example.com"},
+	}
+
+	report, err := doctorFromContext(context.Background(), te.Env, dc)
+	if err != nil {
+		t.Fatalf("doctorFromContext() returned an error: %v", err)
+	}
+
+	if fake.calls != 1 {
+		t.Fatalf("ResolveUnfiltered called %d times, want exactly 1", fake.calls)
+	}
+
+	if !report.Issues.HasErrors() {
+		t.Fatal("Issues.HasErrors() = false, want true for the hostile server-sourced alias name")
+	}
+	found := false
+	for _, issue := range report.Issues {
+		if issue.AliasName == "evil;rm" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("Issues does not mention the hostile server-sourced alias: %+v", report.Issues)
+	}
+}
+
+// TestDoctorPropagatesServerSourceResolveUnfilteredError proves a network
+// failure surfaces rather than being swallowed into an empty report.
+func TestDoctorPropagatesServerSourceResolveUnfilteredError(t *testing.T) {
+	te := newTestEnv(t)
+	dev := domain.Device{ID: "dev-1", Platform: domain.PlatformLinux, Shell: domain.ShellBash}
+
+	fake := &fakeUnfilteredSource{unfilteredErr: fmt.Errorf("server unreachable")}
+	dc := deviceContext{
+		Base:       te.Base,
+		Device:     dev,
+		Source:     fake,
+		SourceDesc: source.Descriptor{Type: "server", Ref: "https://aliases.example.com"},
+	}
+
+	if _, err := doctorFromContext(context.Background(), te.Env, dc); err == nil {
+		t.Fatal("doctorFromContext() must propagate a ResolveUnfiltered error")
+	}
 }
