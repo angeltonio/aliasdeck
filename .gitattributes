@@ -1,0 +1,16 @@
+# Check out LF everywhere, including on Windows.
+#
+# Without this, Git's Windows default rewrites files to CRLF on checkout, and
+# `gofmt -l` then reports every file in the repository as unformatted — which
+# is what the first Windows CI run did. A contributor on Windows would see the
+# same thing, and their first `make fmt` would rewrite the entire tree.
+#
+# LF is also what this project's own output uses: the generated alias files are
+# LF on every platform, deliberately, so that rendering is byte-deterministic
+# regardless of the machine that produced it. Preserving a user's CRLF happens
+# in their profile, which AliasDeck does not own — not in files it writes.
+* text=auto eol=lf
+
+# Golden files are byte-exact expectations. Any normalisation at all would make
+# them compare unequal to what the renderer produced.
+*.golden -text
