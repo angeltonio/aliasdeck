@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -290,8 +291,24 @@ func TestBootstrapWritesGeneratedPasswordToFileWhenPathGiven(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat %s: %v", path, err)
 	}
-	if info.Mode().Perm() != 0o600 {
-		t.Fatalf("password file mode = %o, want 0600", info.Mode().Perm())
+	// Windows has no POSIX mode bits — Go's Chmod there toggles only the
+	// read-only bit, so a file this test just wrote reports 0666 and the
+	// 0600 assertion below cannot hold. This mirrors
+	// sqlitestore.TestOpenCreatesDatabaseAtRestrictedMode exactly rather
+	// than introducing a second way of saying the same thing; design.md's
+	// "Windows 0600 Gap" is one gap with one set of mitigations, and the
+	// delivery file falls under it for the same reason the database does.
+	//
+	// The assertion is kept on the platforms that can honor it instead of
+	// skipped everywhere, because a test that declines to check the
+	// security property on every platform is not a weaker test — it is a
+	// test of nothing.
+	if runtime.GOOS == "windows" {
+		if perm := info.Mode().Perm(); perm&0o200 == 0 {
+			t.Errorf("password file mode = %o, want a writable file", perm)
+		}
+	} else if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("password file mode = %o, want %o", perm, 0o600)
 	}
 
 	data, err := os.ReadFile(path)
