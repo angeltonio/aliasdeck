@@ -74,3 +74,12 @@ When the server is unreachable, `ServerSource.Resolve` MUST return an error nami
 - GIVEN a server that accepts the connection but never responds
 - WHEN `sync` runs
 - THEN it fails after the configured timeout rather than hanging
+
+### Requirement: Sync Request Never Follows a Redirect
+
+`ServerSource` MUST refuse any HTTP redirect returned by the sync endpoint, before the redirect target is ever contacted, regardless of the target's scheme or host. This exists because Go's default redirect handling forwards the `Authorization` header whenever the redirect target's host matches the original request's host — a comparison that ignores scheme — so an unrefused redirect could re-send the device token to an `http://` target even though the configured `source.url` is `https://`.
+
+#### Scenario: Same-host scheme-downgrading redirect refused
+- GIVEN a sync endpoint that answers with a redirect to the same host over `http://`
+- WHEN `sync` runs
+- THEN the request fails naming the refused redirect, and the device token is never sent to the redirect target

@@ -1108,3 +1108,281 @@ correction pass as task 5.16). Remaining: Phases 6–10 (`internal/sync`,
 `ServerSource`/credentials, CLI wiring, cross-cutting verification,
 release/CI/docs). Ready for `sdd-verify` on this corrected slice, or for the
 next apply batch to start Phase 6.
+
+## Phase 7 — Bounded-Review Correction Pass (four-lens)
+
+Phases 6 and 7's own initial apply batches were not recorded in this file
+before this correction pass began (their work is reflected only in
+`tasks.md`'s per-task notes, already marked `[x]`); this section records only
+the correction pass itself, applied on top of that already-landed Phase 7
+work (`internal/source/{server,url}.go`, `internal/source/hostile_test.go`,
+`internal/config/credentials.go`).
+
+A four-lens bounded review of Phase 7 produced 1 CRITICAL, 2 WARNING, and 1
+SUGGESTION finding. All four are fixed in this batch.
+
+### CRITICAL 1 — the device token was sent in cleartext via a same-host redirect
+
+`ServerSource` set `Authorization: Bearer <device token>` and called
+`Do(req)` on a client with no `CheckRedirect`. Go's default redirect
+handling follows up to 10 redirects and forwards the `Authorization` header
+whenever the redirect target's *canonical host:port* matches the original
+request's (`net/http`'s `shouldCopyHeaderOnRedirect` / `canonicalAddr`) — a
+comparison that never inspects scheme. So `https://your-server` → `302` →
+`http://your-server` (same explicit host:port) kept re-sending the device
+token over plaintext. This defeats design decision 13's exact guarantee: its
+own rationale is that re-checking `ValidateServerURL` on every sync stops a
+hand-edited `config.yaml` from quietly downgrading a device enrolled
+securely — a hostile or misconfigured server (or a same-host reverse-proxy
+rule) achieves the identical downgrade with one 302, and `ValidateServerURL`
+never sees it, because it only inspects the configured base URL before the
+request leaves, never a `Location` header the server returns afterward.
+
+**Fix**: refuse every redirect outright, not only a scheme-downgrading one.
+`internal/source/server.go`'s `httpClient()` now always constructs a fresh
+`*http.Client` with `CheckRedirect: refuseRedirect` — wrapping, never
+mutating, a caller-supplied `Client`'s own `Transport`/`Jar`/`Timeout` — so a
+`*http.Client` value the caller owns and may use elsewhere is never touched,
+while every request this package sends is bound by the refusal regardless of
+whether `Client` was provided. `fetchSync` matches the resulting error with
+`errors.Is(err, errRedirectRefused)` and reports it by name rather than
+folding it into the generic "unreachable" wording every other transport
+error there gets. Recorded as design decision 31; new threat-matrix row
+"Same-host redirect on the sync request"; new spec requirement "Sync Request
+Never Follows a Redirect" (`specs/server-source/spec.md`).
+
+New regression test: `TestServerSourceRefusesRedirectToADifferentSchemeSameHost`
+(`internal/source/server_test.go`). It models both legs with real httptest
+servers — one TLS, one plain — via a test-only `schemeRoutingTransport` that
+routes each leg's actual network dial to whichever real server matches its
+scheme, while both legs' logical request URLs (what Go's own redirect
+bookkeeping compares) name one shared, non-existent `host:port` string —
+reproducing the exact "same host:port, different scheme" shape
+`shouldCopyHeaderOnRedirect` checks, with no fixed port bound anywhere (the
+shared host:port string has nothing real listening on it at all).
+
+#### Mutation evidence (CRITICAL 1)
+
+Reverted `httpClient()` to its pre-fix form (no `CheckRedirect`) and ran the
+new test:
+
+```
+$ go test -count=1 -run 'TestServerSourceRefusesRedirectToADifferentSchemeSameHost' -v ./internal/source/...
+=== RUN   TestServerSourceRefusesRedirectToADifferentSchemeSameHost
+    server_test.go:402: Resolve() = nil error, want a rejection for a redirect
+--- FAIL: TestServerSourceRefusesRedirectToADifferentSchemeSameHost (0.01s)
+FAIL
+```
+
+Reverting the assertion from `t.Fatal` to `t.Error` (so execution continues
+past the first failure) on the same mutated code additionally reached the
+cleartext assertion — before that assertion could run, the test panicked on
+a nil-error dereference in its own follow-up `strings.Contains(err.Error(),
+...)` check, which is itself further evidence the code path genuinely
+returned `nil, <config>` with the redirect having been followed (a real
+failure here, not a testing artifact, would have produced a non-nil error
+instead). Both the mutation and the test-assertion change were reverted
+immediately after capturing this output; the full suite was re-verified
+green afterward (`go test -count=1 ./internal/source/...`).
+
+### WARNING 2 — the hostile-table negative control covered 1 of 17 rows
+
+`TestHostileServerAliasNeverBypassesFilterValid` constructed exactly one
+alias (`evil;rm-rf`) to prove the drops in
+`TestHostileServerAliasDroppedIdenticallyToFileSource` are
+`validate.FilterValid`'s own doing. For the other 16 rows, that main table's
+assertion — absence from a map keyed by the original name — cannot
+distinguish "`FilterValid` dropped it" from "it never arrived intact for
+some unrelated reason" (a malformed fixture entry falling out during parsing
+or resolution would still pass that assertion while proving nothing about
+the defense for that row).
+
+**Fix**: extended the negative control to a table-driven test over all 17
+`hostileAliasCases` rows (`internal/source/hostile_test.go`), each
+sub-test proving `domain.Resolve` alone keeps the alias and only
+`validate.FilterValid` then reports an issue for it.
+
+#### Mutation evidence (WARNING 2)
+
+Forced every row to fail `domain.Resolve` itself (leaving `Enabled: false`,
+simulating "never arrived intact for an unrelated reason") and ran the
+extended test:
+
+```
+$ go test -count=1 -run 'TestHostileServerAliasNeverBypassesFilterValid' -v ./internal/source/...
+    hostile_test.go:333: test fixture is broken: domain.Resolve alone dropped "evil;rm-rf" (shell metacharacter in name: semicolon command separator) before FilterValid ran
+    ... (identical failure for all 17 rows, one per sub-test)
+--- FAIL: TestHostileServerAliasNeverBypassesFilterValid (0.00s)
+    --- FAIL: TestHostileServerAliasNeverBypassesFilterValid/shell_metacharacter_in_name:_semicolon_command_separator (0.00s)
+    ... (17 of 17 sub-tests FAIL)
+FAIL
+```
+
+This mutation affects every row identically (rather than isolating one row
+while the other 16 still pass), which is a stronger — not weaker — proof
+than the finding strictly required: it confirms the fixture-broken
+`t.Fatalf` branch this batch added actually fires and fails the suite,
+closing the exact gap where the old single-case test would have stayed
+silent for 16 of 17 rows. Reverted immediately after capturing this output;
+`go test -count=1 ./internal/source/...` re-verified green.
+
+### WARNING 3 — the atomic-write tests never proved the original survives
+
+Neither existing failure test in `internal/config/credentials_test.go`
+seeded a real pre-existing `credentials.json` before inducing its failure:
+one gives the file a parent that is a regular file (so no directory, and
+therefore no prior file, can exist at that path at all); the other replaces
+the destination itself with a directory (so there is no prior *file*
+content to compare, only a directory). Both prove no temp file leaks;
+neither proves the other half of what an atomic write exists to
+guarantee — that a credentials file already on disk survives a write that
+fails partway, which is exactly what a second `register` or a token
+rotation attempt hitting a transient failure would need.
+
+**Fix**: added
+`TestCredentialsSaveFailsWhenTheDirectoryCannotBeWrittenToPreservesExistingCredentials`.
+It seeds a real credentials file via a first successful `SaveCredentials`
+call, records its bytes, makes its directory unwritable (`chmod 0o555` —
+skipped on Windows, where this permission bit is not reliably enforced; the
+same reason `state.TestStateSaveFailsWhenTempFileCannotBeCreated`'s own
+history gives for moving away from a directory-permission-based induction
+when a pre-existing file at the target path is not required, which is not
+the case here), induces a failed second `SaveCredentials` call with
+different content, and asserts the file's bytes and the values
+`LoadCredentials` returns for it are byte-identical/unchanged afterward.
+
+#### Mutation evidence (WARNING 3)
+
+Rewrote `SaveCredentials` to write directly to `path` via `os.WriteFile`
+(bypassing the temp-file-then-rename pattern entirely) and ran the new test:
+
+```
+$ go test -count=1 -v ./internal/config/... -run 'TestCredentialsSaveFailsWhenTheDirectoryCannotBeWrittenToPreservesExistingCredentials'
+=== RUN   TestCredentialsSaveFailsWhenTheDirectoryCannotBeWrittenToPreservesExistingCredentials
+    credentials_test.go:249: SaveCredentials() must return an error when its directory cannot be written to
+--- FAIL: TestCredentialsSaveFailsWhenTheDirectoryCannotBeWrittenToPreservesExistingCredentials (0.00s)
+FAIL
+```
+
+Changing the first assertion from `t.Fatal` to `t.Error` on the same
+mutation (so execution continues) surfaced the byte-identity failure this
+test exists to catch, directly:
+
+```
+    credentials_test.go:249: SaveCredentials() must return an error when its directory cannot be written to
+    credentials_test.go:261: credentials.json changed after a failed write:
+        before: {
+          "version": 1,
+          "serverUrl": "https://aliases.example.com",
+          "deviceId": "device-abc123",
+          "deviceToken": "add_lookup123.secret456",
+          "obtainedAt": "2026-01-15T10:30:00Z"
+        }
+        after:  {
+          "version": 1,
+          "serverUrl": "https://aliases.example.com",
+          "deviceId": "device-abc123",
+          "deviceToken": "add_shouldnotland.secret",
+          "obtainedAt": "2026-01-15T10:30:00Z"
+        }
+    credentials_test.go:269: DeviceToken after a failed write = "add_shouldnotland.secret", want the original "add_lookup123.secret456" (unchanged)
+--- FAIL: TestCredentialsSaveFailsWhenTheDirectoryCannotBeWrittenToPreservesExistingCredentials (0.00s)
+```
+
+This confirms both halves of the test have teeth: the mutated non-atomic
+write neither returns an error under a directory it cannot itself create a
+temp file in, nor leaves the pre-existing credentials untouched — it
+silently succeeds and clobbers the original `DeviceToken` with the failed
+attempt's own value, exactly the corruption atomic write exists to prevent.
+Both the mutation and the test-assertion change were reverted immediately
+after capturing this output; the full suite was re-verified green afterward
+(`go build ./...`, `go vet ./...`, `go test -count=1 ./internal/config/...`).
+
+### SUGGESTION 4 — `ResolveUnfiltered` read as the fuller variant, not the dangerous one
+
+`Resolve`, `FileSource`, and `GitSource` all state plainly in their doc
+comments that their input is hostile and gets no lesser scrutiny.
+`ResolveUnfiltered`'s comment said only that it skips `validate.FilterValid`,
+reading as "the fuller version" of `Resolve` rather than "the deliberately
+unvalidated one" — a reader looking for "the alias set from the server"
+could reach for it by name with none of the red flags its siblings carry.
+
+**Fix**: rewrote both `UnfilteredResolver`'s interface-level doc comment and
+`ResolveUnfiltered`'s method-level doc comment (`internal/source/server.go`)
+to state directly that the result is unvalidated hostile input, that it
+exists for exactly one caller (`doctor`), and that it must never reach a
+renderer, a write path, or any shell-executed output. No behavior change —
+documentation only.
+
+### Verification (this batch)
+
+```
+$ go build ./...
+$ go vet ./...
+$ gofmt -l .
+(no output — nothing to format)
+$ go test -count=1 ./...
+ok  	github.com/angeltonio/aliasdeck/cmd/aliasdeck	2.380s
+ok  	github.com/angeltonio/aliasdeck/internal/api	1.620s
+ok  	github.com/angeltonio/aliasdeck/internal/app	7.101s
+ok  	github.com/angeltonio/aliasdeck/internal/apply	2.202s
+ok  	github.com/angeltonio/aliasdeck/internal/archtest	2.415s
+ok  	github.com/angeltonio/aliasdeck/internal/auth	1.255s
+ok  	github.com/angeltonio/aliasdeck/internal/config	1.480s
+ok  	github.com/angeltonio/aliasdeck/internal/domain	1.708s
+ok  	github.com/angeltonio/aliasdeck/internal/renderers	2.634s
+ok  	github.com/angeltonio/aliasdeck/internal/server	3.035s
+?   	github.com/angeltonio/aliasdeck/internal/shelltest	[no test files]
+ok  	github.com/angeltonio/aliasdeck/internal/source	7.632s
+ok  	github.com/angeltonio/aliasdeck/internal/state	2.074s
+ok  	github.com/angeltonio/aliasdeck/internal/store	2.212s
+ok  	github.com/angeltonio/aliasdeck/internal/store/sqlitestore	2.510s
+?   	github.com/angeltonio/aliasdeck/internal/store/storetest	[no test files]
+ok  	github.com/angeltonio/aliasdeck/internal/sync	2.181s
+ok  	github.com/angeltonio/aliasdeck/internal/validate	2.388s
+$ go test -count=1 -race ./internal/source/... ./internal/app/... ./internal/config/...
+ok  	github.com/angeltonio/aliasdeck/internal/source	6.100s
+ok  	github.com/angeltonio/aliasdeck/internal/app	4.592s
+ok  	github.com/angeltonio/aliasdeck/internal/config	2.100s
+$ go test -count=1 ./internal/archtest
+ok  	github.com/angeltonio/aliasdeck/internal/archtest	1.194s
+```
+
+Six cross-compiles, `CGO_ENABLED=0` (scratch output directory, not committed):
+
+| Target | Size | Budget (25 MB) |
+|---|---|---|
+| darwin/amd64 | 17,937,120 bytes (~17.1 MiB) | OK |
+| darwin/arm64 | 17,169,586 bytes (~16.4 MiB) | OK |
+| linux/amd64 | 17,574,718 bytes (~16.8 MiB) | OK |
+| linux/arm64 | 16,723,031 bytes (~16.0 MiB) | OK |
+| windows/amd64 | 18,070,016 bytes (~17.2 MiB) | OK |
+| windows/arm64 | 16,915,968 bytes (~16.1 MiB) | OK |
+
+## Work Unit Evidence (Phase 7 correction pass)
+
+| Evidence | Value |
+|---|---|
+| Focused test command and exact result | `go test -count=1 ./internal/source/... ./internal/config/...` → both `ok` |
+| Runtime harness command/scenario and exact result | `httptest.NewServer`/`httptest.NewTLSServer`-backed `ServerSource` integration (`TestServerSourceRefusesRedirectToADifferentSchemeSameHost`, plus the pre-existing Phase 7 suite) — real listeners, ephemeral ports only, no fixed port bound |
+| Rollback boundary | Revert `internal/source/server.go`, `internal/source/server_test.go`, `internal/source/hostile_test.go`, `internal/config/credentials_test.go`, plus the `design.md`/`specs/server-source/spec.md`/`tasks.md` doc edits (decision 31, new threat-matrix row, new spec requirement, task 7.10). Nothing outside `internal/source` and `internal/config` was touched; Phase 8 does not exist yet to depend on any of it |
+
+## Workload / PR Boundary (Phase 7 correction pass)
+
+- Mode: Feature Branch Chain slice, continuing PR 7's boundary (this is a
+  correction pass over the same work unit, not a new one)
+- Current work unit: Phase 7 correction — 1 CRITICAL + 2 WARNING + 1
+  SUGGESTION finding, all fixed
+- Boundary: see Rollback boundary above
+- Estimated review budget impact: small — one production-code change
+  (`httpClient`'s `CheckRedirect` wrapping, plus two doc-comment rewrites),
+  three new/extended test functions, no new dependencies, no new files
+
+## Status (Phase 7)
+
+Phase 7 complete (10/10, including this correction pass as task 7.10).
+Remaining: Phase 8 (`internal/app`/`cmd/aliasdeck` CLI wiring — `login`,
+`register`, `logout`, server-aware `status`/`doctor`/`edit`/`uninstall`),
+Phase 9 (cross-cutting verification), Phase 10 (release/CI/docs). Ready for
+`sdd-verify` on this corrected Phase 7 slice, or for the next apply batch to
+start Phase 8.
