@@ -1,8 +1,10 @@
-// Package server is the composition root for `aliasdeck serve`: it wires
-// internal/store, internal/auth, internal/api and internal/sync into one
-// http.Server, applies startup migrations, and owns bounded shutdown.
+// Package server is the composition root for `aliasdeck serve`: it opens
+// and migrates internal/store, bootstraps the first operator via
+// internal/auth, and serves one bounded http.Server behind Run(ctx).
 //
-// This file is a skeleton only (Milestone 4, Phase 1): it exists so the
-// import graph internal/archtest verifies is present from the first commit
-// on. Behavior lands in Phase 4.
+// Phase 4 (this phase) wires the composition root, the bounded http.Server,
+// startup migration ordering, and the unauthenticated health endpoint.
+// internal/api's full router — the CRUD handlers, sync, and every
+// authenticated route — lands in Phase 5 and replaces this package's
+// placeholder handler wholesale, never its health path or its bounds.
 package server

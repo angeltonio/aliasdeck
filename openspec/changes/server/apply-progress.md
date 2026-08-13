@@ -197,9 +197,6 @@ All six succeeded for both the pre-stub and stub trees, satisfying constraint 2 
 
 ## Remaining Tasks
 
-- [ ] Phase 2: Server Persistence (`internal/store`)
-- [ ] Phase 3: Server Auth (`internal/auth`)
-- [ ] Phase 4: Server Runtime (`internal/server`, `cmd/aliasdeck/serve.go`)
 - [ ] Phase 5: Server API (`internal/api`)
 - [ ] Phase 6: Server Sync (`internal/sync`, `internal/api/sync.go`)
 - [ ] Phase 7: ServerSource & Credentials (`internal/source`, `internal/config`)
@@ -207,13 +204,200 @@ All six succeeded for both the pre-stub and stub trees, satisfying constraint 2 
 - [ ] Phase 9: Cross-Cutting Verification
 - [ ] Phase 10: Release, CI & Docs
 
+Phases 2–4 completed in intervening apply batches; their per-task detail is
+recorded directly in `tasks.md` (this file's Phase 1 section predates that
+convention). This file resumes with the Phase 4 bounded-review correction
+pass below.
+
+## Phase 4 — Bounded-Review Correction Pass (Second Pass)
+
+**Scope**: a four-lens review of the already-`[x]`-complete Phase 4
+(`internal/server`, `cmd/aliasdeck/serve.go`) plus its one permitted
+excursion into `internal/auth/bootstrap.go` (CRITICAL 2's explicitly
+correct home), found 2 CRITICAL, 7 WARNING, and 2 SUGGESTION findings. All
+were reproducible or directly actionable from design.md/spec text; none
+were re-litigated. `tasks.md` 3.6 and 4.2/4.5/4.6 now carry per-finding
+"Post-review correction (bounded-review, second pass)" notes at their
+original task locations; this section is the batch-level summary.
+
+### CRITICAL 1 — default bind address
+
+`defaultServeAddr` changed from `":8080"` (wildcard) to `"127.0.0.1:8080"`
+(loopback). `--addr`'s help text now states the default and names what
+widening it means. Recorded as `design.md` decision 21 and a new threat
+matrix row ("Default network exposure").
+
+### CRITICAL 2 — bootstrap password vs. a persistent log
+
+`auth.Bootstrap` gained a `passwordFilePath string` parameter: empty
+preserves the original console-print behavior byte-for-byte (every
+pre-existing call site passes `""`); non-empty makes it write the password
+atomically at `0600` (mirroring `internal/state.Save`'s existing
+temp-file-then-rename pattern — the project's second use of that pattern,
+not a third) and print only the file's path. Delivery was reordered to run
+*before* the operator row is created, so a failed delivery leaves no
+operator behind for a clean retry. The terminal probe itself
+(`github.com/mattn/go-isatty`, promoted from indirect to a direct
+dependency) lives in `cmd/aliasdeck/serve.go`'s new `isTerminalWriter` and
+`bootstrapPasswordFilePath`, threaded through a new
+`server.Config.BootstrapPasswordFile` field — `internal/auth` performs no
+terminal detection itself. Recorded as `design.md` decision 22 and a new
+threat matrix row ("Bootstrap password destination").
+
+**Deviation from a strict reading of the constraint** ("change nothing
+else in `internal/auth`"): `internal/auth/bootstrap_test.go` also required
+edits — every existing call site needed the new parameter added (`""` to
+preserve behavior), which is unavoidable once `Bootstrap`'s exported
+signature changes; the package cannot compile otherwise. No other file in
+`internal/auth` (`token.go`, `password.go`, `middleware.go`, `errors.go`,
+`doc.go`, or their tests) was touched. Three new tests were added to
+`bootstrap_test.go` for the file-delivery path, including the
+delivery-before-create failure case.
+
+### WARNING 3 — SIGTERM ambiguity during startup
+
+`Run` now checks `ctx.Err()` immediately after `OpenStore` or `Bootstrap`
+fails, returning `nil` when the caller itself cancelled instead of
+wrapping the error. A genuine failure never flips `ctx.Err()` on its own,
+so this cannot mask one. Two new tests
+(`TestRunReturnsNilWhenCancelledDuringOpenStore`,
+`TestRunReturnsNilWhenCancelledDuringBootstrap`) exercise the seam that
+already existed for this; a `blockingBootstrapStore`/`blockingOperatorRepo`
+pair was added so the Bootstrap case could be driven independently of the
+OpenStore case.
+
+### WARNING 4 — `defer st.Close()` unverified
+
+`fakeStore.isClosed()` existed but was called from nowhere.
+`TestRunClosesStoreAfterReturning` now calls it, asserting `false` before
+shutdown and `true` after `Run` returns.
+
+### WARNING 5 — health body/content-type unasserted
+
+`TestRunHealthEndpointRequiresNoAuthentication` now asserts the exact body
+(`{"status":"ok"}\n`) and `Content-Type` header, not just the status code.
+
+### WARNING 6 — 10s drain default unpinned
+
+New `internal/server/config_test.go`:
+`TestConfigWithDefaultsAppliesEveryDefault` asserts every field
+`withDefaults()` produces against a zero-value `Config`, including
+`ShutdownTimeout == 10s`; two sibling tests cover the explicit-override and
+non-mutation properties.
+
+### WARNING 7 — no test for `cmd/aliasdeck/serve.go`
+
+New `cmd/aliasdeck/serve_test.go`: flag wiring (`--addr`/`--db` defaults
+and help text), `resolveServeDBPath`'s precedence and idempotency against a
+pre-existing directory, and both new terminal-detection helpers. None
+invokes `newServeCmd()`'s `RunE` — doing so would start `server.Run`, a
+long-running process, which is exactly what this correction pass exists to
+avoid per the host-safety incident named in its own prompt. Every
+filesystem-touching case uses `t.TempDir()` via `ALIASDECK_HOME`, matching
+`main_test.go`'s existing style.
+
+### WARNING 8 — `MkdirAll` mode mismatch
+
+`resolveServeDBPath`'s `os.MkdirAll(base, 0o700)` did not match `init`
+(`internal/app/init.go`), `config.Write` (`internal/config/device.go`), or
+`state.Save` (`internal/state/state.go`) — all three use `0o755` for this
+same shared base directory — and the doc comment's claim that it mirrored
+`init` was false (verified: `init` uses `0o755`, not `0o700`). Changed to
+`0o755` and the comment now names the three call sites it matches instead
+of asserting an unverified claim. The database file itself stays `0600`
+regardless (decision 19, unaffected — this was purely a directory-mode
+question). `config.yaml`/`aliases.yaml`, which already share this
+directory, are unaffected by the change since `0o755` is what they already
+assumed.
+
+### WARNING 9 — `Bootstrap` call uncovered inside `Run`
+
+`fakeStore` gained `emptyOperators`/`createErr` fields and
+`newFakeStoreWithEmptyOperators`/`newFakeStoreWithOperatorCreateError`
+constructors, plus a `createWasCalled()` accessor backed by an
+`onCreate` callback threaded through `fakeOperatorRepo.Create`.
+`TestRunBootstrapsOperatorOnEmptyStore` and
+`TestRunWrapsBootstrapErrorFromOperatorCreate` now drive both branches and
+assert `createWasCalled()` — not just that `Run` returned the expected
+result, which a weaker version of these tests would not have caught (see
+mutation evidence below).
+
+### SUGGESTION 10 — bounds table values with no stated rationale
+
+`server.go`'s bound-constants doc comment and `design.md`'s Bounded
+Operations table row both now state plainly that the five `http.Server`
+values are conventional defaults, not measurements — matching
+`GitTimeout`'s house style of recording either a real measurement or an
+honest absence of one, per the finding's own framing.
+
+### SUGGESTION 11 — health route only in comments
+
+Recorded as `design.md` decision 23: `/api/v1/health` is unauthenticated
+by design, and Phase 5's route slice must not remove or re-guard it —
+findable from the decision table the way decisions 9 and 15 already are,
+rather than only from a doc comment.
+
+### Mutation Evidence (findings 3–6, 9 — required by the correction prompt)
+
+Every mutation below was applied to a temporary copy, confirmed to fail the
+named test, then reverted and re-verified green.
+
+| Finding | Mutation | Result |
+|---|---|---|
+| 3 | Removed both `if ctx.Err() != nil { return nil }` checks in `Run` | `TestRunReturnsNilWhenCancelledDuringOpenStore` and `TestRunReturnsNilWhenCancelledDuringBootstrap` both FAIL: `Run() cancelled during OpenStore = server: opening store: context canceled, want nil`; `Run() cancelled during Bootstrap = server: bootstrapping operator: auth: counting operators: context canceled, want nil` |
+| 4 | Deleted `defer st.Close()` | `TestRunClosesStoreAfterReturning` FAILs: `Run() returned without closing the store — defer st.Close() must run` |
+| 5 | Removed `handleHealth`'s `Content-Type` header and added `"buildInfo":"mutated"` to its body | `TestRunHealthEndpointRequiresNoAuthentication` FAILs on both assertions: `Content-Type = "text/plain; charset=utf-8", want "application/json; charset=utf-8"` and `body = ...buildInfo...want exactly {"status":"ok"}\n` |
+| 6 | Changed `defaultShutdownTimeout` from `10 * time.Second` to `3 * time.Second` | `TestConfigWithDefaultsAppliesEveryDefault` FAILs: `withDefaults().ShutdownTimeout = 3s, want 10s` |
+| 9 | Removed the `auth.Bootstrap(...)` call from `Run` entirely (kept a `_ = auth.Bootstrap` reference so the package still compiles) | `TestRunBootstrapsOperatorOnEmptyStore` FAILs: `Run() returned successfully but never called Operators().Create`; `TestRunWrapsBootstrapErrorFromOperatorCreate` FAILs: `Run() = server: listening: Listen must not be called when Bootstrap fails, want an error wrapping operator create failed` |
+
+No mutation in this table failed to produce a failure — every one had
+teeth.
+
+### Verification
+
+- `go test -count=1 ./...`: all packages `ok` (no failures, no skips beyond
+  the pre-existing `[no test files]` packages).
+- `gofmt -l .`: no output (nothing unformatted).
+- `go vet ./...`: no output (clean).
+- Six cross-compiles, `CGO_ENABLED=0`:
+
+  | Target | Bytes | MiB |
+  |---|---|---|
+  | darwin/amd64 | 17,612,288 | 16.79 |
+  | darwin/arm64 | 16,862,834 | 16.08 |
+  | linux/amd64 | 17,261,974 | 16.46 |
+  | linux/arm64 | 16,448,655 | 15.68 |
+  | windows/amd64 | 17,755,648 | 16.93 |
+  | windows/arm64 | 16,633,344 | 15.86 |
+
+  All six well under the 25 MB CI budget; `github.com/mattn/go-isatty`
+  moving from indirect to direct added no meaningful size (it was already
+  linked transitively).
+- No fixed port was bound anywhere in this batch — every listener in every
+  test (new and pre-existing) uses `"127.0.0.1:0"` or an injected `Listen`
+  closure; no long-running process was started; nothing this batch touched
+  or stopped any process it did not itself start.
+
 ## Workload / PR Boundary
 
-- Mode: Feature Branch Chain slice (per tasks.md's "Suggested Work Units" — chain strategy itself is still `pending` at the orchestrator/delivery level; this batch stayed inside Unit 1's boundary regardless)
-- Current work unit: Unit 1 — "Decisions confirmed + skeleton packages + archtest import-graph guard (Phase 1)"
-- Boundary: starts from a clean `feat/server-foundation` (no prior commits) and ends with Phase 1 fully green; nothing outside this batch depends on it yet
-- Estimated review budget impact: small — mostly `doc.go` files, one guard test file, one CLI stub, and `go.mod`/`go.sum`; well under the 400-line budget on its own
+- Mode: Feature Branch Chain slice, continuing Phase 4's boundary (PR 4 per
+  tasks.md's "Suggested Work Units")
+- Current work unit: Phase 4 correction — `internal/server`,
+  `cmd/aliasdeck/serve.go`, plus the one permitted `internal/auth/bootstrap.go`
+  excursion
+- Boundary: reverting this batch means reverting
+  `internal/server/{server,config,handler,server_test,shutdown_test,fakestore_test,config_test}.go`,
+  `cmd/aliasdeck/serve.go` + new `cmd/aliasdeck/serve_test.go`,
+  `internal/auth/{bootstrap,bootstrap_test}.go`, and the `design.md`/`tasks.md`
+  doc updates — nothing outside Phase 4's own files was touched, and nothing
+  in Phases 5–10 exists yet to depend on any of it
+- Estimated review budget impact: moderate — primarily test additions and
+  doc comments; the only new production-code surface is `Bootstrap`'s new
+  parameter, `Run`'s two `ctx.Err()` checks, and `serve.go`'s two new small
+  helper functions
 
 ## Status
 
-6/6 Phase 1 tasks complete. Ready for verify (or for the next apply batch to start Phase 2).
+Phases 1–4 complete (30/30 tasks per `tasks.md`: 6+9+9+6), including this
+bounded-review correction pass over Phase 4. Ready for `sdd-verify`, or for
+the next apply batch to start Phase 5.

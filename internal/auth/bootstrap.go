@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/angeltonio/aliasdeck/internal/store"
@@ -50,11 +52,33 @@ const minAdminPasswordLength = 12
 // out receives the generated password exactly once, and only when one was
 // actually generated: never when ALIASDECK_ADMIN_PASSWORD supplied it, and
 // never on a restart against a database that already has an operator.
+//
+// passwordFilePath is the caller's resolved answer to "is out actually a
+// console a person will read?" (design decision 22). When it is empty, the
+// generated password is printed to out exactly as before. When it is not
+// empty, out is not treated as a safe destination for the secret itself —
+// under systemd's default StandardOutput=journal, out is stdout, and stdout
+// is the journal: persistent, journalctl-queryable, and exactly the "any
+// log" server-auth spec.md forbids twice. In that case Bootstrap instead
+// writes the password to passwordFilePath, atomically and at mode 0600
+// (mirroring internal/state.Save's existing atomic-write pattern — this is
+// the project's second use of it, not a third convention), and out receives
+// only a short notice naming that path, never the password. Bootstrap
+// itself never inspects os.Stdout or performs any terminal detection: that
+// decision belongs to the caller, who is the only one that knows what out
+// really is.
+//
+// Delivery — printing to out, or writing passwordFilePath — happens before
+// the operator row is created. If delivery fails, Bootstrap returns an
+// error and creates no operator, so the next start (still against an empty
+// database) can retry cleanly instead of leaving an operator whose password
+// nobody ever received.
+//
 // Bootstrap never writes to any logger — out is the caller's own
 // io.Writer, so the generated password's only destination is whatever the
 // caller wires out to (the process's stdout in production), never a log
 // sink.
-func Bootstrap(ctx context.Context, st store.Store, getenv func(string) string, out io.Writer) error {
+func Bootstrap(ctx context.Context, st store.Store, getenv func(string) string, out io.Writer, passwordFilePath string) error {
 	count, err := st.Operators().Count(ctx)
 	if err != nil {
 		return fmt.Errorf("auth: counting operators: %w", err)
@@ -79,6 +103,12 @@ func Bootstrap(ctx context.Context, st store.Store, getenv func(string) string, 
 		return fmt.Errorf("auth: hashing bootstrap password: %w", err)
 	}
 
+	if generated {
+		if err := deliverGeneratedPassword(out, passwordFilePath, password); err != nil {
+			return fmt.Errorf("auth: delivering bootstrap password: %w", err)
+		}
+	}
+
 	if _, err := st.Operators().Create(ctx, store.Operator{
 		Username:     bootstrapUsername,
 		PasswordHash: []byte(hash),
@@ -86,9 +116,75 @@ func Bootstrap(ctx context.Context, st store.Store, getenv func(string) string, 
 		return fmt.Errorf("auth: creating bootstrap operator: %w", err)
 	}
 
-	if generated {
-		fmt.Fprintf(out, "Generated operator password for %q (save this now — it will not be shown again): %s\n",
+	return nil
+}
+
+// deliverGeneratedPassword is Bootstrap's routing decision (design decision
+// 22): print directly to out when passwordFilePath is empty (out is a real
+// console), or write the password to passwordFilePath and print only its
+// path otherwise. It is exercised by both branches directly in
+// bootstrap_test.go — the axis under test is exactly this parameter, not any
+// terminal probe, which stays out of this package entirely.
+func deliverGeneratedPassword(out io.Writer, passwordFilePath, password string) error {
+	if passwordFilePath == "" {
+		_, err := fmt.Fprintf(out, "Generated operator password for %q (save this now — it will not be shown again): %s\n",
 			bootstrapUsername, password)
+		return err
+	}
+
+	if err := writeBootstrapPasswordFile(passwordFilePath, password); err != nil {
+		return err
+	}
+	_, err := fmt.Fprintf(out, "Generated operator password for %q written to %s (mode 0600) — read it, then secure or remove the file; it will not be written again.\n",
+		bootstrapUsername, passwordFilePath)
+	return err
+}
+
+// writeBootstrapPasswordFile writes password to path atomically and at mode
+// 0600: a temp file in the same directory, chmod'd before any content
+// touches it, then a rename — the same pattern internal/state.Save already
+// uses for state.json, so this is that pattern's second call site, not a
+// new one. The directory is created if missing (0755, matching config.Base's
+// existing directory convention) so a fresh install's first start does not
+// depend on some other command having run first.
+func writeBootstrapPasswordFile(path, password string) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("creating directory %s: %w", dir, err)
+	}
+
+	tmp, err := os.CreateTemp(dir, ".bootstrap-password.*.tmp")
+	if err != nil {
+		return fmt.Errorf("creating temp file in %s: %w", dir, err)
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+
+	if err := writeSyncCloseBootstrapPassword(tmp, password); err != nil {
+		return err
+	}
+
+	if err := os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("renaming %s to %s: %w", tmpPath, path, err)
+	}
+	return nil
+}
+
+func writeSyncCloseBootstrapPassword(f *os.File, password string) error {
+	if err := f.Chmod(0o600); err != nil {
+		f.Close()
+		return fmt.Errorf("setting mode on %s: %w", f.Name(), err)
+	}
+	if _, err := f.WriteString(password + "\n"); err != nil {
+		f.Close()
+		return fmt.Errorf("writing %s: %w", f.Name(), err)
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return fmt.Errorf("syncing %s: %w", f.Name(), err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("closing %s: %w", f.Name(), err)
 	}
 	return nil
 }
