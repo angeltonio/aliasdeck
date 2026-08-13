@@ -200,6 +200,16 @@ func (f *fakeTokenRepo) ConsumeEnrollment(_ context.Context, lookup string, dev 
 	if !ok {
 		return domain.Device{}, store.ErrNotFound
 	}
+	if tok.Kind != store.TokenKindEnrollment {
+		// Mirrors query.sql's ConsumeEnrollmentToken, whose WHERE clause
+		// filters on `kind = 'enrollment'`: in production a non-enrollment
+		// token affects zero rows, which tokenRepo maps to
+		// store.ErrConflict — the same outcome as an already-used token.
+		// Without this check the fake was more permissive than production
+		// in exactly the dimension ConsumeEnrollment's own kind guard
+		// exists to test (bounded-review finding).
+		return domain.Device{}, store.ErrConflict
+	}
 	if !tok.UsedAt.IsZero() || !tok.RevokedAt.IsZero() {
 		return domain.Device{}, store.ErrConflict
 	}

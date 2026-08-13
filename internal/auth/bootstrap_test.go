@@ -3,6 +3,7 @@ package auth
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -199,6 +200,73 @@ func TestBootstrapReadsNoStdin(t *testing.T) {
 	}
 	if out.Len() == 0 {
 		t.Fatal("Bootstrap() with stdin closed printed nothing, want the generated password still printed via out")
+	}
+}
+
+// TestBootstrapRejectsTooShortAdminPassword is the regression test for a
+// bounded-review finding: ALIASDECK_ADMIN_PASSWORD="a" flowed straight
+// into HashPassword with no rejection and no warning.
+func TestBootstrapRejectsTooShortAdminPassword(t *testing.T) {
+	ctx := context.Background()
+	st := newFakeBootstrapStore()
+	var out bytes.Buffer
+
+	const tooShort = "short7"
+	getenv := func(key string) string {
+		if key == AdminPasswordEnv {
+			return tooShort
+		}
+		return ""
+	}
+
+	err := Bootstrap(ctx, st, getenv, &out)
+	if !errors.Is(err, ErrWeakAdminPassword) {
+		t.Fatalf("Bootstrap() with a %d-character %s = %v, want ErrWeakAdminPassword", len(tooShort), AdminPasswordEnv, err)
+	}
+	if n, _ := st.operators.Count(ctx); n != 0 {
+		t.Fatalf("operator count after a rejected Bootstrap() = %d, want 0", n)
+	}
+}
+
+func TestBootstrapRejectsWhitespaceOnlyAdminPassword(t *testing.T) {
+	ctx := context.Background()
+	st := newFakeBootstrapStore()
+	var out bytes.Buffer
+
+	getenv := func(key string) string {
+		if key == AdminPasswordEnv {
+			return "                        " // whitespace only, well past minAdminPasswordLength in raw length
+		}
+		return ""
+	}
+
+	err := Bootstrap(ctx, st, getenv, &out)
+	if !errors.Is(err, ErrWeakAdminPassword) {
+		t.Fatalf("Bootstrap() with a whitespace-only %s = %v, want ErrWeakAdminPassword", AdminPasswordEnv, err)
+	}
+	if n, _ := st.operators.Count(ctx); n != 0 {
+		t.Fatalf("operator count after a rejected Bootstrap() = %d, want 0", n)
+	}
+}
+
+func TestBootstrapAcceptsAdminPasswordAtTheMinimumLength(t *testing.T) {
+	ctx := context.Background()
+	st := newFakeBootstrapStore()
+	var out bytes.Buffer
+
+	minLenPassword := strings.Repeat("a", minAdminPasswordLength)
+	getenv := func(key string) string {
+		if key == AdminPasswordEnv {
+			return minLenPassword
+		}
+		return ""
+	}
+
+	if err := Bootstrap(ctx, st, getenv, &out); err != nil {
+		t.Fatalf("Bootstrap() with a %d-character %s = %v, want nil error", minAdminPasswordLength, AdminPasswordEnv, err)
+	}
+	if n, _ := st.operators.Count(ctx); n != 1 {
+		t.Fatalf("operator count after Bootstrap() = %d, want 1", n)
 	}
 }
 

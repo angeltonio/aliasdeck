@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+	"strings"
 
 	"github.com/angeltonio/aliasdeck/internal/store"
 )
@@ -27,6 +28,16 @@ const generatedPasswordLength = 24
 // characters (0/O, 1/l/I) since this password is meant to be read off a
 // terminal and retyped once.
 const generatedPasswordAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
+
+// minAdminPasswordLength is the minimum length Bootstrap requires from an
+// operator-supplied ALIASDECK_ADMIN_PASSWORD. NIST SP 800-63B sets 8
+// characters as its floor for a memorized secret; this project doubles
+// that floor because the credential it gates is not a scoped user account
+// but the one operator identity with full read/write access to every
+// alias, profile, device and token in the store. It is never applied to a
+// generated password: GeneratePassword's alphabet and 24-character length
+// already clear this floor on their own.
+const minAdminPasswordLength = 12
 
 // Bootstrap ensures exactly one operator account exists, creating it only
 // when the database is empty (server-auth spec, "One Operator Account,
@@ -59,6 +70,8 @@ func Bootstrap(ctx context.Context, st store.Store, getenv func(string) string, 
 		if err != nil {
 			return fmt.Errorf("auth: generating bootstrap password: %w", err)
 		}
+	} else if err := validateAdminPassword(password); err != nil {
+		return err
 	}
 
 	hash, err := HashPassword(password)
@@ -76,6 +89,21 @@ func Bootstrap(ctx context.Context, st store.Store, getenv func(string) string, 
 	if generated {
 		fmt.Fprintf(out, "Generated operator password for %q (save this now — it will not be shown again): %s\n",
 			bootstrapUsername, password)
+	}
+	return nil
+}
+
+// validateAdminPassword rejects an operator-supplied
+// ALIASDECK_ADMIN_PASSWORD that is empty, all whitespace, or shorter than
+// minAdminPasswordLength (bounded-review finding: setting it to "a"
+// produced a working single-character admin password with no rejection
+// and no warning).
+func validateAdminPassword(password string) error {
+	if strings.TrimSpace(password) == "" {
+		return fmt.Errorf("auth: %s is set but empty or all whitespace: %w", AdminPasswordEnv, ErrWeakAdminPassword)
+	}
+	if len(password) < minAdminPasswordLength {
+		return fmt.Errorf("auth: %s must be at least %d characters, got %d: %w", AdminPasswordEnv, minAdminPasswordLength, len(password), ErrWeakAdminPassword)
 	}
 	return nil
 }

@@ -15,12 +15,40 @@ import (
 // work factor; tokens are 256-bit CSPRNG values compared with sha256 +
 // subtle.ConstantTimeCompare instead, because a KDF gains nothing there
 // and costs a DoS lever on every request).
+//
+// m=64 MiB, t=1, p=4: OWASP's Password Storage Cheat Sheet floor for
+// Argon2id at p=1 is m=19 MiB/t=2 (or m=47 MiB/t=1 for a single pass);
+// this project's 64 MiB clears that floor with room to spare while moving
+// work onto parallelism (p=4) rather than iterations, since threads are
+// cheap on the class of machine this server targets and this hash never
+// runs more than once per login. Measured on this project's reference
+// hardware: ~12.8 ms wall time and 64 MiB resident per HashPassword or
+// VerifyPassword call — fast enough that one operator's login is
+// imperceptible, and exactly why *concurrent* calls still need a bound
+// (design's Bounded Operations table, "Concurrent password verification":
+// 10 concurrent logins already hold ~640 MiB before any single call is
+// itself a problem).
 const (
 	argon2Time    = 1
 	argon2Memory  = 64 * 1024 // KiB, ~64 MiB
 	argon2Threads = 4
-	argon2KeyLen  = 32
-	saltLength    = 16
+
+	// argon2MaxMemory, argon2MaxTime and argon2MaxThreads cap what
+	// VerifyPassword will accept out of a stored hash's own encoded
+	// parameters (bounded-review finding: a well-formed-looking hash with
+	// an oversized m= reached argon2.IDKey uncapped and hung the process
+	// allocating memory until it was killed by SIGTERM — no error, no
+	// panic, and no Phase 4 recovery middleware can catch an allocation
+	// that never returns). The multipliers give real headroom above the
+	// shipped parameters for a future bump without recompiling every hash
+	// in the database, while staying nowhere near the four-orders-of-
+	// magnitude gap the reported hash (m=4000000000, ~4 TB) exploited.
+	argon2MaxMemory  = 8 * argon2Memory
+	argon2MaxTime    = 8 * argon2Time
+	argon2MaxThreads = 8 * argon2Threads
+
+	argon2KeyLen = 32
+	saltLength   = 16
 )
 
 // hashFormat identifies HashPassword's encoded output so a future
@@ -70,6 +98,9 @@ func VerifyPassword(password, encoded string) (bool, error) {
 		return false, ErrMalformedPasswordHash
 	}
 	if memory == 0 || time == 0 || threads == 0 {
+		return false, ErrMalformedPasswordHash
+	}
+	if memory > argon2MaxMemory || time > argon2MaxTime || uint32(threads) > argon2MaxThreads {
 		return false, ErrMalformedPasswordHash
 	}
 

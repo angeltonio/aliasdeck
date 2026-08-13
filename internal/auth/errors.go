@@ -32,6 +32,11 @@ var ErrPasswordMismatch = errors.New("auth: password mismatch")
 // encoded hash is not in the format HashPassword produces.
 var ErrMalformedPasswordHash = errors.New("auth: malformed password hash")
 
+// ErrWeakAdminPassword is returned by Bootstrap when ALIASDECK_ADMIN_PASSWORD
+// is set but is empty, all whitespace, or shorter than
+// minAdminPasswordLength.
+var ErrWeakAdminPassword = errors.New("auth: admin password too weak")
+
 // ErrUnauthorized is returned by RequireKind's caller-visible surface (via
 // http.StatusUnauthorized) whenever authentication fails for any reason —
 // missing header, malformed token, unknown lookup, wrong secret, wrong
