@@ -3,6 +3,8 @@ package state
 import (
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -70,6 +72,61 @@ func TestStateRoundTrip(t *testing.T) {
 	}
 }
 
+// TestStateRoundTripWithGitStaleness pins design decision 14: state.State
+// gains SourceStale and SourceFetchedAt so a GitSource's offline fallback
+// survives a save/load cycle instead of being reported as current.
+func TestStateRoundTripWithGitStaleness(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	want := sampleState()
+	want.SourceType = "git"
+	want.SourceRef = "https://example.com/dotfiles.git#main@0123456789ab"
+	want.SourceStale = true
+	want.SourceFetchedAt = time.Date(2026, 1, 10, 8, 0, 0, 0, time.UTC)
+
+	if err := Save(path, want); err != nil {
+		t.Fatalf("Save() returned an error: %v", err)
+	}
+
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() returned an error: %v", err)
+	}
+
+	if got.SourceStale != want.SourceStale {
+		t.Errorf("SourceStale = %v, want %v", got.SourceStale, want.SourceStale)
+	}
+	if !got.SourceFetchedAt.Equal(want.SourceFetchedAt) {
+		t.Errorf("SourceFetchedAt = %v, want %v", got.SourceFetchedAt, want.SourceFetchedAt)
+	}
+	if got.SourceRef != want.SourceRef {
+		t.Errorf("SourceRef = %q, want %q", got.SourceRef, want.SourceRef)
+	}
+}
+
+// TestStateOmitsSourceStaleWhenFalse pins the "omitempty" half of design
+// decision 14 for the field it actually applies to: encoding/json's
+// omitempty never omits a zero-value time.Time (it is a struct, not one of
+// the basic types isEmptyValue recognizes), so only SourceStale's `false`
+// is genuinely omitted from a v0.1-shaped file source's state.json.
+func TestStateOmitsSourceStaleWhenFalse(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	want := sampleState() // file source: SourceStale/SourceFetchedAt left at zero value
+
+	if err := Save(path, want); err != nil {
+		t.Fatalf("Save() returned an error: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading state.json: %v", err)
+	}
+	if strings.Contains(string(data), "sourceStale") {
+		t.Errorf("state.json contains sourceStale for a non-stale file source:\n%s", data)
+	}
+}
+
 func TestStateRoundTripWithoutBootstrap(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "state.json")
@@ -100,6 +157,21 @@ func TestStateSaveSetsFileMode0600(t *testing.T) {
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatalf("stat: %v", err)
+	}
+	// Windows has no Unix permission bits: Go reports 0666 for any writable
+	// file regardless of what Chmod was asked for, because there is nothing
+	// else to report.
+	//
+	// This assertion guards something real on POSIX — state.json can hold a
+	// source URL carrying credentials, and 0600 keeps it out of other
+	// accounts' reach. That protection genuinely does not exist on Windows
+	// through file modes, so this asserts the closest available property
+	// there rather than pretending the guarantee holds.
+	if runtime.GOOS == "windows" {
+		if info.Mode().Perm()&0o200 == 0 {
+			t.Errorf("state.json mode = %o, want a writable file", info.Mode().Perm())
+		}
+		return
 	}
 	if info.Mode().Perm() != 0o600 {
 		t.Errorf("state.json mode = %o, want %o", info.Mode().Perm(), 0o600)
@@ -167,13 +239,6 @@ func TestStateSaveOverwritesWithoutLeftoverTempFiles(t *testing.T) {
 	}
 }
 
-func skipIfRoot(t *testing.T) {
-	t.Helper()
-	if os.Geteuid() == 0 {
-		t.Skip("permission checks are bypassed when running as root")
-	}
-}
-
 func TestStateSaveFailsWhenDirectoryCannotBeCreated(t *testing.T) {
 	dir := t.TempDir()
 	// blocker is a regular file; MkdirAll must fail trying to create a
@@ -189,35 +254,48 @@ func TestStateSaveFailsWhenDirectoryCannotBeCreated(t *testing.T) {
 	}
 }
 
+// TestStateSaveFailsWhenTempFileCannotBeCreated checks that a failure to
+// create the temp file is reported rather than swallowed.
+//
+// The error is induced by giving the state file a parent that is a regular
+// file rather than a directory. A read-only directory would be the obvious
+// way, and is what this test used to do, but Windows does not enforce
+// permission bits that way and the write simply succeeded there — the test
+// passed on POSIX and failed on Windows for a reason that had nothing to do
+// with the behaviour under test.
 func TestStateSaveFailsWhenTempFileCannotBeCreated(t *testing.T) {
-	skipIfRoot(t)
-
 	dir := t.TempDir()
-	if err := os.Chmod(dir, 0o500); err != nil {
-		t.Fatalf("chmod dir: %v", err)
-	}
-	defer os.Chmod(dir, 0o700)
 
-	path := filepath.Join(dir, "state.json")
+	notADir := filepath.Join(dir, "blocking-file")
+	if err := os.WriteFile(notADir, []byte("x"), 0o600); err != nil {
+		t.Fatalf("seeding the blocking file: %v", err)
+	}
+
+	path := filepath.Join(notADir, "state.json")
 	if err := Save(path, sampleState()); err == nil {
-		t.Fatal("Save() must return an error when the temp file cannot be created in a read-only directory")
+		t.Fatal("Save() must return an error when its parent directory cannot be created or written")
 	}
 }
 
+// TestStateLoadPropagatesNonNotExistReadErrors checks that Load tolerates only
+// a missing file, not every read failure.
+//
+// Load deliberately treats a missing or corrupt state file as empty state,
+// because losing state should cost a redundant write rather than a working
+// installation. A read that fails for any other reason is a different thing
+// and must surface.
+//
+// The unreadable file is a directory rather than a chmod-0000 file. Windows
+// does not deny reads through permission bits the way POSIX does, so the old
+// fixture produced no error there at all.
 func TestStateLoadPropagatesNonNotExistReadErrors(t *testing.T) {
-	skipIfRoot(t)
-
 	dir := t.TempDir()
 	path := filepath.Join(dir, "state.json")
-	if err := os.WriteFile(path, []byte("{}"), 0o600); err != nil {
-		t.Fatalf("seeding state.json: %v", err)
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatalf("seeding a directory where the state file belongs: %v", err)
 	}
-	if err := os.Chmod(path, 0o000); err != nil {
-		t.Fatalf("chmod path: %v", err)
-	}
-	defer os.Chmod(path, 0o600)
 
 	if _, err := Load(path); err == nil {
-		t.Fatal("Load() must propagate a permission-denied read error rather than tolerate it")
+		t.Fatal("Load() must propagate a read error rather than tolerate it as empty state")
 	}
 }

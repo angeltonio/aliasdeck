@@ -1,4 +1,4 @@
-# GoReleaser configuration for AliasDeck (PROJECT.md §9.5, §16 Milestone 2).
+# GoReleaser configuration for AliasDeck (PROJECT.md §9.5, §16 Milestones 2-3).
 #
 # RELEASE PREREQUISITE — READ BEFORE TAGGING v0.1
 #
@@ -6,15 +6,28 @@
 # That repository now exists with a `main` branch; GoReleaser creates the
 # `Casks/` directory and commits into it.
 #
-# What is still required is a token that can push there. The GITHUB_TOKEN
-# GitHub Actions injects is scoped to the repository running the workflow
-# and cannot write to the tap. Releasing from CI needs a separate PAT
-# (classic with `repo`, or fine-grained with Contents: write on the tap)
-# exposed as GORELEASER_TAP_TOKEN.
+# The `scoops:` block below publishes a manifest to angeltonio/scoop-bucket
+# the same way (`scoops` is the current, non-deprecated key for this in
+# GoReleaser v2 — verified against the installed `goreleaser jsonschema`;
+# there is no separate `scoop_buckets`/`scoop` key to confuse it with). That
+# repository now exists too, with a `main` branch and a README; GoReleaser
+# creates the `bucket/` directory and commits into it.
+#
+# What is still required for BOTH is a token that can push there. The
+# GITHUB_TOKEN GitHub Actions injects is scoped to the repository running the
+# workflow and cannot write to either the tap or the bucket. Releasing from
+# CI needs a separate PAT (classic with `repo`, or fine-grained with
+# Contents: write on the target repo) exposed as GORELEASER_TAP_TOKEN, reused
+# for both `homebrew_casks` and `scoops` below rather than a second secret —
+# same as the tap, one PAT covers both, provided its fine-grained scope is
+# widened to include angeltonio/scoop-bucket. If that scope has not been
+# widened yet, the Scoop push fails exactly the way an unset token fails the
+# Homebrew step: late, after the binaries and GitHub release already
+# published.
 #
 # Getting this wrong fails late and confusingly: the binaries build, the
-# GitHub release publishes, and only then does the Homebrew step reject the
-# push — leaving a half-finished release to unpick from a CI log.
+# GitHub release publishes, and only then does the Homebrew or Scoop step
+# reject the push — leaving a half-finished release to unpick from a CI log.
 #
 # Releasing locally from a machine whose gh token already carries `repo`
 # scope needs no PAT — just point the same variable at it:
@@ -41,6 +54,7 @@ builds:
     goos:
       - darwin
       - linux
+      - windows
     goarch:
       - amd64
       - arm64
@@ -59,6 +73,13 @@ archives:
       {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
     formats:
       - tar.gz
+    # Windows users expect zip, not tar.gz; Scoop itself extracts zip
+    # archives, so this also keeps the Scoop manifest below (which points at
+    # this same archive) working without an extra unpack step.
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
 
 checksum:
   name_template: "checksums.txt"
@@ -112,6 +133,27 @@ homebrew_casks:
         aliasdeck init
         aliasdeck edit
         aliasdeck sync
+
+# Windows counterpart of homebrew_casks above. Fails loudly (build error, not
+# a silent skip) if angeltonio/scoop-bucket or its token is missing, since
+# both are release prerequisites, not optional extras — see the comment at
+# the top of this file.
+scoops:
+  - name: aliasdeck
+    ids:
+      - aliasdeck
+    repository:
+      owner: angeltonio
+      name: scoop-bucket
+      branch: main
+      # Reuses the same GORELEASER_TAP_TOKEN as homebrew_casks rather than a
+      # second secret. See the top-of-file comment: its fine-grained scope
+      # may need widening to cover angeltonio/scoop-bucket too, since it was
+      # originally issued for angeltonio/homebrew-tap only.
+      token: "{{ .Env.GORELEASER_TAP_TOKEN }}"
+    homepage: "https://github.com/angeltonio/aliasdeck"
+    description: "Your commands. Every machine. Compiles neutral aliases into shell-specific syntax."
+    license: MIT
 
 release:
   github:

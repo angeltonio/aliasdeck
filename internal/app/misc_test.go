@@ -172,9 +172,53 @@ func TestResolveRCPath(t *testing.T) {
 		}
 	})
 
+	// Inversion, not a weakening (design "Planned assertion inversions",
+	// app/misc_test.go:177): PowerShell now has an rc-file convention on
+	// every platform (design decision 10), including macOS/Linux, so this
+	// used to assert an error and now asserts the Core profile path.
+	t.Run("powershell on macOS resolves the Core profile, not an error", func(t *testing.T) {
+		te := newTestEnv(t)
+		got, err := resolveRCPath(te.Env, domain.ShellPowerShell, domain.PlatformMacOS, "")
+		if err != nil {
+			t.Fatalf("resolveRCPath() returned an error: %v", err)
+		}
+		want := filepath.Join(te.Home, ".config", "powershell", "Microsoft.PowerShell_profile.ps1")
+		if got != want {
+			t.Errorf("resolveRCPath() = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("powershell on Windows resolves under Documents", func(t *testing.T) {
+		te := newTestEnv(t)
+		got, err := resolveRCPath(te.Env, domain.ShellPowerShell, domain.PlatformWindows, "")
+		if err != nil {
+			t.Fatalf("resolveRCPath() returned an error: %v", err)
+		}
+		want := filepath.Join(te.Home, "Documents", "PowerShell", "Microsoft.PowerShell_profile.ps1")
+		if got != want {
+			t.Errorf("resolveRCPath() = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("--rc-file overrides PowerShell detection too", func(t *testing.T) {
+		te := newTestEnv(t)
+		got, err := resolveRCPath(te.Env, domain.ShellPowerShell, domain.PlatformWindows, "~/custom.ps1")
+		if err != nil {
+			t.Fatalf("resolveRCPath() returned an error: %v", err)
+		}
+		want := filepath.Join(te.Home, "custom.ps1")
+		if got != want {
+			t.Errorf("resolveRCPath() = %q, want %q", got, want)
+		}
+	})
+
+	// The unknown-shell case is retained, per the design doc's inversion
+	// note: every *real* shell now has an rc-file convention, so a
+	// genuinely unsupported shell (not one AliasDeck models) is needed to
+	// exercise the error path.
 	t.Run("unsupported shell is an error", func(t *testing.T) {
 		te := newTestEnv(t)
-		if _, err := resolveRCPath(te.Env, domain.ShellPowerShell, domain.PlatformMacOS, ""); err == nil {
+		if _, err := resolveRCPath(te.Env, domain.Shell("fish"), domain.PlatformMacOS, ""); err == nil {
 			t.Error("resolveRCPath() must fail for a shell with no rc-file convention")
 		}
 	})

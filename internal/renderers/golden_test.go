@@ -71,6 +71,49 @@ func TestGolden(t *testing.T) {
 				return cfg
 			},
 		},
+		{
+			name:  "powershell_basic",
+			shell: domain.ShellPowerShell,
+			cfg:   fixture,
+		},
+		{
+			name:  "powershell_empty",
+			shell: domain.ShellPowerShell,
+			cfg: func() domain.ResolvedConfig {
+				cfg := fixture()
+				cfg.Aliases = nil
+				cfg.Revision = cfg.ComputeRevision()
+				return cfg
+			},
+		},
+		{
+			name:  "powershell_awkward_commands",
+			shell: domain.ShellPowerShell,
+			cfg: func() domain.ResolvedConfig {
+				cfg := fixture()
+				cfg.Aliases = []domain.Alias{
+					{
+						Name:        "gwip",
+						Command:     `git commit -m 'wip: don't ask'`,
+						Description: "Nested and unbalanced quotes",
+						Enabled:     true,
+					},
+					{
+						Name:    "brace",
+						Command: `Get-Process | Where-Object { $_.CPU -gt 10 }`,
+						Enabled: true,
+					},
+					{
+						Name:        "reload",
+						Command:     "& \"$HOME/reload.ps1\" `-Force",
+						Description: "Backtick and expansion must stay literal in the file",
+						Enabled:     true,
+					},
+				}
+				cfg.Revision = cfg.ComputeRevision()
+				return cfg
+			},
+		},
 	}
 
 	for _, tc := range cases {

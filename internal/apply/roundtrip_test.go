@@ -3,7 +3,10 @@ package apply
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/angeltonio/aliasdeck/internal/domain"
 )
 
 // TestBootstrapRoundTripOnRealisticRCFiles exercises add-then-remove against rc
@@ -49,9 +52,22 @@ func TestBootstrapRoundTripOnRealisticRCFiles(t *testing.T) {
 				t.Fatalf("reading seeded rc: %v", err)
 			}
 
-			block, err := AddBootstrap(rcPath, generated, dir)
+			block, err := AddBootstrap(rcPath, domain.ShellZsh, generated, dir)
 			if err != nil {
 				t.Fatalf("AddBootstrap: %v", err)
+			}
+
+			// Design decision 6: the block's own line endings must match the
+			// rc file's pre-existing convention (detectEOL), not be
+			// unconditionally LF. A CRLF rc file must get a CRLF block; every
+			// other case here has no "\r\n" and must get a plain "\n" block.
+			wantCRLF := strings.Contains(tc.rc, "\r\n")
+			gotCRLF := strings.Contains(block, "\r\n")
+			if wantCRLF != gotCRLF {
+				t.Errorf("block CRLF usage = %v, want %v (rc file's own convention); block = %q", gotCRLF, wantCRLF, block)
+			}
+			if !wantCRLF && strings.Contains(block, "\r") {
+				t.Errorf("block must not introduce a bare \\r when the rc file has none; block = %q", block)
 			}
 
 			after, err := os.ReadFile(rcPath)
@@ -63,7 +79,7 @@ func TestBootstrapRoundTripOnRealisticRCFiles(t *testing.T) {
 			}
 
 			// Adding twice must not append a second block.
-			if _, err := AddBootstrap(rcPath, generated, dir); err != nil {
+			if _, err := AddBootstrap(rcPath, domain.ShellZsh, generated, dir); err != nil {
 				t.Fatalf("second AddBootstrap: %v", err)
 			}
 			twice, err := os.ReadFile(rcPath)
@@ -115,7 +131,7 @@ func TestBootstrapNeverTouchesUnrelatedFiles(t *testing.T) {
 		t.Fatalf("reading neighbour: %v", err)
 	}
 
-	if _, err := AddBootstrap(rcPath, filepath.Join(dir, "aliases.zsh"), dir); err != nil {
+	if _, err := AddBootstrap(rcPath, domain.ShellZsh, filepath.Join(dir, "aliases.zsh"), dir); err != nil {
 		t.Fatalf("AddBootstrap: %v", err)
 	}
 

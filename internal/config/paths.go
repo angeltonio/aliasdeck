@@ -61,12 +61,19 @@ func StateFile(base string) string { return filepath.Join(base, "state.json") }
 // ExpandPath expands a leading "~" and any embedded "$HOME" in path against
 // env's home directory. It is used both for Base's overrides and for
 // user-supplied paths such as config.yaml's source.path (PROJECT.md §7.3).
+//
+// A leading "~\" (Windows-shaped, e.g. "~\dotfiles\aliases.yaml") expands
+// exactly like "~/": a device's config.yaml is authored on that device's own
+// platform, so a Windows user's backslash path must expand correctly
+// regardless of which OS's separator os.PathSeparator happens to report at
+// parse time. POSIX-authored paths are unaffected.
 func ExpandPath(path string, env Env) (string, error) {
 	if path == "" {
 		return "", nil
 	}
 
-	needsHome := path == "~" || strings.HasPrefix(path, "~/") || strings.Contains(path, "$HOME")
+	rest, hasTildePrefix := tildePrefixRest(path)
+	needsHome := path == "~" || hasTildePrefix || strings.Contains(path, "$HOME")
 	if !needsHome {
 		return path, nil
 	}
@@ -79,8 +86,30 @@ func ExpandPath(path string, env Env) (string, error) {
 	if path == "~" {
 		return home, nil
 	}
-	if strings.HasPrefix(path, "~/") {
-		path = filepath.Join(home, path[len("~/"):])
+	if hasTildePrefix {
+		path = filepath.Join(home, filepath.FromSlash(strings.ReplaceAll(rest, `\`, "/")))
 	}
 	return strings.ReplaceAll(path, "$HOME", home), nil
+}
+
+// tildePrefixRest strips a leading "~/" or a Windows-shaped "~\" from path,
+// reporting whether either prefix matched.
+func tildePrefixRest(path string) (string, bool) {
+	if rest, ok := strings.CutPrefix(path, "~/"); ok {
+		return rest, true
+	}
+	if rest, ok := strings.CutPrefix(path, `~\`); ok {
+		return rest, true
+	}
+	return "", false
+}
+
+// CacheDir is the directory AliasDeck uses for content it fetched rather than
+// content the user wrote.
+//
+// It is named here rather than only inside the source that populates it,
+// because uninstall has to remove it and should not need to know how a
+// particular source lays out its contents.
+func CacheDir(base string) string {
+	return filepath.Join(base, "cache")
 }

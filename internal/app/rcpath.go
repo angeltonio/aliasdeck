@@ -17,6 +17,8 @@ import (
 //   - bash: the first existing of (~/.bash_profile, ~/.bashrc) on macOS, or
 //     (~/.bashrc, ~/.bash_profile) on Linux; when neither exists yet, the
 //     platform's first candidate is returned as the file to create.
+//   - powershell: delegates to resolvePowerShellProfile on every platform
+//     (design decision 8), which never bootstraps both editions.
 func resolveRCPath(env Env, sh domain.Shell, platform domain.Platform, override string) (string, error) {
 	if override != "" {
 		return config.ExpandPath(override, env.ConfigEnv())
@@ -45,6 +47,13 @@ func resolveRCPath(env Env, sh domain.Shell, platform domain.Platform, override 
 			}
 		}
 		return candidates[0], nil
+
+	case domain.ShellPowerShell:
+		profile, err := resolvePowerShellProfile(env, platform)
+		if err != nil {
+			return "", err
+		}
+		return profile.Path, nil
 
 	default:
 		return "", fmt.Errorf("no rc file convention defined for shell %q", sh)

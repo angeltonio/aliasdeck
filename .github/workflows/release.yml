@@ -22,6 +22,18 @@ jobs:
       - name: Install zsh
         run: sudo apt-get update && sudo apt-get install -y zsh
 
+      # See ci.yml's "Install pwsh" step for why this is required rather than
+      # optional: internal/renderers/powershell_integration_test.go carries no
+      # build tag and is covered by ALIASDECK_REQUIRE_SHELLS below, same as
+      # bash/zsh, so this runner needs a real pwsh too.
+      - name: Install pwsh
+        run: |
+          if command -v pwsh >/dev/null 2>&1; then
+            echo "pwsh already present: $(pwsh -Version)"
+          else
+            sudo snap install powershell --classic
+          fi
+
       # Tagging is not a promise that the code works. Run the suite against the
       # exact commit being released, with the real-shell tests required rather
       # than skippable, before anything is published.
@@ -37,9 +49,13 @@ jobs:
         env:
           # Publishes the GitHub release in this repository.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Publishes the formula to angeltonio/homebrew-tap. A separate token
-          # is required: the GITHUB_TOKEN above is scoped to this repository
-          # and cannot push to the tap. Without this secret the run fails at
-          # the Homebrew step, after the binaries and the GitHub release have
-          # already been published.
+          # Publishes the cask to angeltonio/homebrew-tap and the manifest to
+          # angeltonio/scoop-bucket. A separate token is required for both:
+          # the GITHUB_TOKEN above is scoped to this repository and cannot
+          # push to either. Without this secret the run fails at the
+          # Homebrew or Scoop step, after the binaries and the GitHub release
+          # have already been published. See .goreleaser.yaml's top-of-file
+          # comment: this PAT's fine-grained scope may need widening to cover
+          # angeltonio/scoop-bucket, since it was originally issued for
+          # angeltonio/homebrew-tap only.
           GORELEASER_TAP_TOKEN: ${{ secrets.GORELEASER_TAP_TOKEN }}

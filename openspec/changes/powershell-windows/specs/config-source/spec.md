@@ -77,6 +77,25 @@ When the configured remote is unreachable, `GitSource` MUST resolve using the la
 - WHEN `sync` runs
 - THEN it fails with an actionable error naming the source; no partial state is recorded
 
+### Requirement: GitSource aliases.yaml Path Resolution
+
+`source.git.path` MUST be OPTIONAL. When omitted, `GitSource` MUST resolve `aliases.yaml` at the checkout root, mirroring `FileSource`'s existing path-omitted default. When present, the resolved path MUST lie inside the checkout; a path that would escape it MUST be rejected before the file is read.
+
+#### Scenario: Path omitted resolves aliases.yaml at the checkout root
+- GIVEN `source: {type: git, url: <repo>}` with no `path`
+- WHEN resolved
+- THEN `aliases.yaml` at the checkout root is read
+
+#### Scenario: Path present resolves relative to the checkout root
+- GIVEN `source: {type: git, url: <repo>, path: config/aliases.yaml}`
+- WHEN resolved
+- THEN `<checkout>/config/aliases.yaml` is read
+
+#### Scenario: Path escaping the checkout is rejected
+- GIVEN `source: {type: git, url: <repo>, path: ../../etc/passwd}`
+- WHEN resolved
+- THEN resolution fails before any file is read; no content outside the checkout is ever accessed
+
 ### Requirement: GitSource Is Read-Only in v0.2
 
 `edit` MUST NOT commit, push, or otherwise write to the Git remote when `source.type: git` is configured.

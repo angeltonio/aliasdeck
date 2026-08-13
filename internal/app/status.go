@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"time"
 
 	"github.com/angeltonio/aliasdeck/internal/config"
 	"github.com/angeltonio/aliasdeck/internal/domain"
@@ -19,6 +20,26 @@ type StatusReport struct {
 
 	PlatformProvenance string
 	ShellProvenance    string
+
+	// PowerShellEdition, PowerShellProfilePath and PowerShellProvenance are
+	// populated only for a PowerShell device (design decision 8), so a
+	// zsh/bash StatusReport keeps them at their zero value. The choice of
+	// edition is a heuristic (LookPath precedence, possibly OneDrive
+	// redirection); reporting it, and why it was made, turns a silent wrong
+	// guess into an obvious one (non-negotiable constraint 2).
+	PowerShellEdition     string
+	PowerShellProfilePath string
+	PowerShellProvenance  string
+
+	// SourceRef, SourceStale and SourceFetchedAt come from the last
+	// successful sync's recorded state, not a live re-resolve: status must
+	// never spawn a git process just to report on one (design decision 14).
+	// For a GitSource, SourceRef includes the resolved commit
+	// (<url>#<ref>@<short-sha>); for a FileSource these mirror state.State's
+	// zero value and are not meaningful.
+	SourceRef       string
+	SourceStale     bool
+	SourceFetchedAt time.Time
 
 	State    state.State
 	UpToDate bool
@@ -42,14 +63,29 @@ func Status(_ context.Context, env Env, opts Options) (StatusReport, error) {
 		upToDate = st.OutputPath == outputPath && diskHashMatches(outputPath, st.OutputHash)
 	}
 
-	return StatusReport{
+	report := StatusReport{
 		Base:               dc.Base,
 		Source:             dc.SourceDesc,
 		Backend:            dc.Backend.Name(),
 		Device:             dc.Device,
 		PlatformProvenance: dc.PlatformProvenance,
 		ShellProvenance:    dc.ShellProvenance,
+		SourceRef:          st.SourceRef,
+		SourceStale:        st.SourceStale,
+		SourceFetchedAt:    st.SourceFetchedAt,
 		State:              st,
 		UpToDate:           upToDate,
-	}, nil
+	}
+
+	if dc.Device.Shell == domain.ShellPowerShell {
+		profile, err := resolvePowerShellProfile(env, dc.Device.Platform)
+		if err != nil {
+			return StatusReport{}, err
+		}
+		report.PowerShellEdition = string(profile.Edition)
+		report.PowerShellProfilePath = profile.Path
+		report.PowerShellProvenance = profile.Provenance
+	}
+
+	return report, nil
 }

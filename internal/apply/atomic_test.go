@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -43,7 +44,17 @@ func TestWriteFileAtomicSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat result: %v", err)
 	}
-	if info.Mode().Perm() != 0o644 {
+	// Windows has no Unix permission bits: Go's os package reports 0666 for
+	// any writable file (0444 for a read-only one) regardless of the mode
+	// passed to Chmod, because there is nothing else to report. The exact
+	// requested-mode-is-honored guarantee this assertion protects is a POSIX
+	// property; on Windows the file being present and writable is the
+	// closest analogue, and that is what is asserted there instead.
+	if runtime.GOOS == "windows" {
+		if info.Mode().Perm()&0o200 == 0 {
+			t.Errorf("file mode = %o, want a writable file", info.Mode().Perm())
+		}
+	} else if info.Mode().Perm() != 0o644 {
 		t.Errorf("file mode = %o, want %o", info.Mode().Perm(), 0o644)
 	}
 

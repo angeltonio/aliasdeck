@@ -50,8 +50,22 @@ const (
 // actually has to act on it.
 type Source struct {
 	Type SourceType
-	Path string // file, git
-	URL  string // server
+	Path string          // file
+	URL  string          // server
+	Git  GitSourceConfig // git
+}
+
+// GitSourceConfig is config.yaml's nested source.git: block, populated only
+// when Source.Type is SourceTypeGit.
+//
+// Ref and Path are both optional (design decision 16): an omitted Ref defers
+// resolution to the remote's default branch, and an omitted Path resolves
+// aliases.yaml at the checkout root, mirroring FileSource's existing
+// path-omitted default.
+type GitSourceConfig struct {
+	URL  string
+	Ref  string
+	Path string
 }
 
 // DeviceConfig is the device: block of config.yaml.
@@ -94,9 +108,19 @@ type deviceDTO struct {
 }
 
 type sourceDTO struct {
-	Type string `yaml:"type"`
-	Path string `yaml:"path"`
+	Type string       `yaml:"type"`
+	Path string       `yaml:"path"`
+	URL  string       `yaml:"url"`
+	Git  gitSourceDTO `yaml:"git"`
+}
+
+// gitSourceDTO mirrors config.yaml's nested source.git: block exactly, so
+// KnownFields(true) rejects an unknown field there (e.g. "branch") just as
+// strictly as it rejects one at the top level.
+type gitSourceDTO struct {
 	URL  string `yaml:"url"`
+	Ref  string `yaml:"ref"`
+	Path string `yaml:"path"`
 }
 
 // ParseDeviceConfig decodes and strictly validates the bytes of a
@@ -141,6 +165,11 @@ func ParseDeviceConfig(data []byte) (DeviceFileConfig, error) {
 			Type: SourceType(dto.Source.Type),
 			Path: dto.Source.Path,
 			URL:  dto.Source.URL,
+			Git: GitSourceConfig{
+				URL:  dto.Source.Git.URL,
+				Ref:  dto.Source.Git.Ref,
+				Path: dto.Source.Git.Path,
+			},
 		},
 		Backend: backend,
 	}, nil
@@ -202,6 +231,11 @@ func Write(path string, cfg DeviceFileConfig) error {
 			Type: string(cfg.Source.Type),
 			Path: cfg.Source.Path,
 			URL:  cfg.Source.URL,
+			Git: gitSourceDTO{
+				URL:  cfg.Source.Git.URL,
+				Ref:  cfg.Source.Git.Ref,
+				Path: cfg.Source.Git.Path,
+			},
 		},
 		Backend: string(cfg.Backend),
 	}

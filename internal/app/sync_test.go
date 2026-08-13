@@ -2,14 +2,20 @@ package app
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/angeltonio/aliasdeck/internal/config"
+	"github.com/angeltonio/aliasdeck/internal/domain"
+	"github.com/angeltonio/aliasdeck/internal/source"
 	"github.com/angeltonio/aliasdeck/internal/state"
 )
+
+var errFakeUnreachable = errors.New("could not resolve host")
 
 const testAliasesYAML = `version: 1
 
@@ -176,6 +182,127 @@ func TestSyncRenderedOutputIsDeterministic(t *testing.T) {
 	}
 }
 
+// fakeGitSource is a minimal source.ConfigSource + source.ResolveReporter
+// double, so syncWithContext's staleness wiring can be tested without a
+// real git subprocess or filesystem checkout.
+type fakeGitSource struct {
+	resolved domain.ResolvedConfig
+	err      error
+	info     source.ResolveInfo
+}
+
+func (f *fakeGitSource) Resolve(context.Context, domain.Device) (domain.ResolvedConfig, error) {
+	return f.resolved, f.err
+}
+
+func (f *fakeGitSource) LastResolve() source.ResolveInfo { return f.info }
+
+func gitDeviceContext(t *testing.T, te *testEnv, src source.ConfigSource, desc source.Descriptor) deviceContext {
+	t.Helper()
+	dev := domain.Device{Platform: domain.PlatformLinux, Shell: domain.ShellBash, ClientVersion: Version}
+	backend, err := resolveBackend(config.DeviceFileConfig{Backend: config.BackendNative}, te.Base)
+	if err != nil {
+		t.Fatalf("resolveBackend() returned an error: %v", err)
+	}
+	return deviceContext{
+		Base:       te.Base,
+		Device:     dev,
+		Source:     src,
+		SourceDesc: desc,
+		Backend:    backend,
+	}
+}
+
+// TestSyncRecordsGitSourceStaleness pins design decision 14's wiring:
+// syncWithContext type-asserts source.ResolveReporter and records what it
+// reports into state.State, including the resolved-commit-augmented
+// SourceRef (<url>#<ref>@<short-sha>).
+func TestSyncRecordsGitSourceStaleness(t *testing.T) {
+	te := newTestEnv(t)
+	dev := domain.Device{Platform: domain.PlatformLinux, Shell: domain.ShellBash, ClientVersion: Version}
+	resolved := domain.Resolve(dev, []domain.Alias{{Name: "gs", Command: "git status", Enabled: true}})
+
+	fetchedAt := time.Date(2026, 1, 10, 8, 0, 0, 0, time.UTC)
+	src := &fakeGitSource{
+		resolved: resolved,
+		info: source.ResolveInfo{
+			Ref:       "HEAD",
+			Commit:    "0123456789abcdef0123456789abcdef01234567",
+			FetchedAt: fetchedAt,
+			Stale:     true,
+		},
+	}
+	desc := source.Descriptor{Type: "git", Ref: "https://example.com/dotfiles.git#HEAD"}
+	dc := gitDeviceContext(t, te, src, desc)
+
+	if _, err := syncWithContext(context.Background(), te.Env, dc); err != nil {
+		t.Fatalf("syncWithContext() returned an error: %v", err)
+	}
+
+	st, err := state.Load(config.StateFile(te.Base))
+	if err != nil {
+		t.Fatalf("loading state: %v", err)
+	}
+	if !st.SourceStale {
+		t.Error("state.SourceStale = false, want true")
+	}
+	if !st.SourceFetchedAt.Equal(fetchedAt) {
+		t.Errorf("state.SourceFetchedAt = %v, want %v", st.SourceFetchedAt, fetchedAt)
+	}
+	wantRef := "https://example.com/dotfiles.git#HEAD@0123456789ab"
+	if st.SourceRef != wantRef {
+		t.Errorf("state.SourceRef = %q, want %q", st.SourceRef, wantRef)
+	}
+	if st.SourceType != "git" {
+		t.Errorf("state.SourceType = %q, want %q", st.SourceType, "git")
+	}
+}
+
+// TestSyncFileSourceLeavesStalenessUnset pins that FileSource — which does
+// not implement source.ResolveReporter — never sets SourceStale, matching
+// the migration note that a v0.1 state file (or a v0.2 file-source sync)
+// yields SourceStale=false.
+func TestSyncFileSourceLeavesStalenessUnset(t *testing.T) {
+	te := newTestEnv(t)
+	seedSyncableDevice(t, te)
+
+	if _, err := Sync(context.Background(), te.Env, Options{}); err != nil {
+		t.Fatalf("Sync() returned an error: %v", err)
+	}
+
+	st, err := state.Load(config.StateFile(te.Base))
+	if err != nil {
+		t.Fatalf("loading state: %v", err)
+	}
+	if st.SourceStale {
+		t.Error("state.SourceStale = true for a file source, want false")
+	}
+	if !st.SourceFetchedAt.IsZero() {
+		t.Errorf("state.SourceFetchedAt = %v, want zero for a file source", st.SourceFetchedAt)
+	}
+}
+
+// TestSyncUnreachableGitSourceWithoutCacheFailsAndNamesSource pins the
+// "Unreachable remote with no prior checkout" scenario at the syncWithContext
+// boundary: sync must fail, naming the source, and must not write state.
+func TestSyncUnreachableGitSourceWithoutCacheFailsAndNamesSource(t *testing.T) {
+	te := newTestEnv(t)
+	url := "https://example.com/dotfiles.git"
+	src := &fakeGitSource{err: errFakeUnreachable}
+	desc := source.Descriptor{Type: "git", Ref: url + "#HEAD"}
+	dc := gitDeviceContext(t, te, src, desc)
+
+	if _, err := syncWithContext(context.Background(), te.Env, dc); err == nil {
+		t.Fatal("syncWithContext() must fail when the git source cannot be resolved")
+	} else if !strings.Contains(err.Error(), url) {
+		t.Errorf("error %q does not name the unresolvable source %q", err, url)
+	}
+
+	if _, err := os.Stat(config.StateFile(te.Base)); !os.IsNotExist(err) {
+		t.Errorf("state.json must not be written when resolve fails outright: stat err = %v", err)
+	}
+}
+
 func TestSyncUnresolvableSourceNamesTheSource(t *testing.T) {
 	te := newTestEnv(t)
 	writeConfigYAML(t, te.Base, nativeDeviceConfig("test-device"))
@@ -190,4 +317,62 @@ func TestSyncUnresolvableSourceNamesTheSource(t *testing.T) {
 	if want := config.AliasesFile(te.Base); !strings.Contains(err.Error(), want) {
 		t.Errorf("error %q does not name the unresolvable source %q", err, want)
 	}
+}
+
+// TestSyncReportsStalenessEvenWhenSkipping covers the case an offline sync
+// almost always takes.
+//
+// A machine whose remote is unreachable usually has an unchanged configuration
+// too, so the sync skips. Reporting staleness only alongside a write would stay
+// silent exactly there: the user sees "up to date" and believes their aliases
+// describe the repository as it is now, when they describe it as it was.
+func TestSyncReportsStalenessEvenWhenSkipping(t *testing.T) {
+	te := newTestEnv(t)
+	seedSyncableDevice(t, te)
+
+	// First sync writes and records state.
+	first, err := Sync(context.Background(), te.Env, Options{})
+	if err != nil {
+		t.Fatalf("first Sync: %v", err)
+	}
+	if first.Skipped {
+		t.Fatal("the first sync should have written")
+	}
+
+	// Swap in a source that reports the same content but flags it as served
+	// from cache, then sync again. Nothing changed, so it skips.
+	dc, err := loadDeviceContext(te.Env, Options{})
+	if err != nil {
+		t.Fatalf("loadDeviceContext: %v", err)
+	}
+	fetched := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	dc.Source = staleSource{inner: dc.Source, fetchedAt: fetched}
+
+	second, err := syncWithContext(context.Background(), te.Env, dc)
+	if err != nil {
+		t.Fatalf("second Sync: %v", err)
+	}
+	if !second.Skipped {
+		t.Fatal("the second sync should have skipped; the fixture changed nothing")
+	}
+	if !second.SourceStale {
+		t.Error("a skipped sync must still report that its source served cached content")
+	}
+	if !second.SourceFetchedAt.Equal(fetched) {
+		t.Errorf("SourceFetchedAt = %v, want %v", second.SourceFetchedAt, fetched)
+	}
+}
+
+// staleSource wraps a ConfigSource and reports every resolve as cache-served.
+type staleSource struct {
+	inner     source.ConfigSource
+	fetchedAt time.Time
+}
+
+func (s staleSource) Resolve(ctx context.Context, dev domain.Device) (domain.ResolvedConfig, error) {
+	return s.inner.Resolve(ctx, dev)
+}
+
+func (s staleSource) LastResolve() source.ResolveInfo {
+	return source.ResolveInfo{Stale: true, FetchedAt: s.fetchedAt}
 }

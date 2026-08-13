@@ -139,9 +139,14 @@ func TestRenderRejectsCommentInjection(t *testing.T) {
 	}
 }
 
+// TestForUnsupportedShell used to assert that PowerShell had no renderer.
+// Inverted for Milestone 3: `For(ShellPowerShell)` must now succeed — the
+// strengthened guarantee is a positive one (PowerShell renders), not the
+// absence of an error. An unknown shell like "fish" still has no renderer
+// and stays an error.
 func TestForUnsupportedShell(t *testing.T) {
-	if _, err := For(domain.ShellPowerShell); err == nil {
-		t.Fatal("expected PowerShell to be unsupported in this milestone")
+	if _, err := For(domain.ShellPowerShell); err != nil {
+		t.Fatalf("expected PowerShell to be supported as of Milestone 3, got: %v", err)
 	}
 	if _, err := For(domain.Shell("fish")); err == nil {
 		t.Fatal("expected an unknown shell to be unsupported")
@@ -174,9 +179,14 @@ func TestPosixRendererShell(t *testing.T) {
 	}
 }
 
+// TestSupported inverts to include PowerShell now that Milestone 3 registers
+// a renderer for it. The order assertion is the part that matters: doctor and
+// status report shells in domain.AllShells order regardless of Go's
+// unordered map iteration, so zsh, bash, powershell must come out in exactly
+// that sequence.
 func TestSupported(t *testing.T) {
 	got := Supported()
-	want := []domain.Shell{domain.ShellZsh, domain.ShellBash}
+	want := []domain.Shell{domain.ShellZsh, domain.ShellBash, domain.ShellPowerShell}
 
 	if len(got) != len(want) {
 		t.Fatalf("Supported() = %v, want %v", got, want)

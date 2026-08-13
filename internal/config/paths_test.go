@@ -200,7 +200,22 @@ func TestExpandPath(t *testing.T) {
 	}{
 		{"bare tilde", "~", home},
 		{"tilde slash prefix", "~/dotfiles/aliases.yaml", filepath.Join(home, "dotfiles", "aliases.yaml")},
-		{"embedded $HOME", "$HOME/dotfiles/aliases.yaml", filepath.Join(home, "dotfiles", "aliases.yaml")},
+		{"tilde backslash prefix (Windows-shaped path)", `~\dotfiles\aliases.yaml`, filepath.Join(home, "dotfiles", "aliases.yaml")},
+		// ExpandPath substitutes "$HOME" textually and deliberately does not
+		// normalize the rest of the string (unlike the leading "~"/"~\" forms
+		// above, which resolve a whole prefix). This is intentional, not an
+		// oversight: a config.yaml is authored on its own device's platform
+		// (same rationale as the "~\" case's doc comment), so an embedded
+		// "$HOME" is normally followed by that same platform's separator
+		// convention already — a real Windows user writes
+		// "$HOME\dotfiles\aliases.yaml", not a mixed form. The expectation
+		// here mirrors exactly what strings.ReplaceAll produces (home value
+		// spliced into the literal remainder), rather than a fully
+		// filepath.Join-normalized path, because every Go file API accepts
+		// '/' on Windows, so the mixed separator that only this synthetic
+		// test produces (a native-separator home spliced into a
+		// forward-slash-authored remainder) still resolves correctly.
+		{"embedded $HOME", "$HOME/dotfiles/aliases.yaml", home + "/dotfiles/aliases.yaml"},
 		{"no expansion needed", "/etc/aliasdeck/aliases.yaml", "/etc/aliasdeck/aliases.yaml"},
 		{"empty path", "", ""},
 	}

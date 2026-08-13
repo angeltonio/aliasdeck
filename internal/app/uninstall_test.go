@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -177,5 +178,44 @@ func TestUninstallExactFalseWhenUserEditedInsideBlock(t *testing.T) {
 	}
 	if strings.Contains(string(got), "aliasdeck") {
 		t.Errorf("the fallback left an AliasDeck marker behind:\n%s", got)
+	}
+}
+
+// TestUninstallRemovesTheSourceCache covers what a Git-sourced device leaves
+// behind.
+//
+// A clone records the source url in its own .git/config, and that url may
+// carry credentials. Leaving the checkout after uninstall would mean the
+// command that exists to undo everything left a secret on disk, in a directory
+// the user never created and has no reason to look for.
+//
+// The design said the cache was "removed by uninstall" before anything removed
+// it. That gap was found by reading the two together.
+func TestUninstallRemovesTheSourceCache(t *testing.T) {
+	te := newTestEnv(t)
+	seedBootstrappedDevice(t, te, "")
+
+	// Stand in for a checkout: uninstall must not care which source made it.
+	cacheDir := filepath.Join(config.CacheDir(te.Base), "git", "deadbeef1234")
+	if err := os.MkdirAll(cacheDir, 0o700); err != nil {
+		t.Fatalf("seeding a cache directory: %v", err)
+	}
+	secret := filepath.Join(cacheDir, ".git", "config")
+	if err := os.MkdirAll(filepath.Dir(secret), 0o700); err != nil {
+		t.Fatalf("seeding .git: %v", err)
+	}
+	if err := os.WriteFile(secret, []byte("[remote \"origin\"]\n\turl = https://user:token@example.com/x.git\n"), 0o600); err != nil {
+		t.Fatalf("seeding .git/config: %v", err)
+	}
+
+	report, err := Uninstall(context.Background(), te.Env, UninstallOptions{Yes: true})
+	if err != nil {
+		t.Fatalf("Uninstall() returned an error: %v", err)
+	}
+	if !report.CacheRemoved {
+		t.Error("CacheRemoved = false, want true")
+	}
+	if _, err := os.Stat(config.CacheDir(te.Base)); !os.IsNotExist(err) {
+		t.Errorf("the source cache still exists after uninstall: %v", err)
 	}
 }

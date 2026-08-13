@@ -129,7 +129,7 @@ func Init(ctx context.Context, env Env, opts InitOptions) (InitReport, error) {
 
 	if opts.NoBootstrap {
 		report.BootstrapSkippedReason = "--no-bootstrap"
-		report.ManualBootstrapLine = apply.BootstrapLine(syncReport.OutputPath, home)
+		report.ManualBootstrapLine = apply.BootstrapLine(dc.Device.Shell, syncReport.OutputPath, home)
 		return report, nil
 	}
 
@@ -155,11 +155,11 @@ func Init(ctx context.Context, env Env, opts InitOptions) (InitReport, error) {
 	}
 	if !ok {
 		report.BootstrapSkippedReason = "declined"
-		report.ManualBootstrapLine = apply.BootstrapLine(syncReport.OutputPath, home)
+		report.ManualBootstrapLine = apply.BootstrapLine(dc.Device.Shell, syncReport.OutputPath, home)
 		return report, nil
 	}
 
-	block, err := apply.AddBootstrap(rcPath, syncReport.OutputPath, home)
+	block, err := apply.AddBootstrap(rcPath, dc.Device.Shell, syncReport.OutputPath, home)
 	if err != nil {
 		return report, fmt.Errorf("adding bootstrap line to %s: %w", rcPath, err)
 	}

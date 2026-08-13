@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/angeltonio/aliasdeck/internal/domain"
 )
 
 // beginMarker and endMarker delimit AliasDeck's own block inside a user's rc
@@ -17,21 +19,104 @@ const (
 	endMarker   = "# <<< aliasdeck <<<"
 )
 
-// BootstrapLine returns the sourcing line for generatedPath: a POSIX `[ -f
-// ... ] && . ...` guard that works unmodified in both bash and zsh, even in
-// `sh` compatibility mode, using `.` rather than `source` (design decision 6).
+// BootstrapLine returns the sourcing line for generatedPath.
+//
+// For zsh and bash it is a POSIX `[ -f ... ] && . ...` guard that works
+// unmodified in both, even in `sh` compatibility mode, using `.` rather than
+// `source` (design decision 3/6). For PowerShell it is a `Test-Path`/dot-source
+// guard using the same marker-delimited block mechanism (design decision 3).
 //
 // When generatedPath is under home, the line uses a literal "$HOME"-relative
 // form instead of the expanded absolute path, so the same rc file keeps
-// working if the account or machine changes.
-func BootstrapLine(generatedPath, home string) string {
-	display := generatedPath
+// working if the account or machine changes. The relative computation uses
+// filepath.Rel — never a hardcoded separator — and rejects any result that
+// escapes home via ".." (design decision 4, fixing the previous
+// strings.CutPrefix-based check, which assumed '/' and silently never fired
+// on Windows).
+func BootstrapLine(sh domain.Shell, generatedPath, home string) string {
+	if sh == domain.ShellPowerShell {
+		return bootstrapLinePowerShell(generatedPath, home)
+	}
+	display := homeRelativeDisplay(generatedPath, home)
+	return fmt.Sprintf(`[ -f %q ] && . %q`, display, display)
+}
+
+// bootstrapLinePowerShell renders the PowerShell form of BootstrapLine
+// (design decision 3): a `Test-Path -LiteralPath` guard followed by a
+// dot-source, both operating on the same double-quoted path string.
+//
+// The double-quoted-context escaper (design decision 5) is applied only to
+// the part of the path after a literal "$HOME/" prefix is prepended, so
+// "$HOME" itself is left for PowerShell to expand as its automatic variable
+// rather than being escaped into a literal "`$HOME".
+func bootstrapLinePowerShell(generatedPath, home string) string {
+	display := escapePowerShellDoubleQuoted(generatedPath)
 	if home != "" {
-		if rel, ok := strings.CutPrefix(generatedPath, home); ok && (rel == "" || rel[0] == '/') {
-			display = "$HOME" + rel
+		if rel, ok := relUnderHome(generatedPath, home); ok {
+			display = "$HOME/" + escapePowerShellDoubleQuoted(filepath.ToSlash(rel))
 		}
 	}
-	return fmt.Sprintf(`[ -f %q ] && . %q`, display, display)
+	return fmt.Sprintf(`if (Test-Path -LiteralPath "%s") { . "%s" }`, display, display)
+}
+
+// homeRelativeDisplay is the POSIX-branch counterpart of
+// bootstrapLinePowerShell's rewrite: same filepath.Rel-based logic (design
+// decision 4), emitting a plain "$HOME/..." string with no additional
+// escaping, since %q (Go's double-quote escaping) is applied by the caller
+// and is what the existing POSIX byte-identical output already used.
+func homeRelativeDisplay(generatedPath, home string) string {
+	if home == "" {
+		return generatedPath
+	}
+	rel, ok := relUnderHome(generatedPath, home)
+	if !ok {
+		return generatedPath
+	}
+	return "$HOME/" + filepath.ToSlash(rel)
+}
+
+// relUnderHome reports the path of generatedPath relative to home, and
+// whether that relative path actually stays under home.
+//
+// It is the single separator-correct primitive behind design decision 4:
+// filepath.Rel is OS-native (it will use '\' on a real Windows build and
+// '/' everywhere else), so this function never assumes a separator itself.
+// A result of ".." or one beginning with ".."+separator means generatedPath
+// is not under home (or home is not actually an ancestor of it, e.g. the
+// "/home/user" vs "/home/user2" prefix-collision case) and is rejected.
+func relUnderHome(generatedPath, home string) (string, bool) {
+	rel, err := filepath.Rel(home, generatedPath)
+	if err != nil {
+		return "", false
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	return rel, true
+}
+
+// escapePowerShellDoubleQuoted escapes s for use inside a PowerShell
+// double-quoted string (design decision 5): a backtick doubles, a double
+// quote doubles, and a dollar sign is backtick-escaped so it is not read as
+// the start of a variable or subexpression. This is deliberately not
+// fmt.Sprintf's %q (Go escaping): %q turns '\' into "\\", which PowerShell
+// reads as two literal backslashes, and PowerShell has no backslash escape
+// at all in this context.
+func escapePowerShellDoubleQuoted(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch r {
+		case '`':
+			b.WriteString("``")
+		case '"':
+			b.WriteString(`""`)
+		case '$':
+			b.WriteString("`$")
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 // AddBootstrap inserts a marker-delimited block sourcing generatedPath into
@@ -48,7 +133,7 @@ func BootstrapLine(generatedPath, home string) string {
 // padding or separator — ready to be stored verbatim (e.g. in
 // state.Bootstrap.Block) so a later removal is a single bytes.Replace rather
 // than a heuristic reconstruction (design decision 6).
-func AddBootstrap(rcPath, generatedPath, home string) (block string, err error) {
+func AddBootstrap(rcPath string, sh domain.Shell, generatedPath, home string) (block string, err error) {
 	resolved, mode, err := resolveRCPath(rcPath)
 	if err != nil {
 		return "", err
@@ -66,7 +151,7 @@ func AddBootstrap(rcPath, generatedPath, home string) (block string, err error) 
 		return "", nil
 	}
 
-	block = buildBlock(existing, BootstrapLine(generatedPath, home))
+	block = buildBlock(existing, BootstrapLine(sh, generatedPath, home), detectEOL(existing))
 
 	updated := make([]byte, 0, len(existing)+len(block))
 	updated = append(updated, existing...)
@@ -155,26 +240,41 @@ func resolveRCPath(rcPath string) (resolved string, mode os.FileMode, err error)
 	return resolved, info.Mode().Perm(), nil
 }
 
+// detectEOL reports the line-ending convention AddBootstrap must use for its
+// own block (design decision 6): "\r\n" if and only if existing already
+// contains one, else a plain "\n". It never depends on the rendering
+// machine's OS, only on the rc file's own pre-existing bytes, so the same
+// $PROFILE keeps whichever convention its owner (or PowerShell itself, which
+// writes CRLF by default) already gave it.
+func detectEOL(existing []byte) string {
+	if bytes.Contains(existing, []byte("\r\n")) {
+		return "\r\n"
+	}
+	return "\n"
+}
+
 // buildBlock returns the exact bytes AddBootstrap appends after existing:
-// padding + separator + begin + "\n" + line + "\n" + end + "\n" (design
-// decision 6). padding is a lone "\n" only when existing has content but no
-// trailing newline; separator is a lone "\n" only when existing is
-// non-empty. An empty file gets no leading blank line at all.
-func buildBlock(existing []byte, line string) string {
+// padding + separator + begin + eol + line + eol + end + eol (design
+// decision 6). padding is a lone eol only when existing has content but no
+// trailing newline; separator is a lone eol only when existing is
+// non-empty. An empty file gets no leading blank line at all. eol is
+// detectEOL(existing), threaded in by the caller rather than recomputed
+// here so every write in one AddBootstrap call agrees on it.
+func buildBlock(existing []byte, line, eol string) string {
 	var b strings.Builder
 
 	if len(existing) > 0 && existing[len(existing)-1] != '\n' {
-		b.WriteString("\n")
+		b.WriteString(eol)
 	}
 	if len(existing) > 0 {
-		b.WriteString("\n")
+		b.WriteString(eol)
 	}
 	b.WriteString(beginMarker)
-	b.WriteString("\n")
+	b.WriteString(eol)
 	b.WriteString(line)
-	b.WriteString("\n")
+	b.WriteString(eol)
 	b.WriteString(endMarker)
-	b.WriteString("\n")
+	b.WriteString(eol)
 
 	return b.String()
 }
@@ -199,14 +299,19 @@ func removeMarkerScan(content []byte) (updated []byte, found bool) {
 	// If the marker block is preceded by a blank separator line (the common
 	// case AddBootstrap itself produces), consume it too: this is what makes
 	// the fallback byte-identical in the ordinary case, not only when a
-	// caller happens to have the exact recorded block.
-	if beginIdx >= 1 && content[beginIdx-1] == '\n' &&
-		(beginIdx == 1 || content[beginIdx-2] == '\n') {
-		beginIdx--
+	// caller happens to have the exact recorded block. stripTrailingEOL
+	// accepts either a bare "\n" or a "\r\n" terminator (design decision 7),
+	// so this works the same way on an LF or a CRLF rc file.
+	if p, ok := stripTrailingEOL(content, beginIdx); ok {
+		if _, ok2 := stripTrailingEOL(content, p); ok2 || p == 0 {
+			beginIdx = p
+		}
 	}
 
 	lineEnd := endIdx + len(endMarker)
-	if lineEnd < len(content) && content[lineEnd] == '\n' {
+	if lineEnd+1 < len(content) && content[lineEnd] == '\r' && content[lineEnd+1] == '\n' {
+		lineEnd += 2
+	} else if lineEnd < len(content) && content[lineEnd] == '\n' {
 		lineEnd++
 	}
 
@@ -222,6 +327,12 @@ func removeMarkerScan(content []byte) (updated []byte, found bool) {
 // This is deliberately stricter than bytes.Index: marker-like text embedded
 // inside an unrelated line — a comment mentioning it, a quoted string — must
 // not be mistaken for AliasDeck's own block.
+//
+// atLineEnd accepts either a bare "\n" or a "\r\n" terminator (design
+// decision 7): the original check required content[end] == '\n' exactly,
+// which a CRLF-terminated marker line fails on the '\r' byte — a latent bug
+// that AliasDeck's own LF-only markers never triggered, but that preserving
+// a CRLF rc file's convention (decision 6) activates.
 func indexOfLine(content []byte, marker string) int {
 	m := []byte(marker)
 	offset := 0
@@ -234,11 +345,26 @@ func indexOfLine(content []byte, marker string) int {
 
 		atLineStart := idx == 0 || content[idx-1] == '\n'
 		end := idx + len(m)
-		atLineEnd := end == len(content) || content[end] == '\n'
+		atLineEnd := end == len(content) || content[end] == '\n' ||
+			(content[end] == '\r' && end+1 < len(content) && content[end+1] == '\n')
 
 		if atLineStart && atLineEnd {
 			return idx
 		}
 		offset = idx + 1
 	}
+}
+
+// stripTrailingEOL reports the position immediately before the line-ending
+// sequence ("\r\n" or "\n") ending at pos, and whether one was found there.
+// It is the shared primitive behind removeMarkerScan's blank-separator-line
+// and trailing-newline handling, generalized for CRLF (design decision 7).
+func stripTrailingEOL(content []byte, pos int) (int, bool) {
+	if pos >= 2 && content[pos-2] == '\r' && content[pos-1] == '\n' {
+		return pos - 2, true
+	}
+	if pos >= 1 && content[pos-1] == '\n' {
+		return pos - 1, true
+	}
+	return pos, false
 }
