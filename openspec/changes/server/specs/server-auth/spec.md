@@ -8,7 +8,7 @@ Defines operator bootstrap, opaque hashed sessions, single-use enrollment tokens
 
 ### Requirement: One Operator Account, Bootstrapped on First Start
 
-On first start against an empty database, the system MUST create exactly one operator account and print a generated password once. `ALIASDECK_ADMIN_PASSWORD`, when set, MUST be used instead of generating one. The system MUST NOT prompt interactively for a password, and MUST NOT write the password to any log.
+On first start against an empty database, the system MUST create exactly one operator account, at the fixed username `admin` (design decision 20), and print a generated password once. `ALIASDECK_ADMIN_PASSWORD`, when set, MUST be used instead of generating one, and MUST be rejected at startup if it is empty, all whitespace, or shorter than the minimum length `internal/auth` enforces. The system MUST NOT prompt interactively for a password, and MUST NOT write the password to any log.
 
 #### Scenario: First start generates and prints a password
 - GIVEN an empty database and no `ALIASDECK_ADMIN_PASSWORD`
@@ -24,6 +24,11 @@ On first start against an empty database, the system MUST create exactly one ope
 - GIVEN an operator account already exists
 - WHEN the server restarts
 - THEN no password is generated or printed
+
+#### Scenario: A weak environment-supplied password is rejected
+- GIVEN `ALIASDECK_ADMIN_PASSWORD` set to an empty, whitespace-only, or too-short value
+- WHEN the server starts against an empty database
+- THEN startup fails with an error naming `ALIASDECK_ADMIN_PASSWORD`, and no operator account is created
 
 ### Requirement: Opaque Hashed Sessions, No JWT
 
