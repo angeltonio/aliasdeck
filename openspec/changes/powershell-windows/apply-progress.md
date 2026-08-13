@@ -1,6 +1,6 @@
 # Apply Progress: PowerShell, Windows and Git-hosted config — Milestone 3 (v0.2)
 
-**Batches**: 1 (Phases 1–2) + 2 (Phase 3) + 3 (Phase 4) + 4 (Phase 5) + 5 (Phase 6), per orchestrator scope
+**Batches**: 1 (Phases 1–2) + 2 (Phase 3) + 3 (Phase 4) + 4 (Phase 5) + 5 (Phase 6) + 6 (Phase 7), per orchestrator scope
 **Mode**: Strict TDD
 
 ## Completed Tasks
@@ -115,6 +115,13 @@ PASS
 
 **Non-obvious design choice made during 6.4, not literally spelled out in design.md**: `ResolveInfo.FetchedAt` is derived from `.git/FETCH_HEAD`'s filesystem modification time (`checkoutFetchedAt`), not `time.Now()`. This matters specifically for the *stale* path: if `FetchedAt` were simply "the time `Resolve` ran," a stale resolution (whose fetch just failed) would report the time of the failed attempt as if it were a successful fetch time — silently misrepresenting how old the cached content actually is, which is exactly the kind of silent failure the non-negotiable constraints call out. Since `.git/FETCH_HEAD` is written by both `git clone` and `git fetch` and left untouched by a failed fetch, its mtime is a truthful proxy for "when this checkout was last actually current" in both the fresh and the stale case, using only information already on disk — no extra clock field needed on `GitSource`. `TestGitSourceOfflineWithCacheResolvesStale`'s fake `Run` never touches disk (by design, per the "tests must not require the network" instruction), so this specific mtime-sourcing behavior is exercised through `checkoutFetchedAt`'s own logic rather than asserted end-to-end in that test; `TestSyncRecordsGitSourceStaleness` (in `internal/app/sync_test.go`) instead pins the *propagation* of a given `ResolveInfo.FetchedAt` value through to `state.State`, using a `fakeGitSource` test double that returns a fixed `ResolveInfo` directly, sidestepping the need to fabricate a real `.git/FETCH_HEAD` file with a controlled mtime.
 
+### Phase 7 (this batch): CLI Reporting — `status`/`doctor`
+
+- [x] 7.1 RED: `internal/app/status_test.go` — `TestStatusReportsPowerShellProfileEditionAndPath` (Windows device, fake `LookPath("pwsh")`, asserts `PowerShellEdition`/`PowerShellProfilePath`/`PowerShellProvenance`), `TestStatusOmitsPowerShellFieldsForNonPowerShellDevice` (zsh device, asserts all three stay empty — pins non-negotiable constraint 2's "existing zsh/bash output shape" guarantee at the data level), `TestStatusReportsGitRefAndStaleness` (git-sourced device; seeds `state.json` directly via `state.Save`, never `Sync`, since `Status` must never spawn a `git` process to report on one). Observed failing to compile (`report.PowerShellEdition undefined`, etc. — `StatusReport` had no such fields) before any production code existed.
+- [x] 7.2 GREEN: `internal/app/status.go` — `StatusReport` gained `PowerShellEdition`, `PowerShellProfilePath`, `PowerShellProvenance` (populated only when `dc.Device.Shell == domain.ShellPowerShell`, via one call to `resolvePowerShellProfile(env, dc.Device.Platform)` — the same call `resolveRCPath` already makes, per the Phase 5 "Issues Found" note warning against a second, potentially disagreeing, call site) and `SourceRef`, `SourceStale`, `SourceFetchedAt` (read straight off the already-loaded `state.State`, i.e. what the *last successful sync* recorded — `Status` never calls `dc.Source.Resolve`, so these can never reflect a live re-resolve; that would require spawning a `git` process just to answer `status`, which non-negotiable constraint 4 and design decision 14's read-only posture both rule out).
+- [x] 7.3 RED: `internal/app/doctor_test.go` — `TestDoctorWarnsWhenOtherPowerShellEditionProfileExists` (seeds the *other* edition's profile file so `OtherExists` is provably true, not a default zero value; asserts the new `Warnings` field names that path), `TestDoctorOmitsPowerShellWarningForNonPowerShellDevice` (zsh device, asserts `Warnings` stays empty), `TestDoctorWarnsOnStaleGitSource` (git-sourced device; seeds the cached `aliases.yaml` directly at `source.GitAliasesPath(source.GitCacheDir(...), "")` and `state.json` with `SourceStale: true` via `state.Save`, never `Sync` — `Doctor` must stay offline and read-only). Observed failing to compile (`report.Warnings undefined` — `DoctorReport` had no such field) before any production code existed.
+- [x] 7.4 GREEN: `internal/app/doctor.go` — `DoctorReport` gained `Warnings []string`; `Doctor` appends the other-edition-profile warning (reading `resolvePowerShellProfile`'s already-computed `OtherPath`/`OtherExists` — no new detection logic, per the Phase 5 "Issues Found" note this task exists to fulfill) and the stale-`GitSource` warning (reading `state.Load`'s `SourceStale`/`SourceFetchedAt` when `dc.SourceDesc.Type == "git"` — the same read-only `state.Load` call `Status` makes, never `Source.Resolve`). Both are warnings, appended to `Warnings`, never to `Issues`, so `Doctor`'s exit-code contract (`Issues.HasErrors()` only) is untouched by construction, not by a separate check. `cmd/aliasdeck/status.go` and `cmd/aliasdeck/doctor.go` were also updated (production code, not a tracked task, but the entire point of this phase per the task prompt) to actually print the new fields: `status` gains a conditional `PowerShell:` line (edition, exact `$PROFILE` path, provenance — mirroring the existing `Platform:`/`Shell:` "value (provenance)" vocabulary) and a conditional `Git ref:` line (resolved ref, with an explicit `— STALE, using cached content` suffix when stale, mirroring `cmd/aliasdeck/sync.go`'s existing `fetchedSuffix` pattern via a new local `staleSuffix` helper); `doctor` gains a `%d warning(s):` block, printed after the existing `%d profile warning(s):` block, using the same one-line-per-item vocabulary. Neither existing block's format string changed, so `TestRunDoctorFindsErrorExitsThree`'s `strings.Contains(stdout, "bad name!")` assertion and every zsh/bash `status`/`doctor` test pass unedited.
+
 ## TDD Cycle Evidence
 
 | Task | RED (test written first, observed failing) | GREEN (implementation, observed passing) | REFACTOR |
@@ -138,6 +145,8 @@ PASS
 | 6.7/6.8 (state + app wiring) | `go test ./internal/app/... -run TestSyncRecordsGitSourceStaleness -v` — failed: `state.SourceStale = false, want true` (`state.go` had no such field yet, so this was also a compile-time RED one command earlier: `internal/state/state_test.go`'s `TestStateRoundTripWithGitStaleness` failed with `want.SourceStale undefined`) | `state.go`'s two new fields, then `sync.go`'s `ResolveReporter` type assertion in `syncWithContext`, made both commands pass | None needed |
 | 6.8 (dispatch) | `go test ./internal/app/... -run TestResolveSource -v` — failed: `resolveSource() returned an error: source type "git" is not supported in this version of AliasDeck` | `context.go`'s new `case config.SourceTypeGit:` and `resolveGitSource` helper fixed it | None needed — `resolveGitSource` factored out rather than inlined into the `switch`, matching the existing one-case-per-branch shape |
 | 6.9 | `TestEditGitSourcePerformsNoGitWrite` passed immediately once written, since 6.8 had already landed in this same batch — RED was instead demonstrated adversarially by temporarily stashing `context.go`'s 6.8 changes and rerunning (see the "RED evidence for 6.9" transcript above) | Restoring `context.go` (`git stash pop`) returned the suite to green | None needed |
+| 7.1/7.2 | `go test ./internal/app/... -run TestStatus -v` — compile error: `report.PowerShellEdition undefined`/`report.PowerShellProfilePath undefined`/`report.PowerShellProvenance undefined` (`StatusReport` had no such fields yet) | Same command passes after adding the six new `StatusReport` fields and the `dc.Device.Shell == domain.ShellPowerShell` branch in `Status()` | None needed — mirrors the existing `PlatformProvenance`/`ShellProvenance` population pattern already in `Status()` |
+| 7.3/7.4 | `go vet ./internal/app/...` — compile error: `report.Warnings undefined` (`DoctorReport` had no such field yet) | `go test ./internal/app/... -run TestDoctor -v` passes after adding `Warnings []string` and the two warning-producing branches in `Doctor()` | None needed — `gitStaleSuffix` factored out as a small local helper (mirroring `cmd/aliasdeck/sync.go`'s `fetchedSuffix`, which cannot be imported across the `main`/`app` package boundary) rather than inlined into the `Sprintf` call |
 
 ## Work Unit Evidence
 
@@ -180,6 +189,14 @@ PASS
 | Focused test command and exact result | `go test ./internal/source/... ./internal/state/... ./internal/app/... -v` → all tests pass, including every new/extended test named above; `go test ./internal/source/... -cover` → 87.0%, `go test ./internal/state/... -cover` → 73.0%, `go test ./internal/app/... -cover` → 83.0% |
 | Runtime integration harness | `TestRunGitSetsNonInteractiveEnvironment`/`TestRunGitNeverInvokesAShell`/`TestRunGitReturnsStderrOnFailure` — a real subprocess (`exec.CommandContext`) runs against a fake executable literally named `git`, first on `PATH`; not the network, not real git, but a genuine process boundary, gated with `t.Skip` on `runtime.GOOS == "windows"` the same way `edit_test.go`'s existing fake-editor-script tests already are. `GitSource.Resolve` itself is exercised only through the injected `Run` fake (no network), per the task prompt's explicit "tests must not require the network" instruction. |
 | Rollback boundary | Remove `internal/source/git.go`, `git_test.go`, `gitrun.go`, `gitrun_test.go`, and `internal/app/context_test.go`; revert `internal/app/context.go`'s `resolveGitSource`/`case config.SourceTypeGit:` (back to the pre-change `default:` error for `git`), `internal/app/sync.go`'s `ResolveReporter` type assertion, `internal/state/state.go`'s two new fields, and the new test cases appended to `internal/app/edit_test.go`/`sync_test.go`/`internal/state/state_test.go`. `internal/source/file.go`/`file_test.go` are untouched (`git diff --stat` empty), so `FileSource` is unaffected by the revert. No other package calls `GitSource`/`RunGit`/`ResolveReporter` yet (Phase 7's `status`/`doctor` wiring has not landed), so this reverts cleanly. |
+
+### Unit 6 (Phase 7 portion — CLI reporting only; Phases 8–9 of this unit are still pending)
+
+| Evidence | Value |
+|---|---|
+| Focused test command and exact result | `go test ./internal/app/... -run 'TestStatus\|TestDoctor' -v` → all 10 sub-tests pass (2 pre-existing `status` + 3 new, 4 pre-existing `doctor` + 3 new... see exact count in "Verification" below); `go test ./internal/app/... -cover` → 83.1%; `go test ./cmd/aliasdeck/... -cover` → 58.4% |
+| Runtime integration harness | Built the real `aliasdeck` binary and ran it against a temp `ALIASDECK_HOME`/`$HOME` with a fake `pwsh` on `PATH`: `init` → `status` (shows the `PowerShell:` line with edition/path/provenance) → seeded the other edition's profile file → `doctor` (shows the other-edition warning, exit code 0) → seeded a hostile alias (exit code 3, warning still present alongside the error, proving the warning never changes the exit code). Full transcript in "Verification" below. |
+| Rollback boundary | Revert `internal/app/status.go`, `status_test.go`, `doctor.go`, `doctor_test.go`, `cmd/aliasdeck/status.go`, `cmd/aliasdeck/doctor.go`. No other package calls the new `StatusReport`/`DoctorReport` fields yet, so this reverts cleanly and independently of Phases 8–9 (CI matrix, release, docs), which have not started. |
 
 ## Files Changed
 
@@ -225,9 +242,17 @@ PASS
 | `internal/app/sync.go` | Modified | `syncWithContext` type-asserts `source.ResolveReporter` after a successful `Resolve` and folds `Stale`/`FetchedAt`/the commit-augmented `SourceRef` into the persisted `state.State` |
 | `internal/app/sync_test.go` | Modified | Added `fakeGitSource`/`gitDeviceContext` test doubles, `TestSyncRecordsGitSourceStaleness`, `TestSyncFileSourceLeavesStalenessUnset`, `TestSyncUnreachableGitSourceWithoutCacheFailsAndNamesSource` |
 | `internal/app/edit_test.go` | Modified | Added `TestEditGitSourcePerformsNoGitWrite` (config-source spec, "GitSource Is Read-Only in v0.2") |
-| `openspec/changes/powershell-windows/tasks.md` | Modified | Marked 6.1–6.9 as `[x]` (batch 5) |
+| `openspec/changes/powershell-windows/tasks.md` | Modified | Marked 6.1–6.9 as `[x]` (batch 5); this batch additionally marked 7.1–7.4 as `[x]` (batch 6) |
+| `internal/app/status.go` | Modified | `StatusReport` gained `PowerShellEdition`, `PowerShellProfilePath`, `PowerShellProvenance`, `SourceRef`, `SourceStale`, `SourceFetchedAt`; `Status()` populates the PowerShell fields only for `domain.ShellPowerShell` devices (one call to `resolvePowerShellProfile`) and the source fields straight from the already-loaded `state.State` |
+| `internal/app/status_test.go` | Modified | Added `TestStatusReportsPowerShellProfileEditionAndPath`, `TestStatusOmitsPowerShellFieldsForNonPowerShellDevice`, `TestStatusReportsGitRefAndStaleness` |
+| `internal/app/doctor.go` | Modified | `DoctorReport` gained `Warnings []string`; `Doctor()` appends the other-edition-PowerShell-profile warning and the stale-`GitSource` warning (reading `state.Load`, never `Source.Resolve`); new local `gitStaleSuffix` helper |
+| `internal/app/doctor_test.go` | Modified | Added `TestDoctorWarnsWhenOtherPowerShellEditionProfileExists`, `TestDoctorOmitsPowerShellWarningForNonPowerShellDevice`, `TestDoctorWarnsOnStaleGitSource` |
+| `cmd/aliasdeck/status.go` | Modified | Prints a conditional `PowerShell:` line and a conditional `Git ref:` line (with a `— STALE, using cached content` suffix when stale, via new local `staleSuffix` helper); existing lines' format strings unchanged |
+| `cmd/aliasdeck/doctor.go` | Modified | Prints a new `%d warning(s):` block (after the existing `%d profile warning(s):` block) for `DoctorReport.Warnings`; existing blocks' format strings unchanged |
 
 ## Deviations from Design
+
+**One deviation for Phase 7, narrower-than-literal-text but design-intent-preserving, not corrected in `design.md` since it does not change decision 14's outcome — only which call reads the fields**: tasks.md 7.2 says `status` reports "git ref + staleness fields," and design decision 8 says "`status` prints edition + path + provenance," without stating explicitly that these are read from persisted `state.State` rather than a live resolve. Implemented as: `Status()` reads `SourceRef`/`SourceStale`/`SourceFetchedAt` straight off the `state.State` already loaded to compute `UpToDate` — the *last successful sync's* recorded values, not a fresh `dc.Source.Resolve` call. Reason: `status` calling `Resolve` on a `GitSource` would spawn a real `git` subprocess (network fetch) just to answer a read command, which non-negotiable constraint 4 ("Detection must not spawn a process") and design decision 14's read-only `ResolveReporter` posture (type-asserted only by `syncWithContext`, never by `status`/`doctor`) both argue against, and which would make `status` — a command explicitly meant to be safe and instant — occasionally hang or fail offline. `doctor`'s stale-`GitSource` warning follows the identical rule for the identical reason (also documented inline in `doctor.go`). This mirrors Phase 5's already-established pattern of reusing an existing read (`resolvePowerShellProfile`) rather than re-deriving state a second, possibly-disagreeing way.
 
 **Two deviations for Phase 6, both narrower-than-literal-text but design-intent-preserving, neither corrected in `design.md` since neither changes a decision's outcome — only which file a test physically lives in, and a documented stdlib limitation on a tag the design text already specified correctly:**
 
@@ -250,6 +275,14 @@ One clarification worth flagging: design decision 16 and the "Windows Path Handl
 
 ## Issues Found
 
+**One inherited, not new, limitation for Phase 7**: `status`/`doctor`'s git ref/staleness fields read `state.State`, so they inherit the exact no-op-skip visibility gap Phase 6's "Issues Found" note already flagged (a git-sourced device whose content is unchanged but whose reachability changed between two `sync` runs keeps reporting the *previous* run's staleness, not the current one, until content actually changes). This batch does not fix that gap — fixing it means changing what design decision 5's no-op skip persists, a decision outside tasks.md's 7.1–7.4 scope — but it is now doubly visible: a user who runs `status` or `doctor` between two unchanged-but-reachability-flipped syncs sees the stale `sync`-time snapshot, not live reachability. Flagged again here so whoever picks up the no-op-skip fix knows `status`/`doctor` read the same field `sync` writes, and fixing one fixes both for free.
+
+**Confirms Phase 5's forward-note, now fulfilled**: `doctor`'s other-edition-profile warning needed zero new detection logic, exactly as flagged — it is a straight read of `resolvePowerShellProfile(env, dc.Device.Platform)`'s `OtherPath`/`OtherExists`, called once, matching the single-call-site rule that note warned about.
+
+**Confirms Phase 6's forward-note, now fulfilled**: `status`'s new fields read `dc.SourceDesc.Type`/`state.State` rather than constructing a second `*source.GitSource` or calling `Resolve` a second time, so the "pointer-receiver / method-call-on-a-copy" hazard that note warned about never arises — `status`/`doctor` never call `Resolve` at all.
+
+None for Phase 7 beyond the inherited item above — every non-negotiable constraint (doctor writes nothing; zsh/bash `status`/`doctor` output shape unchanged; `internal/domain`/`internal/validate`/`internal/renderers` untouched; no process spawned; exit codes unchanged) was verified explicitly (see "Verification" below).
+
 **One known, deliberately-not-fixed limitation for Phase 6** (documented here per "never fail silently," rather than fixed, to keep this batch's scope matched to tasks 6.1–6.9): `syncWithContext`'s no-op skip path (design decision 5 — resolved revision *and* on-disk hash both already match) returns before the `ResolveReporter` staleness fields are ever folded into `state.State`. Concretely: if a git-sourced device's content is unchanged between two `sync` runs but the remote's reachability *changes* between those two runs (e.g. it was reachable on run 1, unreachable on run 2, or vice versa), the no-op skip on run 2 means `state.SourceStale`/`SourceFetchedAt` keep whatever value run 1 recorded, not run 2's actual result — a genuine staleness-visibility gap in the specific case where content happens not to have changed. This is out of tasks.md's literal 6.1–6.9 scope (none of the nine tasks mention the no-op-skip interaction), and fixing it correctly would mean persisting new state on what design decision 5 currently treats as a pure no-write path — a change to already-shipped Milestone-2 behavior that deserves its own reviewed decision rather than being folded silently into this batch. `TestSyncNoOpSkipWhenUnchanged` (pre-existing, Milestone 2) still passes unmodified, confirming this batch did not change the no-op-skip contract for file sources. Flagged here for Phase 7 (which reads these same fields for `status`/`doctor`) and for whoever picks this back up.
 
 Note for whoever reviews or extends `internal/source` next (Phase 7's `status`/`doctor` wiring, and Milestone 4's `ServerSource`): `GitSource`'s methods have pointer receivers specifically so `Resolve` can record `last ResolveInfo` for a later `Descriptor()`/`LastResolve()` call to see. `resolveGitSource` in `internal/app/context.go` already returns `*source.GitSource`, not a value — any new construction site must do the same, or `Descriptor()` calls after `Resolve` will silently keep reporting the pre-resolve (no-commit) value instead of erroring, since Go does not catch "method call on a copy" at compile time here.
@@ -268,11 +301,15 @@ Note carried from Phase 3 for whoever reviews or extends this package: Go's `gof
 
 ## Remaining Tasks (not in this batch's scope)
 
-- [ ] Phase 7: CLI Reporting — status/doctor (7.1–7.4)
 - [ ] Phase 8: CI Matrix & Release (8.1–8.6)
 - [ ] Phase 9: Docs & Final Verification (9.1–9.4)
 
 ## Workload / PR Boundary
+
+- Mode: `ask-on-risk` forecast in tasks.md remains unresolved for the overall change (chain strategy still `pending`); this batch executes the CLI-reporting portion of Work Unit 6 ("CLI reporting, CI matrix, release (Phases 7–9)") as an autonomous, revertible slice — Phase 7 only, not Phases 8–9 of that same unit — following Units 1–5 (Phases 1–6, already landed in this working tree) and regardless of which chain strategy the orchestrator ultimately picks. The orchestrator explicitly scoped this batch to "Phase 7 only," so this executor proceeded without re-raising the unresolved chain-strategy decision, consistent with how every prior batch (Phases 3, 4, 5, 6) proceeded on its own explicitly-scoped batch.
+- Current work unit: Phase 7 of Unit 6 of 6 (per the Suggested Work Units table in `tasks.md`; Phases 8–9 of Unit 6 remain)
+- Boundary: starts from Phase 6 complete (Unit 5); ends with Phase 7 fully green (`status`/`doctor` now report `PowerShellEdition`/`PowerShellProfilePath`/`PowerShellProvenance`/`SourceRef`/`SourceStale`/`SourceFetchedAt`/`Warnings`), isolated from Phases 8–9 (CI matrix, release, docs — no Go behavior in those phases depends on this one). Per this phase's own rollback boundary (see "Unit 6 (Phase 7 portion)" work-unit-evidence row above): revert `internal/app/status.go`/`status_test.go`/`doctor.go`/`doctor_test.go` and `cmd/aliasdeck/status.go`/`doctor.go` together as one commit.
+- Estimated review budget impact: `git diff --stat` for this phase's modified files: 326 insertions, 8 deletions across 6 Go files plus the `tasks.md` checkbox update — comfortably under the 400-line single-PR guard on its own.
 
 - Mode: `ask-on-risk` forecast in tasks.md remains unresolved for the overall change (chain strategy still `pending`); this batch executes Work Unit 5 ("`GitSource` + config schema + state staleness (Phases 1 git parts + 6)") as an autonomous, revertible slice, following Units 1–4 (Phases 1–5, already landed in this working tree) and regardless of which chain strategy the orchestrator ultimately picks for the remaining units. The orchestrator explicitly scoped this batch to "Phase 6 only," so this executor proceeded without re-raising the unresolved chain-strategy decision, consistent with how every prior batch (Phases 3, 4, 5) proceeded on its own explicitly-scoped batch.
 - Current work unit: Unit 5 of 6 (per the Suggested Work Units table in `tasks.md`)
@@ -294,6 +331,148 @@ Note carried from Phase 3 for whoever reviews or extends this package: Go's `gof
 - Unit 2 estimated review budget impact: moderate on its own (2 new source files, 1 new test file, 3 new goldens, ~60 changed lines across 3 pre-existing test/registry files) — comfortably under the 400-line guard for that unit alone, consistent with the tasks artifact's per-unit forecast.
 
 ## Verification
+
+### Phase 7 (this batch)
+
+```
+$ go test ./internal/app/... -run 'TestStatus|TestDoctor' -v
+=== RUN   TestDoctorReportsHostileEntryAndUndeclaredProfile
+--- PASS: TestDoctorReportsHostileEntryAndUndeclaredProfile (0.00s)
+=== RUN   TestDoctorWarnsWhenOtherPowerShellEditionProfileExists
+--- PASS: TestDoctorWarnsWhenOtherPowerShellEditionProfileExists (0.00s)
+=== RUN   TestDoctorOmitsPowerShellWarningForNonPowerShellDevice
+--- PASS: TestDoctorOmitsPowerShellWarningForNonPowerShellDevice (0.00s)
+=== RUN   TestDoctorWarnsOnStaleGitSource
+--- PASS: TestDoctorWarnsOnStaleGitSource (0.02s)
+=== RUN   TestDoctorWritesNothing
+--- PASS: TestDoctorWritesNothing (0.00s)
+=== RUN   TestDoctorLeavesAHandWrittenConfigUntouched
+--- PASS: TestDoctorLeavesAHandWrittenConfigUntouched (0.00s)
+=== RUN   TestStatusReportsActiveSource
+--- PASS: TestStatusReportsActiveSource (0.02s)
+=== RUN   TestStatusReportsNotInitialized
+--- PASS: TestStatusReportsNotInitialized (0.00s)
+=== RUN   TestStatusReportsPowerShellProfileEditionAndPath
+--- PASS: TestStatusReportsPowerShellProfileEditionAndPath (0.00s)
+=== RUN   TestStatusOmitsPowerShellFieldsForNonPowerShellDevice
+--- PASS: TestStatusOmitsPowerShellFieldsForNonPowerShellDevice (0.00s)
+=== RUN   TestStatusReportsGitRefAndStaleness
+--- PASS: TestStatusReportsGitRefAndStaleness (0.01s)
+PASS
+ok  	github.com/angeltonio/aliasdeck/internal/app	0.395s
+
+$ go test ./internal/app/... -cover
+ok  	github.com/angeltonio/aliasdeck/internal/app	coverage: 83.1% of statements
+
+$ go test ./cmd/aliasdeck/... -cover
+ok  	github.com/angeltonio/aliasdeck/cmd/aliasdeck	coverage: 58.4% of statements
+
+$ go test ./...
+ok  	github.com/angeltonio/aliasdeck/cmd/aliasdeck
+ok  	github.com/angeltonio/aliasdeck/internal/app
+ok  	github.com/angeltonio/aliasdeck/internal/apply
+ok  	github.com/angeltonio/aliasdeck/internal/config
+ok  	github.com/angeltonio/aliasdeck/internal/domain
+ok  	github.com/angeltonio/aliasdeck/internal/renderers
+?   	github.com/angeltonio/aliasdeck/internal/shelltest	[no test files]
+ok  	github.com/angeltonio/aliasdeck/internal/source
+ok  	github.com/angeltonio/aliasdeck/internal/state
+ok  	github.com/angeltonio/aliasdeck/internal/validate
+
+$ make ci
+go vet ./...
+go test -race ./...
+ok  	github.com/angeltonio/aliasdeck/cmd/aliasdeck
+ok  	github.com/angeltonio/aliasdeck/internal/app
+ok  	github.com/angeltonio/aliasdeck/internal/apply
+ok  	github.com/angeltonio/aliasdeck/internal/config
+ok  	github.com/angeltonio/aliasdeck/internal/domain
+ok  	github.com/angeltonio/aliasdeck/internal/renderers
+?   	github.com/angeltonio/aliasdeck/internal/shelltest	[no test files]
+ok  	github.com/angeltonio/aliasdeck/internal/source
+ok  	github.com/angeltonio/aliasdeck/internal/state
+ok  	github.com/angeltonio/aliasdeck/internal/validate
+CI checks passed
+
+$ gofmt -l .
+(no output — everything formatted)
+```
+
+**Real binary, real output (manual verification, per the task prompt's explicit request)**: built `aliasdeck` and ran it against a temp `ALIASDECK_HOME`/`$HOME` with a fake `pwsh` on `PATH` (never a real PowerShell process — `resolvePowerShellProfile` only ever calls `Env.LookPath`).
+
+```
+$ ALIASDECK_HOME=.../pwsh-config HOME=.../pwsh-home \
+  ALIASDECK_PLATFORM=windows ALIASDECK_SHELL=powershell \
+  PATH=.../fakebin:$PATH aliasdeck init --no-bootstrap
+Base directory: .../pwsh-config
+Created config.yaml
+Created aliases.yaml
+Device: macbook-pro-de-angel (platform=windows, shell=powershell)
+Synced 0 alias(es) to .../pwsh-config/aliases.ps1
+Bootstrap line not added (--no-bootstrap). Add it manually to your shell rc file:
+  if (Test-Path -LiteralPath ".../pwsh-config/aliases.ps1") { . ".../pwsh-config/aliases.ps1" }
+
+$ aliasdeck status
+Device:    macbook-pro-de-angel (platform=windows, shell=powershell)
+Platform:  windows ($ALIASDECK_PLATFORM)
+Shell:     powershell ($ALIASDECK_SHELL)
+PowerShell: Core edition, profile .../pwsh-home/Documents/PowerShell/Microsoft.PowerShell_profile.ps1 (LookPath("pwsh") found PowerShell 7 (Core); Documents under $HOME (default; not yet created))
+Source:    file (.../pwsh-config/aliases.yaml)
+Backend:   native
+Last sync: 2026-08-13T12:05:18+02:00
+Status:    up to date
+
+# Seed the *other* edition's (Desktop) profile so doctor's warning fires.
+$ mkdir -p .../pwsh-home/Documents/WindowsPowerShell
+$ touch .../pwsh-home/Documents/WindowsPowerShell/Microsoft.PowerShell_profile.ps1
+
+$ aliasdeck doctor; echo "exit code: $?"
+Device:   macbook-pro-de-angel (platform=windows, shell=powershell)
+Platform: $ALIASDECK_PLATFORM
+Shell:    $ALIASDECK_SHELL
+Source:   .../pwsh-config/aliases.yaml
+No validation issues found.
+1 warning(s):
+  the other PowerShell edition's profile exists and is not bootstrapped: .../pwsh-home/Documents/WindowsPowerShell/Microsoft.PowerShell_profile.ps1 (this device bootstraps Core at .../pwsh-home/Documents/PowerShell/Microsoft.PowerShell_profile.ps1)
+exit code: 0
+
+# Now add a hostile alias name (a real validation error) alongside the
+# still-present PowerShell warning, to prove the warning never changes
+# doctor's exit code (non-negotiable constraint 5).
+$ cat > .../pwsh-config/aliases.yaml <<'YAML'
+version: 1
+aliases:
+  - name: "bad name!"
+    command: echo hi
+YAML
+
+$ aliasdeck doctor; echo "exit code: $?"
+Device:   macbook-pro-de-angel (platform=windows, shell=powershell)
+Platform: $ALIASDECK_PLATFORM
+Shell:    $ALIASDECK_SHELL
+Source:   .../pwsh-config/aliases.yaml
+1 issue(s):
+  error: bad name! (name): name "bad name!" contains characters that are not allowed; use letters, digits, underscores, dots or hyphens, starting with a letter or underscore
+1 warning(s):
+  the other PowerShell edition's profile exists and is not bootstrapped: .../pwsh-home/Documents/WindowsPowerShell/Microsoft.PowerShell_profile.ps1 (this device bootstraps Core at .../pwsh-home/Documents/PowerShell/Microsoft.PowerShell_profile.ps1)
+exit code: 3
+
+# zsh device, unrelated ALIASDECK_HOME: proves the existing output shape
+# is unchanged — no PowerShell:/Git ref: lines, no Warnings block.
+$ ALIASDECK_HOME=.../zsh-config HOME=.../zsh-home \
+  ALIASDECK_PLATFORM=macos ALIASDECK_SHELL=zsh aliasdeck status
+Device:    macbook-pro-de-angel (platform=macos, shell=zsh)
+Platform:  macos ($ALIASDECK_PLATFORM)
+Shell:     zsh ($ALIASDECK_SHELL)
+Source:    file (.../zsh-config/aliases.yaml)
+Backend:   native
+Last sync: 2026-08-13T12:05:36+02:00
+Status:    up to date
+```
+
+The first `doctor` run (warning only, no `Issue`) exits `0`; the second (same warning, plus a real validation error) exits `3` — proving the other-edition-profile warning is additive and never changes `doctor`'s exit-code contract by itself.
+
+### Earlier batches
 
 ```
 $ go test ./...

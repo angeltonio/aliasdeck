@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/angeltonio/aliasdeck/internal/app"
 	"github.com/spf13/cobra"
@@ -26,7 +27,17 @@ func newStatusCmd() *cobra.Command {
 				report.Device.Name, report.Device.Platform, report.Device.Shell)
 			fmt.Fprintf(out, "Platform:  %s (%s)\n", report.Device.Platform, report.PlatformProvenance)
 			fmt.Fprintf(out, "Shell:     %s (%s)\n", report.Device.Shell, report.ShellProvenance)
+			if report.PowerShellEdition != "" {
+				// "Profile" rather than "PowerShell" so the label column stays
+				// aligned; the Shell line directly above already says which
+				// shell this profile belongs to.
+				fmt.Fprintf(out, "Profile:   %s edition, %s (%s)\n",
+					report.PowerShellEdition, report.PowerShellProfilePath, report.PowerShellProvenance)
+			}
 			fmt.Fprintf(out, "Source:    %s (%s)\n", report.Source.Type, report.Source.Ref)
+			if report.Source.Type == "git" && report.SourceRef != "" {
+				fmt.Fprintf(out, "Git ref:   %s%s\n", report.SourceRef, staleSuffix(report.SourceStale, report.SourceFetchedAt))
+			}
 			fmt.Fprintf(out, "Backend:   %s\n", report.Backend)
 			if report.State.LastSyncAt.IsZero() {
 				fmt.Fprintln(out, "Last sync: never")
@@ -41,4 +52,14 @@ func newStatusCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+// staleSuffix renders a explicit staleness warning appended to the git ref
+// line, or nothing at all when the checkout is current — status must never
+// let a stale-but-unremarked ref look identical to a fresh one.
+func staleSuffix(stale bool, fetchedAt time.Time) string {
+	if !stale {
+		return ""
+	}
+	return " — STALE, using cached content" + fetchedSuffix(fetchedAt)
 }

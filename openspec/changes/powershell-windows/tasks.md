@@ -92,10 +92,10 @@ Base ordering if Feature Branch Chain is chosen: PR1 → PR2/PR3/PR4/PR5 (parall
 
 ## Phase 7: CLI Reporting — status/doctor
 
-- [ ] 7.1 RED: `internal/app/status_test.go` — PowerShell edition + exact `$PROFILE` path bootstrapped; git ref + staleness fields (cli-commands).
-- [ ] 7.2 GREEN: extend `StatusReport`/`Status()` (`internal/app/status.go`) with `PowerShellEdition`, `PowerShellProfilePath` (PowerShell devices only), `SourceRef`, `SourceStale`.
-- [ ] 7.3 RED: `internal/app/doctor_test.go` — other-edition-profile-exists warning; stale-`GitSource` warning; both write nothing.
-- [ ] 7.4 GREEN: extend `DoctorReport`/`Doctor()` (`internal/app/doctor.go`) with the two warnings above.
+- [x] 7.1 RED: `internal/app/status_test.go` — PowerShell edition + exact `$PROFILE` path bootstrapped; git ref + staleness fields (cli-commands).
+- [x] 7.2 GREEN: extend `StatusReport`/`Status()` (`internal/app/status.go`) with `PowerShellEdition`, `PowerShellProfilePath` (PowerShell devices only), `SourceRef`, `SourceStale`.
+- [x] 7.3 RED: `internal/app/doctor_test.go` — other-edition-profile-exists warning; stale-`GitSource` warning; both write nothing.
+- [x] 7.4 GREEN: extend `DoctorReport`/`Doctor()` (`internal/app/doctor.go`) with the two warnings above.
 
 ## Phase 8: CI Matrix & Release
 

@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/angeltonio/aliasdeck/internal/config"
 	"github.com/angeltonio/aliasdeck/internal/domain"
+	"github.com/angeltonio/aliasdeck/internal/state"
 	"github.com/angeltonio/aliasdeck/internal/validate"
 )
 
@@ -22,6 +24,16 @@ type DoctorReport struct {
 	ShellProvenance    string
 	Issues             validate.Issues
 	ProfileWarnings    []string
+
+	// Warnings holds free-form diagnostics beyond validation and undeclared
+	// profiles: the other PowerShell edition's profile existing unbootstrapped
+	// (cli-commands spec, "Other-edition profile warning"), and a stale
+	// GitSource checkout (cli-commands spec, "Stale GitSource checkout
+	// reported"). Both are read-only checks — the first reads fields
+	// resolvePowerShellProfile already computes, the second reads the
+	// last sync's recorded state — so they never write anything and never
+	// change Doctor's exit code (a warning is not an Issue).
+	Warnings []string
 }
 
 // Doctor performs its own independent read-and-validate pass over the
@@ -46,7 +58,31 @@ func Doctor(_ context.Context, env Env, opts Options) (DoctorReport, error) {
 
 	resolved := domain.Resolve(dc.Device, doc.Aliases)
 	issues := validate.Config(resolved)
-	warnings := config.ProfileWarnings(doc.Profiles, doc.Aliases)
+	profileWarnings := config.ProfileWarnings(doc.Profiles, doc.Aliases)
+
+	var warnings []string
+
+	if dc.Device.Shell == domain.ShellPowerShell {
+		profile, err := resolvePowerShellProfile(env, dc.Device.Platform)
+		if err != nil {
+			return DoctorReport{}, err
+		}
+		if profile.OtherExists {
+			warnings = append(warnings, fmt.Sprintf(
+				"the other PowerShell edition's profile exists and is not bootstrapped: %s (this device bootstraps %s at %s)",
+				profile.OtherPath, profile.Edition, profile.Path))
+		}
+	}
+
+	if dc.SourceDesc.Type == "git" {
+		st, err := state.Load(config.StateFile(dc.Base))
+		if err != nil {
+			return DoctorReport{}, err
+		}
+		if st.SourceStale {
+			warnings = append(warnings, "the git source checkout is stale"+gitStaleSuffix(st.SourceFetchedAt))
+		}
+	}
 
 	return DoctorReport{
 		Device:             dc.Device,
@@ -54,6 +90,18 @@ func Doctor(_ context.Context, env Env, opts Options) (DoctorReport, error) {
 		PlatformProvenance: dc.PlatformProvenance,
 		ShellProvenance:    dc.ShellProvenance,
 		Issues:             issues,
-		ProfileWarnings:    warnings,
+		ProfileWarnings:    profileWarnings,
+		Warnings:           warnings,
 	}, nil
+}
+
+// gitStaleSuffix renders when the source last reached its origin, or
+// nothing when that is unknown — mirroring cmd/aliasdeck/sync.go's
+// fetchedSuffix, but local to internal/app since that helper lives in
+// package main and cannot be imported from here.
+func gitStaleSuffix(at time.Time) string {
+	if at.IsZero() {
+		return ""
+	}
+	return " (last reached the origin on " + at.Format(time.RFC3339) + ")"
 }

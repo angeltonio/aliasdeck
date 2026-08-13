@@ -68,4 +68,14 @@ func printDoctorReport(out io.Writer, r app.DoctorReport) {
 			fmt.Fprintf(out, "  %s\n", w)
 		}
 	}
+
+	// Other-edition PowerShell profile and stale-GitSource warnings
+	// (cli-commands spec, "doctor Diagnoses Without Writing"). These are
+	// warnings, not Issues: they never affect doctor's exit code.
+	if len(r.Warnings) > 0 {
+		fmt.Fprintf(out, "%d warning(s):\n", len(r.Warnings))
+		for _, w := range r.Warnings {
+			fmt.Fprintf(out, "  %s\n", w)
+		}
+	}
 }
