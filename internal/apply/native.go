@@ -50,6 +50,8 @@ func shellFileExt(sh domain.Shell) (string, error) {
 		return "zsh", nil
 	case domain.ShellBash:
 		return "bash", nil
+	case domain.ShellPowerShell:
+		return "ps1", nil
 	default:
 		return "", fmt.Errorf("no generated-file extension defined for shell %q", sh)
 	}

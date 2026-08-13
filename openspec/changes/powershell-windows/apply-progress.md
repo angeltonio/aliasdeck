@@ -1,6 +1,6 @@
 # Apply Progress: PowerShell, Windows and Git-hosted config — Milestone 3 (v0.2)
 
-**Batches**: 1 (Phases 1–2) + 2 (Phase 3), per orchestrator scope
+**Batches**: 1 (Phases 1–2) + 2 (Phase 3) + 3 (Phase 4), per orchestrator scope
 **Mode**: Strict TDD
 
 ## Completed Tasks
@@ -23,6 +23,21 @@
 
 Before trusting `TestGeneratedFileIsInertInRealPowerShell` as a regression guard, `Render` was temporarily changed to emit raw, unquoted code directly inside the function block (`function <name> { <command> @args }` — exactly the vulnerable form design decision 1 warns against) and the test was rerun. It failed hard: the crafted `}`-bearing payload broke PowerShell's own parser (`ParserError`, "the splatting operator '@' cannot be used to reference variables in an expression") and the argument-forwarding sub-test failed too (`showargs` was undefined, since the malformed file never finished sourcing). The correct implementation was then restored (`git diff internal/renderers/powershell.go` was empty afterward, confirming a clean revert) and the full suite was rerun green. This is stronger evidence than "the test passed" alone — it shows the test actively catches the class of regression it exists to catch.
 
+### Phase 4 (this batch): Windows Apply — Defects A+B, EOL, `.ps1` Output
+
+- [x] 4.1 RED: `internal/apply/native_test.go` — added `{domain.ShellPowerShell, "ps1"}` to `TestNativeBackendOutputPath`'s table (fails: `no generated-file extension defined for shell "powershell"`); inverted `TestNativeBackendOutputPathUnsupportedShell` to use `domain.Shell("fish")` instead of `ShellPowerShell` (every real shell now has a defined extension).
+- [x] 4.2 GREEN: `internal/apply/native.go` — `shellFileExt` gained `case domain.ShellPowerShell: return "ps1", nil`.
+- [x] 4.3 RED: `internal/apply/bootstrap_test.go` — `BootstrapLine` gained a `sh domain.Shell` parameter (compile-error RED across the whole package, since every existing call site needed updating simultaneously — the expected shape of a signature-changing RED under Go's whole-package compilation). New cases: zsh (existing 3, unchanged expectations), a bash case proving byte-identical POSIX output, a `home==""` case, and four PowerShell cases (Windows-shaped path under `$HOME`, outside `$HOME`, `home==""`, and one exercising the double-quote escaper on a path containing `` ` ``, `"`, `$`). "Windows-shaped" paths are built with `filepath.Join` (not literal backslash strings) so the exact same test source exercises the real backslash-separator branch of `filepath.Rel` once this suite runs under `GOOS=windows` (Phase 8) — literal backslash strings would not, since `filepath.Rel` is OS-native and this CI host is not Windows; this limitation and its resolution are documented inline in the test file.
+- [x] 4.4 GREEN (Defect A fix, design decisions 4+5): `BootstrapLine(sh domain.Shell, generatedPath, home string)` — replaced `strings.CutPrefix`+`rel[0]=='/'` with a new `relUnderHome` helper (`filepath.Rel`, reject a `..`-bearing result); POSIX branch (`homeRelativeDisplay`) emits `"$HOME/"+filepath.ToSlash(rel)`, byte-identical to the old output on every existing test case (verified: `filepath.Rel` on this build reproduces the exact same accept/reject decisions as the old `CutPrefix` check for "under home", "outside home", and the "user"/"user2" prefix-collision case). New `bootstrapLinePowerShell` + `escapePowerShellDoubleQuoted` (backtick→``` `` ```, `"`→`""`, `$`→`` `$ ``) implement the PowerShell form; the escaper is applied only to the relative remainder, never to the literal `"$HOME/"` prefix, so PowerShell still expands `$HOME` as its automatic variable instead of it being escaped to a literal `` `$HOME ``.
+- [x] 4.5 GREEN: `AddBootstrap(rcPath string, sh domain.Shell, generatedPath, home string)` — threads `sh` into `BootstrapLine`; POSIX branch unchanged bytes. Updated `internal/app/init.go`'s three call sites (both `BootstrapLine` calls for the manual-line message, one `AddBootstrap` call) to pass `dc.Device.Shell`. Updated every `bootstrap_test.go`/`roundtrip_test.go` call site for the new signature.
+- [x] 4.6 RED (Defect B + CRLF, decisions 6+7 — landed as one unit, per the non-negotiable ordering rule): extended `roundtrip_test.go`'s existing CRLF case with an assertion that the appended block's own line endings match the rc file's pre-existing convention (fails to compile: no such check existed, and more importantly the underlying mechanism didn't exist yet). Added to `bootstrap_test.go`: `TestDetectEOL` (5-case table: empty, LF-only, CRLF, one-CRLF-among-LF, no-trailing-newline), `TestBootstrapCRLFAddRemoveRoundTrip` (add/remove on a CRLF `$PROFILE`-shaped file, unedited), and `TestRemoveBootstrapMarkerScanFallbackOnCRLFProfile` — the critical proof: seeds a CRLF file, calls `AddBootstrap`, edits the sourcing line inside the block (forcing the exact-bytes match to miss), then asserts `RemoveBootstrap` still finds and removes the block via the marker-scan fallback and restores the surrounding CRLF content byte-for-byte. Observed failing to compile (`undefined: detectEOL`) before any production code existed.
+- [x] 4.7 GREEN (same task as 4.6): added `detectEOL(existing []byte) string` (`"\r\n"` iff `existing` already contains one, else `"\n"`); threaded `eol` through `buildBlock(existing []byte, line, eol string)`, replacing every hardcoded `"\n"` append; fixed `indexOfLine`'s `atLineEnd` check to also accept a `\r`+`\n` pair (previously required `content[end] == '\n'` exactly, which a CRLF-terminated marker line fails on the `\r` byte); fixed `removeMarkerScan`'s blank-separator-line and trailing-newline consumption via a new shared `stripTrailingEOL(content []byte, pos int) (int, bool)` helper that accepts either terminator, generalizing the old bare-`\n`-only backward/forward checks.
+- [x] 4.8 Verify: `go test ./internal/apply/...` — all tests pass, including the new CRLF cases and every pre-existing POSIX byte-identical assertion, unmodified. See "Adversarial validation" and "Verification" below for the full evidence.
+
+### Adversarial validation of the CRLF marker-scan fallback (not a tracked task, done for the same reason Phase 3 did it — this is the security-critical, user-file-mutating phase, and the task prompt explicitly demanded proof the fix was genuinely load-bearing)
+
+Before trusting `TestRemoveBootstrapMarkerScanFallbackOnCRLFProfile` as the regression guard the ordering rule exists for, `indexOfLine`'s `atLineEnd` check was temporarily reverted to its original LF-only form (`atLineEnd := end == len(content) || content[end] == '\n'`, dropping the added `\r`+`\n` branch) via a surgical single-hunk edit — not a full-file revert, since the `AddBootstrap`/`BootstrapLine` signature changes from earlier in this same batch had to stay in place for the package to compile — and the test was rerun. It failed exactly as the design document predicts: `RemoveBootstrapMarkerScanFallbackOnCRLFProfile` reported `RemoveBootstrap() must report a non-exact restore when it falls back to marker scanning` — meaning the buggy `indexOfLine` could not find the CRLF-terminated marker lines at all, `removeMarkerScan` returned `found=false`, and `RemoveBootstrap` silently reported `exact=true` (nothing removed) instead of finding and cutting the block. This is the literal, measured shape of the bug the design document and the task prompt describe: a user who edited inside a CRLF `$PROFILE`'s block would have kept that block forever, with no error and no indication anything was wrong. The correct `atLineEnd` check was then restored (`diff` against the pre-revert file was byte-identical afterward, confirming a clean restore) and the full suite was rerun green.
+
 ### Gotcha discovered mid-phase: gofmt mangles literal `''` inside doc-comment prose
 
 Go's `gofmt` (confirmed on the actual `go1.25.11` binary, not a shim artifact) reformats top-level doc comments via `go/doc/comment` and treats two adjacent straight single quotes (`''`) appearing inline in prose (inside backticks, outside an indented code block) as a typewriter-style double-quote convention, silently rewriting them to a Unicode right-double-quotation-mark (U+201D). This is exactly the sequence this renderer's own doc comments needed to describe (PowerShell's `''` doubling), so `quotePowerShell`'s doc comment and two test doc comments were rewritten to describe the doubling in words instead of showing bare `''` inline in prose — the indented code-block example (`don't -> 'don''t'`) is unaffected because gofmt preserves preformatted blocks verbatim, and Go string literals in test tables are code, not comments, so they were never at risk. Caught by running `gofmt -l .` and inspecting the diff (`gofmt -d`) before trusting `-w`; worth flagging for any future PowerShell-adjacent Go doc comment in this codebase.
@@ -37,6 +52,9 @@ Go's `gofmt` (confirmed on the actual `go1.25.11` binary, not a shim artifact) r
 | 3.1/3.2 | `go test ./internal/renderers/... -run 'TestQuotePowerShell\|TestRenderArgsForwardedTwice\|TestPowerShellRendererShell' -v` — compile error: `undefined: quotePowerShell` (twice) | Same command passes after adding `powershell.go` (`powershellRenderer`, `quotePowerShell`, `Render`) and registering `domain.ShellPowerShell` in `renderer.go`'s `registry` | None needed — mirrors `posixRenderer`'s structure (guard → clone/sort → `writeHeader` → per-alias loop) with an unrelated grammar inside the loop |
 | 3.4 | `go test ./internal/renderers/... -v` after 3.2's GREEN — `TestForUnsupportedShell` failed (`expected PowerShell to be unsupported`), `TestSupported` failed (`Supported() = [zsh bash powershell], want [zsh bash]`) | Both fixed by inverting the assertions in `posix_test.go` to the positive guarantee; full suite green after | None needed |
 | 3.5/3.6 | New `powershell_integration_test.go` run against real `pwsh` (`PATH` prepended with the provided pwsh directory) — passed on first run because the renderer under test (3.2) was already correct; RED was instead demonstrated adversarially (see "Adversarial validation" note above): reverting `Render` to raw, unquoted interpolation made both integration sub-tests fail against real `pwsh` with a `ParserError` | Restoring the correct `Render` implementation returned the suite to green (`git diff internal/renderers/powershell.go` empty after revert) | None needed |
+| 4.1/4.2 | `go test ./internal/apply/... -run TestNativeBackendOutputPath -v` — `TestNativeBackendOutputPath/powershell` failed: `OutputPath() returned an error: no generated-file extension defined for shell "powershell"` | Same command passes after adding `case domain.ShellPowerShell: return "ps1", nil` to `shellFileExt` | None needed — one-line addition matching the existing zsh/bash cases |
+| 4.3/4.4/4.5 | `go test ./internal/apply/... -run TestBootstrapLine -v` (and the whole package) — compile errors: `too many arguments in call to BootstrapLine`/`AddBootstrap` across every existing call site, since the signature change (`sh domain.Shell` parameter) is package-wide by construction | Same commands pass after: `relUnderHome` (filepath.Rel-based, replacing the `strings.CutPrefix`+`rel[0]=='/'` check), `escapePowerShellDoubleQuoted`, `bootstrapLinePowerShell`, `homeRelativeDisplay`, the `BootstrapLine`/`AddBootstrap` signature changes, and the three `internal/app/init.go` call-site updates (`dc.Device.Shell`) | None needed — the POSIX branch is a straight extraction of the pre-existing logic into `homeRelativeDisplay`, verified byte-identical below |
+| 4.6/4.7 | `go test ./internal/apply/... -run TestDetectEOL -v` — compile error: `undefined: detectEOL`; `roundtrip_test.go`'s extended CRLF assertion could not even be written against working code | Same commands pass after `detectEOL`, `eol`-threaded `buildBlock`, the CRLF-aware `indexOfLine.atLineEnd` check, and the new `stripTrailingEOL` helper feeding `removeMarkerScan`'s blank-line/trailing-newline logic | None needed — `stripTrailingEOL` is a single shared primitive replacing two separate bare-`\n` checks that would otherwise each need their own CRLF branch |
 
 ## Work Unit Evidence
 
@@ -55,6 +73,14 @@ Go's `gofmt` (confirmed on the actual `go1.25.11` binary, not a shim artifact) r
 | Focused test command and exact result | `go test ./internal/renderers/... -v` → all 15 top-level tests pass (7 pre-existing + `TestQuotePowerShell`, `TestQuotePowerShellNeutralizesBreakout`, `TestRenderArgsForwardedTwice`, `TestPowerShellRendererShell`, `TestGeneratedFileIsInertInRealPowerShell`, plus the inverted `TestForUnsupportedShell`/`TestSupported`); `internal/renderers` coverage 92.0% (`go test ./internal/renderers/... -cover`) |
 | Runtime integration harness | `TestGeneratedFileIsInertInRealPowerShell` — dot-sources a rendered file containing five hostile payloads in real `pwsh` 7.6.4 and asserts no canary file is created and no output is produced (definition-only load); a second sub-test calls a benign alias with two arguments (one containing a space) and asserts both arrive intact. Actually executed, not skipped, when `pwsh`'s directory is prepended to `PATH` — verbose output captured below. |
 | Rollback boundary | Remove `internal/renderers/powershell.go`, `powershell_test.go`, `powershell_integration_test.go`, the three `testdata/powershell_*.golden` files, the one added map entry in `renderer.go`'s `registry`, and revert the two inverted assertions in `posix_test.go` plus the three new cases in `golden_test.go`. `posix.go` and `header.go` are untouched, so zsh/bash rendering is unaffected by the revert. |
+
+### Unit 3 (Phase 4)
+
+| Evidence | Value |
+|---|---|
+| Focused test command and exact result | `go test ./internal/apply/... -v` → all tests pass (see full output below); `go test ./internal/apply/... -cover` → 84.9% |
+| Runtime integration harness | `TestRemoveBootstrapMarkerScanFallbackOnCRLFProfile` — not a spawned process, but the real filesystem round-trip this package exists to protect: seeds a CRLF `$PROFILE`-shaped file in `t.TempDir()`, runs `AddBootstrap`, hand-edits the sourcing line inside the block (forcing the exact-byte match to miss), then asserts `RemoveBootstrap` still finds it via the marker-scan fallback and restores the surrounding CRLF content byte-for-byte. This is the exact scenario the ordering rule in tasks.md 4.6/4.7 exists to prevent from regressing silently. Adversarially validated by reverting `indexOfLine`'s CRLF fix and observing this exact test fail (see "Adversarial validation" note above). |
+| Rollback boundary | Revert `internal/apply/bootstrap.go`, `bootstrap_test.go`, `native.go`, `native_test.go`, `roundtrip_test.go`, and the three `apply.BootstrapLine`/`apply.AddBootstrap` call sites in `internal/app/init.go` (same commit, per the tasks artifact's own rollback note for this unit). No other package calls `apply.BootstrapLine`/`apply.AddBootstrap`/`shellFileExt` besides `internal/app/init.go` and `internal/apply/native.go` itself, so this reverts cleanly. |
 
 ## Files Changed
 
@@ -77,9 +103,19 @@ Go's `gofmt` (confirmed on the actual `go1.25.11` binary, not a shim artifact) r
 | `internal/renderers/testdata/powershell_basic.golden` | Created | Golden output for the standard fixture rendered as PowerShell |
 | `internal/renderers/testdata/powershell_empty.golden` | Created | Golden output for zero aliases |
 | `internal/renderers/testdata/powershell_awkward_commands.golden` | Created | Golden output covering `}`, `'`, `$`, and backtick in commands |
-| `openspec/changes/powershell-windows/tasks.md` | Modified | Marked 1.1–2.4 (batch 1) and 3.1–3.6 (batch 2) as `[x]` |
+| `internal/apply/native.go` | Modified | `shellFileExt` gained `case domain.ShellPowerShell: return "ps1", nil` |
+| `internal/apply/native_test.go` | Modified | Added the `ps1` case to `TestNativeBackendOutputPath`'s table; inverted `TestNativeBackendOutputPathUnsupportedShell` to use `domain.Shell("fish")` |
+| `internal/apply/bootstrap.go` | Modified | `BootstrapLine`/`AddBootstrap` gained a `sh domain.Shell` parameter; added `relUnderHome` (Defect A fix, filepath.Rel-based), `homeRelativeDisplay` (POSIX branch), `bootstrapLinePowerShell`, `escapePowerShellDoubleQuoted` (Defect A's PowerShell counterpart + decision 5's escaper), `detectEOL`, `stripTrailingEOL` (decision 6/7); `buildBlock` gained an `eol` parameter; `indexOfLine`'s `atLineEnd` and `removeMarkerScan`'s blank-line/trailing-newline handling now accept `\r\n` (Defect B fix) |
+| `internal/apply/bootstrap_test.go` | Modified | `TestBootstrapLine` extended with shell-parameterized cases (bash, `home==""`, four PowerShell cases); every `AddBootstrap`/`BootstrapLine` call site updated for the new signature; added `TestDetectEOL`, `TestBootstrapCRLFAddRemoveRoundTrip`, `TestRemoveBootstrapMarkerScanFallbackOnCRLFProfile` |
+| `internal/apply/roundtrip_test.go` | Modified | Every `AddBootstrap` call site updated for the new signature; extended the CRLF case with a block-CRLF-usage assertion (design decision 6) |
+| `internal/app/init.go` | Modified | Three call sites (`apply.BootstrapLine` ×2, `apply.AddBootstrap` ×1) now pass `dc.Device.Shell` |
+| `openspec/changes/powershell-windows/tasks.md` | Modified | Marked 1.1–2.4 (batch 1), 3.1–3.6 (batch 2), and 4.1–4.8 (batch 3) as `[x]` |
 
 ## Deviations from Design
+
+None for Phase 4 — implementation matches design decisions 3, 4, 5, 6, and 7 verbatim, including the non-negotiable ordering rule (4.6/4.7 landed as one unit, verified adversarially — see above) and the constraint that the POSIX branch stay byte-identical (verified: `filepath.Rel`-based `relUnderHome` reproduces the exact same accept/reject decisions as the old `strings.CutPrefix` check on every pre-existing test case, and every pre-existing POSIX assertion in `bootstrap_test.go`/`roundtrip_test.go` passed unmodified).
+
+One documented limitation, not a deviation: the "Windows-shaped paths" in `TestBootstrapLine`'s new PowerShell cases are built with `filepath.Join` rather than literal backslash strings, because `filepath.Rel` is OS-native and this CI host is not Windows — a literal backslash string would exercise the *wrong* (POSIX) branch of `filepath.Rel` on this host and could not prove the Windows-separator behavior either way. The same test source will exercise the true backslash-separator branch once Phase 8's Windows CI matrix runs this suite under `GOOS=windows`, with no code change required. This is called out inline in the test file's comments.
 
 None for Phase 3 — implementation matches design decisions 1 and 2 (renderer shape, escaping), the interface shown in "Interfaces" (§ PowerShell function form), and the testing strategy table's golden/unit/integration rows verbatim.
 
@@ -89,13 +125,16 @@ One clarification worth flagging: design decision 16 and the "Windows Path Handl
 
 ## Issues Found
 
+None for Phase 4.
+
+Note for whoever reviews or extends this package next (Phase 5 calls `resolveRCPath`, which is a different function of the same name in `internal/app/rcpath.go`, not `internal/apply/bootstrap.go`'s — do not confuse the two when threading PowerShell's `$PROFILE` resolution through): `apply.BootstrapLine`/`apply.AddBootstrap` now require a `domain.Shell`. Any future caller must pass the actual detected shell, not assume POSIX — `dc.Device.Shell` is the pattern used in `internal/app/init.go`.
+
 None for Phase 3.
 
 Note carried from Phase 3 for whoever reviews or extends this package: Go's `gofmt` doc-comment reformatter mangles literal `''` written inline in comment prose (see the "Gotcha" note above). Any future doc comment describing PowerShell's quote-doubling — or any other language's `''`-shaped syntax — should either avoid the bare pair in inline prose or move the example into an indented code block, and `gofmt -d` should be inspected (not just `gofmt -l`) before trusting `-w` on renderer files.
 
 ## Remaining Tasks (not in this batch's scope)
 
-- [ ] Phase 4: Windows Apply — Defects A+B, EOL, `.ps1` Output (4.1–4.8)
 - [ ] Phase 5: PowerShell `$PROFILE` Resolution (5.1–5.6)
 - [ ] Phase 6: GitSource + State Staleness (6.1–6.9)
 - [ ] Phase 7: CLI Reporting — status/doctor (7.1–7.4)
@@ -104,10 +143,14 @@ Note carried from Phase 3 for whoever reviews or extends this package: Go's `gof
 
 ## Workload / PR Boundary
 
-- Mode: `ask-on-risk` forecast in tasks.md remains unresolved for the overall change (chain strategy still `pending`); this batch executes Work Unit 2 ("PowerShell renderer + goldens + real-`pwsh` test (Phase 3)") as an autonomous, revertible slice, following Unit 1 (Phases 1–2, already landed in commits `6cd3fbb`/`8100b0a` on this branch) and regardless of which chain strategy the orchestrator ultimately picks for the remaining units.
-- Current work unit: Unit 2 of 6 (per the Suggested Work Units table in `tasks.md`)
-- Boundary: starts from Phases 1–2 complete (Unit 1); ends with Phase 3 fully green, isolated from Phases 4–9 (no other package imports `powershellRenderer` or `quotePowerShell` yet), and with `posix.go`/`header.go`/every pre-existing golden file byte-identical to before this batch.
-- Estimated review budget impact: moderate on its own (2 new source files, 1 new test file, 3 new goldens, ~60 changed lines across 3 pre-existing test/registry files) — comfortably under the 400-line guard for this unit alone, consistent with the tasks artifact's per-unit forecast.
+- Mode: `ask-on-risk` forecast in tasks.md remains unresolved for the overall change (chain strategy still `pending`); this batch executes Work Unit 3 ("Bootstrap defects A+B, EOL preservation, `.ps1` output (Phase 4)") as an autonomous, revertible slice, following Units 1 and 2 (Phases 1–3, already landed in this working tree) and regardless of which chain strategy the orchestrator ultimately picks for the remaining units.
+- Current work unit: Unit 3 of 6 (per the Suggested Work Units table in `tasks.md`)
+- Boundary: starts from Phase 3 complete (Unit 2); ends with Phase 4 fully green, isolated from Phases 5–9 (Phase 5's `resolveRCPath` calls `apply.AddBootstrap`/`apply.BootstrapLine` and has not landed yet, so nothing downstream depends on this unit outside `internal/app/init.go`'s three already-updated call sites). Per the tasks artifact's own rollback note for this unit: revert `internal/apply/bootstrap.go`/`native.go` and their test files, plus `internal/app/init.go`'s three call-site updates, together as one commit.
+- Estimated review budget impact: small on its own (2 modified source files in `internal/apply` — `bootstrap.go`, `native.go` — plus their tests, and 3 call-site lines in `internal/app/init.go`; `git diff --stat` for this unit: 6 files, 393 insertions, 46 deletions) — comfortably under the 400-line guard for this unit alone, consistent with the tasks artifact's per-unit forecast.
+
+- Mode: `ask-on-risk` forecast in tasks.md remains unresolved for the overall change (chain strategy still `pending`); Phase 3's batch executed Work Unit 2 ("PowerShell renderer + goldens + real-`pwsh` test (Phase 3)") as an autonomous, revertible slice, following Unit 1 (Phases 1–2, already landed in commits `6cd3fbb`/`8100b0a` on this branch) and regardless of which chain strategy the orchestrator ultimately picks for the remaining units.
+- Unit 2 boundary: starts from Phases 1–2 complete (Unit 1); ends with Phase 3 fully green, isolated from Phases 4–9 (no other package imports `powershellRenderer` or `quotePowerShell` yet), and with `posix.go`/`header.go`/every pre-existing golden file byte-identical to before that batch.
+- Unit 2 estimated review budget impact: moderate on its own (2 new source files, 1 new test file, 3 new goldens, ~60 changed lines across 3 pre-existing test/registry files) — comfortably under the 400-line guard for that unit alone, consistent with the tasks artifact's per-unit forecast.
 
 ## Verification
 
@@ -211,8 +254,111 @@ $ git diff --stat internal/renderers/testdata/
 (empty — only new files were added: powershell_basic.golden, powershell_empty.golden, powershell_awkward_commands.golden)
 ```
 
+### Phase 4 (this batch)
+
+```
+$ go test ./internal/apply/... -v
+--- PASS: TestWriteFileAtomicSuccess (0.02s)
+--- PASS: TestWriteFileAtomicRefusesSymlinkDestination (0.00s)
+--- PASS: TestWriteFileAtomicRefusesDirectoryDestination (0.00s)
+--- PASS: TestWriteFileAtomicCleansUpTempFileOnRenameFailure (0.01s)
+--- PASS: TestBootstrapLine (0.00s)
+    --- PASS: TestBootstrapLine/zsh:_path_under_home_becomes_$HOME-relative (0.00s)
+    --- PASS: TestBootstrapLine/zsh:_path_outside_home_is_used_verbatim (0.00s)
+    --- PASS: TestBootstrapLine/zsh:_prefix_collision_is_not_mistaken_for_a_home-relative_path (0.00s)
+    --- PASS: TestBootstrapLine/bash:_identical_POSIX_form_to_zsh (0.00s)
+    --- PASS: TestBootstrapLine/zsh:_home_empty_uses_the_path_verbatim (0.00s)
+    --- PASS: TestBootstrapLine/powershell:_Windows-shaped_path_under_$HOME_becomes_$HOME-relative_with_forward_slashes (0.00s)
+    --- PASS: TestBootstrapLine/powershell:_Windows-shaped_path_outside_$HOME_is_used_verbatim (0.00s)
+    --- PASS: TestBootstrapLine/powershell:_home_empty_uses_the_path_verbatim (0.00s)
+    --- PASS: TestBootstrapLine/powershell:_backtick,_double-quote_and_dollar_in_the_relative_remainder_are_escaped (0.00s)
+--- PASS: TestAddBootstrapFixtures (0.03s)
+--- PASS: TestAddBootstrapIsIdempotent (0.01s)
+--- PASS: TestAddBootstrapNoOpsOnManuallyCraftedPreExistingBlock (0.00s)
+--- PASS: TestRemoveBootstrapExactByteRestore (0.01s)
+--- PASS: TestRemoveBootstrapFallsBackWhenUserEditedInsideBlock (0.01s)
+--- PASS: TestBootstrapSymlinkedRCStaysSymlink (0.01s)
+--- PASS: TestRemoveBootstrapMarkerLikeTextInHostileRCNotCorrupted (0.00s)
+--- PASS: TestDetectEOL (0.00s)
+--- PASS: TestBootstrapCRLFAddRemoveRoundTrip (0.01s)
+--- PASS: TestRemoveBootstrapMarkerScanFallbackOnCRLFProfile (0.01s)
+--- PASS: TestNativeBackendOutputPath (0.00s)
+    --- PASS: TestNativeBackendOutputPath/zsh (0.00s)
+    --- PASS: TestNativeBackendOutputPath/bash (0.00s)
+    --- PASS: TestNativeBackendOutputPath/powershell (0.00s)
+--- PASS: TestNativeBackendOutputPathUnsupportedShell (0.00s)
+--- PASS: TestNativeBackendApplyHappyPath (0.01s)
+--- PASS: TestNativeBackendApplyNoPartialWriteOnInterruption (0.01s)
+--- PASS: TestChezmoiBackendFailsExplicitly (0.00s)
+--- PASS: TestBackendsSatisfySyncBackendInterface (0.00s)
+--- PASS: TestBootstrapRoundTripOnRealisticRCFiles (0.10s)
+    --- PASS: TestBootstrapRoundTripOnRealisticRCFiles/typical_zshrc (0.01s)
+    --- PASS: TestBootstrapRoundTripOnRealisticRCFiles/no_trailing_newline (0.01s)
+    --- PASS: TestBootstrapRoundTripOnRealisticRCFiles/empty_file (0.01s)
+    --- PASS: TestBootstrapRoundTripOnRealisticRCFiles/only_newlines (0.01s)
+    --- PASS: TestBootstrapRoundTripOnRealisticRCFiles/windows_line_endings (0.01s)
+    --- PASS: TestBootstrapRoundTripOnRealisticRCFiles/text_resembling_our_marker (0.01s)
+    --- PASS: TestBootstrapRoundTripOnRealisticRCFiles/trailing_whitespace_preserved (0.01s)
+    --- PASS: TestBootstrapRoundTripOnRealisticRCFiles/unicode_content (0.01s)
+--- PASS: TestBootstrapNeverTouchesUnrelatedFiles (0.01s)
+PASS
+ok  	github.com/angeltonio/aliasdeck/internal/apply	0.700s
+
+$ go test ./... 
+ok  	github.com/angeltonio/aliasdeck/cmd/aliasdeck	0.812s
+ok  	github.com/angeltonio/aliasdeck/internal/app	2.700s
+ok  	github.com/angeltonio/aliasdeck/internal/apply	0.388s
+ok  	github.com/angeltonio/aliasdeck/internal/config	(cached)
+ok  	github.com/angeltonio/aliasdeck/internal/domain	(cached)
+ok  	github.com/angeltonio/aliasdeck/internal/renderers	(cached)
+?   	github.com/angeltonio/aliasdeck/internal/shelltest	[no test files]
+ok  	github.com/angeltonio/aliasdeck/internal/source	(cached)
+ok  	github.com/angeltonio/aliasdeck/internal/state	(cached)
+ok  	github.com/angeltonio/aliasdeck/internal/validate	(cached)
+
+$ make ci
+go vet ./...
+go test -race ./...
+ok  	github.com/angeltonio/aliasdeck/cmd/aliasdeck	1.428s
+ok  	github.com/angeltonio/aliasdeck/internal/app	3.562s
+ok  	github.com/angeltonio/aliasdeck/internal/apply	1.803s
+ok  	github.com/angeltonio/aliasdeck/internal/config	(cached)
+ok  	github.com/angeltonio/aliasdeck/internal/domain	(cached)
+ok  	github.com/angeltonio/aliasdeck/internal/renderers	(cached)
+?   	github.com/angeltonio/aliasdeck/internal/shelltest	[no test files]
+ok  	github.com/angeltonio/aliasdeck/internal/source	(cached)
+ok  	github.com/angeltonio/aliasdeck/internal/state	(cached)
+ok  	github.com/angeltonio/aliasdeck/internal/validate	(cached)
+CI checks passed
+
+$ go test ./internal/apply/... -cover
+ok  	github.com/angeltonio/aliasdeck/internal/apply	0.643s	coverage: 84.9% of statements
+
+$ gofmt -l .
+(no output — everything formatted)
+
+$ git diff --stat internal/apply/ internal/app/init.go
+ internal/app/init.go             |   6 +-
+ internal/apply/bootstrap.go      | 180 ++++++++++++++++++++++++++-----
+ internal/apply/bootstrap_test.go | 221 ++++++++++++++++++++++++++++++++++++---
+ internal/apply/native.go         |   2 +
+ internal/apply/native_test.go    |   8 +-
+ internal/apply/roundtrip_test.go |  22 +++-
+ 6 files changed, 393 insertions(+), 46 deletions(-)
+```
+
+**Adversarial regression proof** (see "Adversarial validation" note above for the full narrative): with `indexOfLine`'s CRLF fix surgically reverted, `go test ./internal/apply/... -run TestRemoveBootstrapMarkerScanFallbackOnCRLFProfile -v` failed with:
+
+```
+--- FAIL: TestRemoveBootstrapMarkerScanFallbackOnCRLFProfile (0.01s)
+    bootstrap_test.go:524: RemoveBootstrap() must report a non-exact restore when it falls back to marker scanning
+FAIL
+```
+
+confirming the test genuinely catches the class of regression it exists to catch, before the fix was restored (`diff` against the pre-revert file was byte-identical) and the suite rerun green.
+
 No git commit was created. Changes are left in the working tree per the orchestrator's delivery-strategy instructions.
 
 ## Engram
 
-`mem_save`/`mem_search`/`mem_update` tools were not bound in this session's tool set (consistent with prior batches — Phases 1–2 reported the same). Progress was persisted only to this file (`openspec/changes/powershell-windows/apply-progress.md`) and to `tasks.md`. No Engram tool call was attempted or fabricated.
+`mem_save`/`mem_search`/`mem_update` tools were not bound in this session's tool set (consistent with prior batches — Phases 1–2 and Phase 3 reported the same, and Phase 4 confirms it again: the tool list available to this executor contained only `Read`, `Edit`, `Write`, `Bash`, and `codegraph_explore`, no `mem_*` tools). Progress was persisted only to this file (`openspec/changes/powershell-windows/apply-progress.md`) and to `tasks.md`. No Engram tool call was attempted or fabricated.

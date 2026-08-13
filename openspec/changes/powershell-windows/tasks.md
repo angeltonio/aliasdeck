@@ -60,14 +60,14 @@ Base ordering if Feature Branch Chain is chosen: PR1 → PR2/PR3/PR4/PR5 (parall
 
 ## Phase 4: Windows Apply — Defects A+B, EOL, `.ps1` Output
 
-- [ ] 4.1 RED: `internal/apply/native_test.go` — `shellFileExt(ShellPowerShell)=="ps1"`; **inversion** of the current unsupported-shell case at line 41 (native-apply, "PowerShell Output File").
-- [ ] 4.2 GREEN: `internal/apply/native.go` — add `ShellPowerShell → "ps1"` to `shellFileExt`.
-- [ ] 4.3 RED (**Defect A**, `bootstrap.go:30`): `bootstrap_test.go` — Windows-shaped paths for `BootstrapLine`: under `$HOME`, outside `$HOME`, `home==""`.
-- [ ] 4.4 GREEN (**Defect A fix**, design decisions 4+5): `BootstrapLine(sh domain.Shell, generatedPath, home string)` — replace `CutPrefix`+`rel[0]=='/'` with `filepath.Rel(home, generatedPath)` (reject a `..`-bearing result), emit `"$HOME/"+filepath.ToSlash(rel)`; add PowerShell double-quoted path escaper (`` ` ``→```` `` ````, `"`→`""`, `$`→`` `$ ``) for the emitted line.
-- [ ] 4.5 GREEN: `AddBootstrap(rcPath string, sh domain.Shell, generatedPath, home string)` — POSIX branch byte-identical to today; PowerShell branch emits `if (Test-Path -LiteralPath "...") { . "..." }`. Update every call site (`internal/app/init.go:132,158,162`) to pass `dc.Device.Shell`; update all `bootstrap_test.go`/`roundtrip_test.go` call sites for the new signature.
-- [ ] 4.6 RED (**Defect B + CRLF, decisions 6+7 — one task, never split**): extend `roundtrip_test.go`'s existing CRLF case (line 32) plus new `bootstrap_test.go` cases for `detectEOL`, CRLF add/remove round-trip, and a marker-scan-fallback case (edit inside the block so exact-bytes removal misses) on a CRLF `$PROFILE`.
-- [ ] 4.7 GREEN (**same task as 4.6**): add `detectEOL(existing []byte) string` (`\r\n` iff already present, else `\n`); thread `eol` through `buildBlock`; fix `indexOfLine` (`bootstrap.go:237`) to accept `\r\n` as a line terminator at both start and end; fix `removeMarkerScan` to consume `\r\n` for the trailing newline and blank separator.
-- [ ] 4.8 Verify: `go test ./internal/apply/...` — the previously-latent CRLF marker-scan case now passes; POSIX byte-identical cases still pass unchanged.
+- [x] 4.1 RED: `internal/apply/native_test.go` — `shellFileExt(ShellPowerShell)=="ps1"`; **inversion** of the current unsupported-shell case at line 41 (native-apply, "PowerShell Output File").
+- [x] 4.2 GREEN: `internal/apply/native.go` — add `ShellPowerShell → "ps1"` to `shellFileExt`.
+- [x] 4.3 RED (**Defect A**, `bootstrap.go:30`): `bootstrap_test.go` — Windows-shaped paths for `BootstrapLine`: under `$HOME`, outside `$HOME`, `home==""`.
+- [x] 4.4 GREEN (**Defect A fix**, design decisions 4+5): `BootstrapLine(sh domain.Shell, generatedPath, home string)` — replace `CutPrefix`+`rel[0]=='/'` with `filepath.Rel(home, generatedPath)` (reject a `..`-bearing result), emit `"$HOME/"+filepath.ToSlash(rel)`; add PowerShell double-quoted path escaper (`` ` ``→```` `` ````, `"`→`""`, `$`→`` `$ ``) for the emitted line.
+- [x] 4.5 GREEN: `AddBootstrap(rcPath string, sh domain.Shell, generatedPath, home string)` — POSIX branch byte-identical to today; PowerShell branch emits `if (Test-Path -LiteralPath "...") { . "..." }`. Update every call site (`internal/app/init.go:132,158,162`) to pass `dc.Device.Shell`; update all `bootstrap_test.go`/`roundtrip_test.go` call sites for the new signature.
+- [x] 4.6 RED (**Defect B + CRLF, decisions 6+7 — one task, never split**): extend `roundtrip_test.go`'s existing CRLF case (line 32) plus new `bootstrap_test.go` cases for `detectEOL`, CRLF add/remove round-trip, and a marker-scan-fallback case (edit inside the block so exact-bytes removal misses) on a CRLF `$PROFILE`.
+- [x] 4.7 GREEN (**same task as 4.6**): add `detectEOL(existing []byte) string` (`\r\n` iff already present, else `\n`); thread `eol` through `buildBlock`; fix `indexOfLine` (`bootstrap.go:237`) to accept `\r\n` as a line terminator at both start and end; fix `removeMarkerScan` to consume `\r\n` for the trailing newline and blank separator.
+- [x] 4.8 Verify: `go test ./internal/apply/...` — the previously-latent CRLF marker-scan case now passes; POSIX byte-identical cases still pass unchanged.
 
 ## Phase 5: PowerShell `$PROFILE` Resolution
 

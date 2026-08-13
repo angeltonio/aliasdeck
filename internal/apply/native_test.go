@@ -19,6 +19,7 @@ func TestNativeBackendOutputPath(t *testing.T) {
 	}{
 		{domain.ShellZsh, "zsh"},
 		{domain.ShellBash, "bash"},
+		{domain.ShellPowerShell, "ps1"},
 	}
 
 	backend := NativeBackend{Base: "/home/user/.config/aliasdeck"}
@@ -36,9 +37,14 @@ func TestNativeBackendOutputPath(t *testing.T) {
 	}
 }
 
+// TestNativeBackendOutputPathUnsupportedShell pins the "no extension defined"
+// error path itself, now using a shell outside domain.AllShells (every real
+// shell — zsh, bash, powershell — has a defined extension as of this
+// change; see the inverted PowerShell case in TestNativeBackendOutputPath
+// above, native-apply spec "PowerShell Output File").
 func TestNativeBackendOutputPathUnsupportedShell(t *testing.T) {
 	backend := NativeBackend{Base: "/home/user/.config/aliasdeck"}
-	if _, err := backend.OutputPath(domain.Device{Shell: domain.ShellPowerShell}); err == nil {
+	if _, err := backend.OutputPath(domain.Device{Shell: domain.Shell("fish")}); err == nil {
 		t.Fatal("OutputPath() must return an error for a shell with no generated-file extension")
 	}
 }
