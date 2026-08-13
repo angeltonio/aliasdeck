@@ -39,6 +39,10 @@ type UninstallReport struct {
 	// because the user had edited inside the block.
 	BootstrapExact bool
 
+	// CacheRemoved reports that the source cache — including any Git
+	// checkout, whose .git/config records the source URL — was deleted.
+	CacheRemoved bool
+
 	StateRemoved bool
 }
 
@@ -81,6 +85,18 @@ func Uninstall(_ context.Context, env Env, opts UninstallOptions) (UninstallRepo
 			report.OutputRemoved = true
 		} else if !os.IsNotExist(rmErr) {
 			return report, fmt.Errorf("removing %s: %w", outputPath, rmErr)
+		}
+	}
+
+	// The Git cache is AliasDeck's own directory and it holds a clone whose
+	// .git/config records the source URL — which may carry credentials.
+	// Leaving it behind would mean uninstalling left a secret on disk in a
+	// file the user never created and has no reason to look for.
+	if cacheRoot := config.CacheDir(dc.Base); cacheRoot != "" {
+		if rmErr := os.RemoveAll(cacheRoot); rmErr == nil {
+			report.CacheRemoved = true
+		} else if !os.IsNotExist(rmErr) {
+			return report, fmt.Errorf("removing the source cache at %s: %w", cacheRoot, rmErr)
 		}
 	}
 

@@ -87,7 +87,7 @@ type GitSource struct {
 // leak a credential-bearing URL onto disk.
 func GitCacheDir(base, url string) string {
 	sum := sha256.Sum256([]byte(url))
-	return filepath.Join(base, "cache", "git", hex.EncodeToString(sum[:])[:12])
+	return filepath.Join(config.CacheDir(base), "git", hex.EncodeToString(sum[:])[:12])
 }
 
 // GitAliasesPath resolves where aliases.yaml lives inside a GitSource
@@ -142,6 +142,9 @@ func (s *GitSource) LastResolve() ResolveInfo { return s.last }
 // the zero domain.ResolvedConfig.
 func (s *GitSource) Resolve(ctx context.Context, dev domain.Device) (domain.ResolvedConfig, error) {
 	if err := validateGitURL(s.URL); err != nil {
+		return domain.ResolvedConfig{}, fmt.Errorf("git source %s: %w", s.URL, err)
+	}
+	if err := validateGitRef(s.Ref); err != nil {
 		return domain.ResolvedConfig{}, fmt.Errorf("git source %s: %w", s.URL, err)
 	}
 
@@ -203,11 +206,24 @@ func (s *GitSource) Resolve(ctx context.Context, dev domain.Device) (domain.Reso
 func (s *GitSource) fetchOrClone(ctx context.Context, run gitRunFunc, hadCheckout bool) error {
 	if !hadCheckout {
 		parent := filepath.Dir(s.CacheDir)
-		if err := os.MkdirAll(parent, 0o755); err != nil {
+		// 0700, not 0755. `git clone` writes the source URL into the
+		// checkout's own .git/config at git's default modes, and that URL may
+		// carry credentials — `https://user:token@host/repo.git` is an
+		// ordinary way to configure this. config.yaml and state.json are
+		// already written 0600 for exactly that reason; a checkout left
+		// world-readable would hand the same secret to every other account on
+		// the machine through a file AliasDeck caused to exist.
+		if err := os.MkdirAll(parent, 0o700); err != nil {
 			return fmt.Errorf("creating cache directory: %w", err)
 		}
 		if _, err := run(ctx, parent, "clone", "--quiet", "--", s.URL, s.CacheDir); err != nil {
 			return fmt.Errorf("cloning: %w", err)
+		}
+		// The clone creates its own directory, so restrict it after the fact.
+		// Failing here would leave a usable but over-readable checkout, which
+		// is worse to hide than to report.
+		if err := os.Chmod(s.CacheDir, 0o700); err != nil {
+			return fmt.Errorf("restricting cache directory permissions: %w", err)
 		}
 	} else {
 		if _, err := run(ctx, s.CacheDir, "fetch", "--quiet", "--prune", "origin"); err != nil {
@@ -268,6 +284,18 @@ func validateGitURL(url string) error {
 	}
 	if strings.HasPrefix(strings.ToLower(url), "ext::") {
 		return fmt.Errorf("url %q uses the ext:: transport, which runs an arbitrary command and is refused", url)
+	}
+	return nil
+}
+
+// validateGitRef refuses a ref git would read as a flag.
+//
+// source.git.ref crosses the same trust boundary as source.git.url — both come
+// from a configuration file — and reaches `git reset --hard <ref>` as an
+// argument. Hardening only the URL leaves the same door open one field over.
+func validateGitRef(ref string) error {
+	if strings.HasPrefix(ref, "-") {
+		return fmt.Errorf("ref %q starts with '-', which git would read as a flag, not a ref", ref)
 	}
 	return nil
 }

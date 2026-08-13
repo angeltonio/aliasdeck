@@ -103,3 +103,13 @@ func tildePrefixRest(path string) (string, bool) {
 	}
 	return "", false
 }
+
+// CacheDir is the directory AliasDeck uses for content it fetched rather than
+// content the user wrote.
+//
+// It is named here rather than only inside the source that populates it,
+// because uninstall has to remove it and should not need to know how a
+// particular source lays out its contents.
+func CacheDir(base string) string {
+	return filepath.Join(base, "cache")
+}

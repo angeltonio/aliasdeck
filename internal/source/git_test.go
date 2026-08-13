@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -418,5 +419,84 @@ func TestGitSourceDescriptorIncludesResolvedCommit(t *testing.T) {
 	want := url + "#main@" + "0123456789ab"
 	if after.Ref != want {
 		t.Errorf("Descriptor() after Resolve = %q, want %q", after.Ref, want)
+	}
+}
+
+// TestGitSourceHostileRefRejectedBeforeAnyExec pins that source.git.ref gets
+// the same scrutiny as source.git.url.
+//
+// Both cross the same trust boundary — a configuration file — and both reach
+// git as an argument. Hardening only the url leaves the identical door open
+// one field over, which is what a review found here.
+func TestGitSourceHostileRefRejectedBeforeAnyExec(t *testing.T) {
+	hostile := []string{
+		"--upload-pack=touch /tmp/pwned",
+		"-x",
+	}
+
+	for _, ref := range hostile {
+		t.Run(ref, func(t *testing.T) {
+			ran := false
+			s := &GitSource{
+				URL:      "https://example.com/dotfiles.git",
+				Ref:      ref,
+				CacheDir: t.TempDir(),
+				Run: func(context.Context, string, ...string) ([]byte, error) {
+					ran = true
+					return nil, nil
+				},
+			}
+
+			if _, err := s.Resolve(context.Background(), domain.Device{}); err == nil {
+				t.Fatalf("Resolve accepted ref %q", ref)
+			}
+			if ran {
+				t.Error("git was executed before the ref was rejected")
+			}
+		})
+	}
+}
+
+// TestGitSourceCacheIsNotWorldReadable pins the permissions on the checkout.
+//
+// `git clone` records the source url in the checkout's own .git/config, and
+// that url may carry credentials. config.yaml and state.json are written 0600
+// for exactly that reason; a checkout left at git's defaults would hand the
+// same secret to every other account on the machine, through a directory
+// AliasDeck caused to exist.
+func TestGitSourceCacheIsNotWorldReadable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not express this through permission bits")
+	}
+
+	base := t.TempDir()
+	cache := GitCacheDir(base, "https://example.com/dotfiles.git")
+
+	s := &GitSource{
+		URL:      "https://example.com/dotfiles.git",
+		CacheDir: cache,
+		Run: func(_ context.Context, _ string, args ...string) ([]byte, error) {
+			// Stand in for `git clone` by creating the directory it would.
+			if len(args) > 0 && args[0] == "clone" {
+				if err := os.MkdirAll(cache, 0o755); err != nil {
+					return nil, err
+				}
+			}
+			return nil, nil
+		},
+	}
+
+	// Resolve fails later (there is no aliases.yaml), which is fine: the
+	// directory has been created by then and that is what is under test.
+	_, _ = s.Resolve(context.Background(), domain.Device{})
+
+	for _, dir := range []string{filepath.Dir(filepath.Dir(cache)), filepath.Dir(cache), cache} {
+		info, err := os.Stat(dir)
+		if err != nil {
+			t.Fatalf("stat %s: %v", dir, err)
+		}
+		if perm := info.Mode().Perm(); perm&0o077 != 0 {
+			t.Errorf("%s has mode %o; it must not be readable or traversable by other users", dir, perm)
+		}
 	}
 }

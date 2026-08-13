@@ -2,11 +2,14 @@ package source
 
 import (
 	"context"
+	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestRunGitSetsNonInteractiveEnvironment is the RED test for the "Git
@@ -111,5 +114,54 @@ func TestRunGitReturnsStderrOnFailure(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "could not resolve host") {
 		t.Errorf("error %q does not surface git's stderr", err)
+	}
+}
+
+// TestRunGitTimesOutOnAStalledRemote pins the bound on a git invocation.
+//
+// The non-interactive environment stops a credential prompt from hanging; it
+// does nothing about a remote that accepts a connection and then says nothing,
+// which is what a firewall dropping packets or a captive portal looks like.
+// Measured before this bound existed: a sync against such a remote produced no
+// output and never returned.
+//
+// The listener here accepts and holds the connection without ever replying,
+// which is precisely that shape. The context is given a short deadline so the
+// test does not have to wait out GitTimeout.
+func TestRunGitTimesOutOnAStalledRemote(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listening: %v", err)
+	}
+	defer ln.Close()
+
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			// Hold it open and say nothing. Closing would let git fail fast,
+			// which is the case this test is not about.
+			t.Cleanup(func() { conn.Close() })
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	_, err = RunGit(ctx, t.TempDir(), "clone", "--quiet", "--",
+		"git://"+ln.Addr().String()+"/repo", filepath.Join(t.TempDir(), "checkout"))
+
+	if err == nil {
+		t.Fatal("RunGit returned no error against a remote that never replies")
+	}
+	if elapsed := time.Since(start); elapsed > 30*time.Second {
+		t.Errorf("RunGit took %s to give up; the deadline was not enforced", elapsed)
 	}
 }
