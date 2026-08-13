@@ -396,8 +396,715 @@ teeth.
   parameter, `Run`'s two `ctx.Err()` checks, and `serve.go`'s two new small
   helper functions
 
-## Status
+## Status (superseded by the Phase 5 batch below for current totals)
 
 Phases 1–4 complete (30/30 tasks per `tasks.md`: 6+9+9+6), including this
 bounded-review correction pass over Phase 4. Ready for `sdd-verify`, or for
 the next apply batch to start Phase 5.
+
+## Phase 5 (first half): Server API foundation — tasks 5.1–5.6
+
+**Batch scope**: explicitly limited to tasks 5.1–5.6 (route slice,
+`http.TimeoutHandler` bound, `http.MaxBytesReader` bound, and the one error
+shape). Tasks 5.7–5.14 (CRUD/auth handlers, OpenAPI, coverage test, the
+login concurrency semaphore) are deliberately untouched — a second apply
+batch implements them.
+
+### Files created
+
+| File | What |
+|---|---|
+| `internal/api/router.go` | `route` struct, `routes()` (currently just `GET /api/v1/health`, `Public: true`), `validKinds`, `NewRouter`/`newRouter`, `validateRoute`, `handleHealth`, `handlerTimeout` (20s), `timeoutBody` |
+| `internal/api/router_test.go` | Registration-failure tests (missing/unknown `RequiredKind`), well-formed-table acceptance, `RequireKind` actually guarding a synthetic route, decision 23's health-route test against the real `routes()`, and a mutation-shaped test proving the router applies no path-based special-casing |
+| `internal/api/middleware.go` | `maxBodyBytes` (1<<20), `withMaxBytes` |
+| `internal/api/middleware_test.go` | `infiniteReader`-based oversized-body rejection test (bounded, no hang), plus a within-limit GREEN-path test |
+| `internal/api/errors.go` | `errorBody`/`errorFields`, error code constants, `writeError`, `writeStoreError` (`ErrNotFound`→404, `ErrConflict`→409, `ErrInvalidReference`→422) |
+| `internal/api/errors_test.go` | Same-shape-across-endpoints test, per-sentinel status mapping (including a wrapped error and an unknown error), and an internal-error-text-never-leaks test |
+
+### Why the router is not yet wired into `internal/server.Run`
+
+Design decision 23 states Phase 5's route slice must include `GET
+/api/v1/health` and never re-guard it — satisfied entirely within
+`internal/api`'s own tests against its own `routes()` table. Actually
+replacing `internal/server/handler.go`'s Phase 4 direct wiring with
+`internal/api.NewRouter` was considered and deliberately deferred: doing so
+now would either (a) wire a router whose only real route is health,
+duplicating Phase 4's already-tested behavior for no functional gain, or
+(b) require threading `store.Tokens()` and a real clock through
+`server.Config` ahead of the CRUD/auth handlers that will actually need
+them — surface not assigned to this batch (5.1–5.6) and explicitly reserved
+for the second pass once 5.7–5.10 exist. `internal/server/{server,handler}.go`
+were not modified in this batch.
+
+### TDD Cycle Evidence
+
+| Task | RED | GREEN | REFACTOR |
+|---|---|---|---|
+| 5.1/5.2 (router) | Wrote `router_test.go` against a non-existent `router.go`; `go test ./internal/api/...` failed to build: `undefined: writeStoreError`, `undefined: withMaxBytes`, and (once errors.go/middleware.go existed) `undefined: route`, `undefined: newRouter`, `undefined: NewRouter`, `undefined: healthMethod`, `undefined: healthPattern`, `undefined: handleHealth` | Wrote `router.go`; full `internal/api` suite green | None needed — first-pass implementation matched design decisions 15/23 directly |
+| 5.3/5.4 (max-bytes) | `middleware_test.go` failed to build: `undefined: withMaxBytes` | Wrote `middleware.go`; suite green | None |
+| 5.5/5.6 (error shape) | `errors_test.go` failed to build: `undefined: writeStoreError`, `undefined: codeNotFound`, etc. | Wrote `errors.go`; suite green | None |
+
+### Mutation Evidence (the four required by the correction prompt)
+
+Every mutation below was applied directly to the production file, confirmed
+to fail the named test with `go test`, then reverted and the full package
+re-verified green.
+
+| # | Mutation | Verbatim result |
+|---|---|---|
+| 1 | Removed a route's required-kind declaration: `validateRoute` in `router.go` changed to `func validateRoute(r route) error { return nil }` (the `fmt` import was dropped to keep the mutated file compiling, then restored on revert) | `go test ./internal/api/... -run 'TestNewRouterFailsRegistrationForRouteMissingRequiredKindDeclaration\|TestNewRouterFailsRegistrationForUnknownRequiredKind\|TestNewRouterRefusesAHealthRouteMissingItsPublicDeclaration' -v`: `--- FAIL: TestNewRouterFailsRegistrationForRouteMissingRequiredKindDeclaration` (`router_test.go:45: newRouter(...) = nil error, want a non-nil error: a route declaring neither Public nor a valid RequiredKind must fail registration`), `--- FAIL: TestNewRouterFailsRegistrationForUnknownRequiredKind` (`router_test.go:66: newRouter(...) = nil error, want a non-nil error: an unrecognized RequiredKind must fail registration exactly like a missing one`); the third test still passed (it exercises the Public/RequiredKind conflict at the health path specifically, a different assertion) |
+| 2 | Deleted the `MaxBytesReader` wrapper: `withMaxBytes` in `middleware.go` reduced to `next.ServeHTTP(w, r)`, dropping the `r.Body = http.MaxBytesReader(...)` line entirely | `go test ./internal/api/... -run TestMaxBytesMiddlewareRejectsOversizedBodyBeforeFullyReadingIt -v -timeout 15s`: `--- FAIL: TestMaxBytesMiddlewareRejectsOversizedBodyBeforeFullyReadingIt (2.00s)` — `middleware_test.go:58: handler did not return within the bound — the body read against an infinite source never terminated, meaning it was not size-limited at all (removing the MaxBytesReader wrapper reproduces exactly this hang)`. The test's own 2s bound turned an unbounded hang into a deterministic failure rather than an actual hang. |
+| 3 | Changed `ErrInvalidReference`'s mapping from 422 to 409: `writeStoreError` in `errors.go`'s `ErrInvalidReference` case changed to `http.StatusConflict` | `go test ./internal/api/... -run TestWriteStoreErrorMapsEachSentinelToItsOwnStatus -v`: `--- FAIL: TestWriteStoreErrorMapsEachSentinelToItsOwnStatus` — `--- FAIL: TestWriteStoreErrorMapsEachSentinelToItsOwnStatus/invalid_reference` (`errors_test.go:88: status = 409, want 422`); `not_found`, `conflict`, `wrapped_not_found`, and `unknown_error` subtests still passed, isolating the failure to exactly the mutated branch |
+| 4 | Re-guarded `/api/v1/health` behind a token kind: `routes()` in `router.go` changed to `{Method: healthMethod, Pattern: healthPattern, Handler: handleHealth, RequiredKind: store.TokenKindSession}` (dropping `Public: true`) | `go test ./internal/api/... -run TestHealthRouteIsReachableWithoutAuthentication -v`: `--- FAIL: TestHealthRouteIsReachableWithoutAuthentication` — `router_test.go:139: GET /api/v1/health without an Authorization header = 401, want 200 — decision 23 requires this route stay reachable without a token` |
+
+No mutation in this table failed to produce a failure — every one had teeth,
+and every one was reverted with the full `internal/api` suite (and
+`go vet`/`gofmt`) re-verified clean before moving to the next.
+
+### 5.14 — Login concurrency semaphore placement (decided, not implemented)
+
+**Decision**: the semaphore lives in `internal/api` (`internal/api/auth.go`,
+an unexported package-level `chan struct{}` the login handler acquires
+around `auth.VerifyPassword`), not `internal/auth`.
+
+**Reasoning**: the property being bounded is concurrent *reachability* of
+an unauthenticated HTTP route — the same category `http.TimeoutHandler`
+(this batch's own `router.go`) already bounds — and the design's own
+Bounded Operations table ties the semaphore's overflow explicitly to that
+handler's 20s timeout, a relationship that stays legible only if both live
+in one package. `internal/auth`'s package doc describes pure identity/crypto
+primitives with zero HTTP awareness; putting an HTTP-exposure-driven limiter
+there would also silently throttle `auth.Bootstrap`'s own one-time,
+single-threaded `HashPassword`/`VerifyPassword` calls at startup against a
+pool sized for an adversarial `POST /login` — coupling two callers with
+nothing in common but the function they call. Recorded as `design.md`
+decision 24; `tasks.md` 5.14's text now points at it. Not implemented in
+this batch — the semaphore itself lands with 5.9/5.10 in the second pass,
+per the task's own stated sequencing.
+
+### Verification (this batch)
+
+```
+$ gofmt -l .
+(no output)
+
+$ go vet ./...
+(no output)
+
+$ go test -count=1 ./...
+ok  	github.com/angeltonio/aliasdeck/cmd/aliasdeck
+ok  	github.com/angeltonio/aliasdeck/internal/api
+ok  	github.com/angeltonio/aliasdeck/internal/app
+ok  	github.com/angeltonio/aliasdeck/internal/apply
+ok  	github.com/angeltonio/aliasdeck/internal/archtest
+ok  	github.com/angeltonio/aliasdeck/internal/auth
+ok  	github.com/angeltonio/aliasdeck/internal/config
+ok  	github.com/angeltonio/aliasdeck/internal/domain
+ok  	github.com/angeltonio/aliasdeck/internal/renderers
+ok  	github.com/angeltonio/aliasdeck/internal/server
+?   	github.com/angeltonio/aliasdeck/internal/shelltest	[no test files]
+ok  	github.com/angeltonio/aliasdeck/internal/source
+ok  	github.com/angeltonio/aliasdeck/internal/state
+ok  	github.com/angeltonio/aliasdeck/internal/store
+ok  	github.com/angeltonio/aliasdeck/internal/store/sqlitestore
+?   	github.com/angeltonio/aliasdeck/internal/store/storetest	[no test files]
+?   	github.com/angeltonio/aliasdeck/internal/sync	[no test files]
+ok  	github.com/angeltonio/aliasdeck/internal/validate
+
+$ go test -count=1 ./internal/archtest
+ok  	github.com/angeltonio/aliasdeck/internal/archtest
+```
+
+`go list -deps github.com/angeltonio/aliasdeck/internal/api | grep renderers`
+matched nothing — `internal/api` imports no part of `internal/renderers`.
+
+Six-target `CGO_ENABLED=0` cross-compile (`-ldflags="-s -w"`, ephemeral
+scratch output paths, no fixed ports, no long-running process started):
+
+| Target | Bytes | MiB |
+|---|---|---|
+| darwin/amd64 | 12,047,264 | 11.49 |
+| darwin/arm64 | 11,463,634 | 10.93 |
+| linux/amd64 | 11,833,528 | 11.28 |
+| linux/arm64 | 11,272,376 | 10.75 |
+| windows/amd64 | 12,184,064 | 11.62 |
+| windows/arm64 | 11,351,552 | 10.83 |
+
+All six well under the 25 MB CI budget. No fixed port was bound anywhere in
+this batch (no runtime harness applies — the router is exercised entirely
+through `httptest.NewRecorder`/`httptest.NewRequest`, never a real
+listener); no long-running process was started; nothing this batch touched
+or stopped any process it did not itself start.
+
+## Work Unit Evidence (Phase 5, 5.1–5.6)
+
+| Evidence | Value |
+|---|---|
+| Focused test command and exact result | `go test -count=1 ./internal/api/...` → `ok github.com/angeltonio/aliasdeck/internal/api` (17 test functions, all pass) |
+| Runtime harness command/scenario and exact result | N/A — this batch has no real listener or process boundary; `internal/api`'s router is exercised entirely via `httptest.NewRecorder`, which is itself the smallest-possible in-process harness proving the same HTTP-handler behavior a real listener would. The full `httptest.NewServer` CRUD round trip named in tasks.md's Work Unit table applies once 5.7–5.10's real handlers exist, not to this foundation-only batch. |
+| Rollback boundary | Revert `internal/api/{router,router_test,middleware,middleware_test,errors,errors_test}.go` and the `design.md`/`tasks.md` doc edits (decision 24, 5.1–5.6/5.14 annotations). Nothing outside `internal/api` imports any of it yet — `internal/server` was not modified, so Phase 4's tests and wiring are entirely unaffected. |
+
+## Workload / PR Boundary (Phase 5, 5.1–5.6)
+
+- Mode: Feature Branch Chain slice, PR 5 per tasks.md's "Suggested Work
+  Units" — this batch is the first half of that unit only
+- Current work unit: Phase 5 foundation — router, middleware, error shape
+  (tasks 5.1–5.6); CRUD/auth handlers, OpenAPI, and the coverage test
+  (5.7–5.13) plus the login semaphore implementation (5.14) remain for the
+  next batch before PR 5 is complete
+- Boundary: see Rollback boundary above — this slice is self-contained and
+  does not require 5.7–5.14 to be reverted independently
+- Estimated review budget impact: low — six new files, ~470 lines total
+  including tests and doc comments, well under the 400-line budget on its
+  own; the remaining Phase 5 tasks (handlers, OpenAPI, coverage test) are
+  the larger remaining share of PR 5's total estimated size
+
+## Status (superseded by the Phase 5 second-half batch below for current totals)
+
+Phases 1–4 complete (30/30 tasks). Phase 5: 6/14 tasks complete (5.1–5.6).
+Remaining: 5.7–5.14, then Phases 6–10. Ready for the next apply batch to
+continue Phase 5 (5.7 onward), or for `sdd-verify` to review this slice
+first per the Feature Branch Chain boundary above.
+
+## Phase 5 (second half): Server API — tasks 5.7–5.14, plus server wiring (5.15)
+
+**Batch scope**: tasks 5.7–5.14 (CRUD handlers for aliases/profiles/devices,
+auth routes, OpenAPI document + embed + bidirectional coverage test, the
+login concurrency semaphore) plus one item outside the numbered task list
+that the orchestrator explicitly instructed for this batch: wiring
+`internal/api.NewRouter` into `internal/server.Run`, recorded as new task
+5.15 in `tasks.md`. `internal/{domain,validate,renderers,store,auth}` were
+read but not modified, per the standing constraint; `internal/api` and
+`internal/server` do not import `internal/renderers` (verified — see below).
+
+### Files created
+
+| File | What |
+|---|---|
+| `internal/api/aliases.go` | `serverValidationShells`, `aliasResponse` (alias + `nameWarnings`), `nameWarnings`, `validateAliasWrite` (blocks on `validate.Command`/`validate.Description`, never on `validate.Name`), the five alias handlers |
+| `internal/api/aliases_test.go` | Unauthenticated-rejected (all 5 routes), authenticated create+list round trip, blocking-command-rejected, and the name-warning-never-blocks test |
+| `internal/api/profiles.go` | The five profile handlers (no per-field validation beyond store-level name uniqueness — profiles carry no shell-syntax fields) |
+| `internal/api/profiles_test.go` | Unauthenticated-rejected, authenticated round trip, duplicate-name 409, and a dangling-`ProfileIDs`-reference 422 test (exercised through the alias endpoint, since only aliases/devices carry a `ProfileIDs` field to dangle) |
+| `internal/api/devices.go` | `deviceTokenResponse`, list/get/update/delete, `handleDevicesRevoke` (revokes the device row **and** every device-kind token via `RevokeSubject`), `handleDevicesRotateToken` (revokes-then-mints) |
+| `internal/api/devices_test.go` | Unauthenticated-rejected (6 routes including revoke/rotate), a `registerTestDevice` helper driving the real registration handler (not a store shortcut), and two token-invalidation tests that assert directly against the persisted token's `RevokedAt` field (no device-kind-gated route exists yet in this batch's scope — sync is Phase 6 — so the property is asserted at the point the future route would rely on) |
+| `internal/api/auth.go` | `loginConcurrency`/`verifyPassword` seam, `handleLogin` (semaphore-bounded), `handleLogout`, `handleEnrollmentTokensCreate`, `handleDevicesRegister` (consumes a bearer enrollment token via `auth.ConsumeEnrollment`), a local `bearerToken` header parser |
+| `internal/api/auth_test.go` | Missing-credential rejections, login success + wrong-password/unknown-username, logout-revokes-session, the replayed-enrollment-token threat-matrix test, enrollment-mint-then-register round trip, and the login concurrency proof |
+| `internal/api/openapi.go` | `openapiPattern`, `//go:embed openapi.yaml` (co-located — `go:embed` cannot escape its package directory), `handleOpenAPISpec` |
+| `internal/api/openapi.yaml` | Embedded copy, byte-identical to `docs/openapi.yaml` |
+| `internal/api/openapi_coverage_test.go` | `registeredRoutes`/`documentedRoutes` (filtering YAML path-item keys to actual HTTP methods, excluding `parameters`), the bidirectional coverage test, the docs/embedded drift test, and a public-reachability test for the spec route itself |
+| `internal/api/json.go` | `writeJSON`, `decodeJSON` — the two functions every new handler in this batch shares |
+| `internal/api/fakestore_test.go` | An in-memory `store.Store` double (`fakeStore` + five repo types) driving every handler test through the real `NewRouter` chain, plus `newFakeStoreWithOperator`/`mintSessionFor`/`mintEnrollmentToken` test helpers that call real `auth` package functions (`HashPassword`, `Mint`) rather than synthetic stand-ins |
+| `docs/openapi.yaml` | Hand-written OpenAPI 3.0.3 document covering all 22 routes this batch registers |
+
+### Files modified
+
+| File | What changed |
+|---|---|
+| `internal/api/router.go` | Added the `api` struct (`store`, `now`, `loginSem`); `routes()` became `(*api).routes()` returning all 22 routes (was 1); `NewRouter`'s signature changed from `(auth.TokenLookup, func() time.Time)` to `(store.Store, func() time.Time)` — it now derives the token lookup from `st.Tokens()` itself. `newRouter` (the lowercase, table-injectable core 5.1–5.6 already wrote) is **unchanged** — every existing test calling it directly still compiles and passes verbatim. |
+| `internal/api/router_test.go` | One line: `TestHealthRouteIsReachableWithoutAuthentication` now calls `NewRouter(newFakeStore(), time.Now)` instead of `NewRouter(fakeTokenLookup{}, time.Now)`, tracking `NewRouter`'s new signature. `fakeTokenLookup` itself is untouched and still used by the tests calling `newRouter` directly. |
+| `internal/api/errors.go` | Appended six new error code constants (`codeInvalidBody`, `codeInvalidCommand`, `codeInvalidDescription`, `codeInvalidRequest`, `codeInvalidCredentials`, `codeInvalidToken`). `writeError`/`writeStoreError` themselves — 5.5/5.6's own functions — were not touched. |
+| `internal/server/server.go` | `Run` now builds its handler via `api.NewRouter(st, time.Now)` instead of the Phase 4 stub's `newHandler()`, wrapping any registration error (there is no code path that currently produces one against the real, valid `routes()` table, but `NewRouter`'s contract allows it). |
+| `internal/server/handler.go` | **Deleted.** Its `healthPath`/`handleHealth`/`newHandler` are superseded by `internal/api`'s own `healthMethod`/`healthPattern`/`handleHealth` and `(*api).routes()`'s `Public: true` entry — decision 23's constraint moves with the code that now owns it. |
+
+### Route table (22 routes; task 5.11's `docs/openapi.yaml` documents all 22)
+
+`GET /api/v1/health` (Public) · `GET /api/v1/openapi.yaml` (Public) ·
+`POST /api/v1/auth/login` (Public) · `POST /api/v1/auth/logout` (session) ·
+`POST /api/v1/enrollment-tokens` (session) · `POST /api/v1/devices/register`
+(Public) · `GET|POST /api/v1/aliases` + `GET|PUT|DELETE /api/v1/aliases/{id}`
+(session) · `GET|POST /api/v1/profiles` + `GET|PUT|DELETE
+/api/v1/profiles/{id}` (session) · `GET /api/v1/devices` + `GET|PUT|DELETE
+/api/v1/devices/{id}` + `POST /api/v1/devices/{id}/revoke` + `POST
+/api/v1/devices/{id}/token` (session). There is no `POST /api/v1/devices`:
+`store.DeviceRepo` has no `Create` — a device is born only through the
+enrollment exchange, matching design's Interfaces section verbatim.
+
+### Design decision 16, applied precisely
+
+`validateAliasWrite` calls exactly two functions: `validate.Command` and
+`validate.Description`, both blocking (400) on error. It never calls
+`validate.Name`. `nameWarnings` — a separate function, called unconditionally
+after `validateAliasWrite` passes — runs `validate.Name` once per shell in
+`serverValidationShells` (`zsh`, `bash`, `powershell`, deliberately duplicated
+from `renderers.Supported()` rather than importing it, per decision 2) and
+collects failures as informational strings on the response body, never as a
+rejection reason. `TestAliasesCreateAcceptsNameWarningAndStoresIt` uses the
+name `"process"` — a PowerShell reserved word (`internal/validate/name.go`'s
+`powershellReserved`) that is an ordinary bash/zsh identifier — asserting
+both a 201 response carrying a `powershell`-mentioning warning and that the
+alias is actually retrievable afterward via `List`.
+
+### Design decision 24, implemented
+
+`loginConcurrency = 4` and `loginSem chan struct{}` are unexported,
+package-level/per-`*api`-instance in `internal/api/auth.go`, exactly as
+decided in the first half's batch. `handleLogin` acquires the semaphore
+immediately before, and releases immediately after, its call to the
+package-level `verifyPassword` seam (defaulting to `auth.VerifyPassword`).
+No second timeout was added anywhere — the design's explicit instruction
+that overflow "queue behind the semaphore, bounded in turn by the handler's
+existing `http.TimeoutHandler` 20s bound... never a second, separate
+timeout" was followed literally.
+
+### Threat-matrix and spec scenarios covered directly
+
+- **"A replayed enrollment token is refused end-to-end"** (threat matrix,
+  token handling) — `TestReplayedEnrollmentTokenIsRefusedEndToEnd`: registers
+  once, replays the identical consumed wire token, asserts the second call
+  does not return 201, and asserts exactly one device exists afterward (not
+  merely that the second call "looked like" a failure).
+- **"A second register with an already-consumed token yields no second
+  device token"** — the same test's final assertion (`len(devices) != 1`)
+  is precisely this.
+- **"Immediate Device Revocation"** (server-auth spec) —
+  `TestDevicesRevokeInvalidatesItsToken` asserts the device's token's
+  `RevokedAt` is set immediately after the revoke call returns.
+- **"Device Token Rotation"** (server-auth spec) —
+  `TestDevicesRotateTokenInvalidatesThePreviousToken` asserts the rotated-away
+  token's `RevokedAt` is set and that the new wire value differs from the old.
+- **"Unauthenticated request rejected"** / **"Authenticated CRUD succeeds"**
+  (server-api spec) — every `*_test.go` file's own unauthenticated-rejection
+  and round-trip tests.
+- **"Route coverage test catches drift"** (server-api spec) —
+  `TestOpenAPIDocumentsExactlyTheRegisteredRoutes`, both directions, one test.
+
+### Mutation Evidence (the five required by the correction prompt)
+
+Every mutation below was applied directly to the production file, confirmed
+to fail the named test with `go test`, then reverted and the full package
+re-verified green (`go build ./...` after every revert).
+
+| # | Mutation | Verbatim result |
+|---|---|---|
+| 1 | Removed the authentication requirement from `GET /api/v1/aliases`: changed `RequiredKind: store.TokenKindSession` to `Public: true` in `router.go`'s `(*api).routes()` | `go test -count=1 -run 'TestAliasesEndpointsRejectUnauthenticatedRequests' ./internal/api/... -v`: `--- FAIL: TestAliasesEndpointsRejectUnauthenticatedRequests` — `--- FAIL: TestAliasesEndpointsRejectUnauthenticatedRequests/GET_/api/v1/aliases` (`aliases_test.go:68: GET /api/v1/aliases without auth = 200, want 401`); the other four subtests (POST, GET/PUT/DELETE by id) still passed, isolating the failure to exactly the mutated route |
+| 2 | Made a `validate.Name` warning block the request: added a loop calling `validate.Name` over `serverValidationShells` at the top of `validateAliasWrite` in `aliases.go`, returning 400 on any failure | `go test -count=1 -run 'TestAliasesCreateAcceptsNameWarningAndStoresIt' ./internal/api/... -v`: `--- FAIL: TestAliasesCreateAcceptsNameWarningAndStoresIt` — `aliases_test.go:156: POST /api/v1/aliases with a name warning (no blocking issue) = 400, want 201, body={"error":{"code":"invalid_command","message":"name \"process\" is a reserved word in powershell"}}` |
+| 3 | Removed the login semaphore: deleted the `a.loginSem <- struct{}{}` / `<-a.loginSem` lines around the `verifyPassword` call in `handleLogin` (`auth.go`) | `go test -count=1 -run 'TestLoginConcurrencySemaphoreBoundsConcurrentVerifyPasswordCalls' ./internal/api/... -v`: `--- FAIL: TestLoginConcurrencySemaphoreBoundsConcurrentVerifyPasswordCalls` — `auth_test.go:253: a 5th call entered verifyPassword while 4 were already held open — the login semaphore did not bound concurrency to 4`. (The un-drained stub connections then made `httptest.Server.Close` print its 5s-interval "blocked in Close" diagnostic before the test process's own teardown completed at ~20s — an expected, bounded consequence of `t.Fatalf` unwinding the test goroutine before `close(release)` runs, not an unbounded hang: the run still terminated and reported FAIL.) |
+| 4 | Added a route without documenting it: inserted `{Method: http.MethodGet, Pattern: "/api/v1/undocumented", Handler: handleHealth, Public: true}` into `(*api).routes()` | `go test -count=1 -run 'TestOpenAPIDocumentsExactlyTheRegisteredRoutes' ./internal/api/... -v`: `--- FAIL: TestOpenAPIDocumentsExactlyTheRegisteredRoutes` — `openapi_coverage_test.go:94: route GET /api/v1/undocumented is registered but not documented in docs/openapi.yaml` |
+| 5 | Deleted a route while leaving it documented: removed the `DELETE /api/v1/profiles/{id}` entry from `(*api).routes()` | `go test -count=1 -run 'TestOpenAPIDocumentsExactlyTheRegisteredRoutes' ./internal/api/... -v`: `--- FAIL: TestOpenAPIDocumentsExactlyTheRegisteredRoutes` — `openapi_coverage_test.go:102: docs/openapi.yaml documents DELETE /api/v1/profiles/{id} but no such route is registered` |
+
+No mutation in this table failed to produce a failure — every one had teeth.
+
+### Verification (this batch)
+
+```
+$ gofmt -l .
+(no output)
+
+$ go vet ./...
+(no output)
+
+$ go test -count=1 ./...
+ok  	github.com/angeltonio/aliasdeck/cmd/aliasdeck
+ok  	github.com/angeltonio/aliasdeck/internal/api
+ok  	github.com/angeltonio/aliasdeck/internal/app
+ok  	github.com/angeltonio/aliasdeck/internal/apply
+ok  	github.com/angeltonio/aliasdeck/internal/archtest
+ok  	github.com/angeltonio/aliasdeck/internal/auth
+ok  	github.com/angeltonio/aliasdeck/internal/config
+ok  	github.com/angeltonio/aliasdeck/internal/domain
+ok  	github.com/angeltonio/aliasdeck/internal/renderers
+ok  	github.com/angeltonio/aliasdeck/internal/server
+?   	github.com/angeltonio/aliasdeck/internal/shelltest	[no test files]
+ok  	github.com/angeltonio/aliasdeck/internal/source
+ok  	github.com/angeltonio/aliasdeck/internal/state
+ok  	github.com/angeltonio/aliasdeck/internal/store
+ok  	github.com/angeltonio/aliasdeck/internal/store/sqlitestore
+?   	github.com/angeltonio/aliasdeck/internal/store/storetest	[no test files]
+?   	github.com/angeltonio/aliasdeck/internal/sync	[no test files]
+ok  	github.com/angeltonio/aliasdeck/internal/validate
+
+$ go test -count=1 ./internal/archtest
+ok  	github.com/angeltonio/aliasdeck/internal/archtest
+
+$ go test -count=1 -race ./internal/api/...
+ok  	github.com/angeltonio/aliasdeck/internal/api
+```
+
+`internal/server.Run` now imports `internal/api` (composition root wiring
+new for this batch); `TestServerPackagesNeverImportRenderers` (`internal/archtest`)
+still passed with that new edge present, confirming `internal/server` →
+`internal/api` does not introduce a path to `internal/renderers`.
+
+Six-target `CGO_ENABLED=0` cross-compile (no `-ldflags`, ephemeral scratch
+output paths under `/tmp`, no fixed ports bound, no long-running process
+started or stopped):
+
+| Target | Bytes | MiB |
+|---|---|---|
+| darwin/amd64 | 17,898,080 | 17.07 |
+| darwin/arm64 | 17,134,354 | 16.34 |
+| linux/amd64 | 17,545,708 | 16.73 |
+| linux/arm64 | 16,712,693 | 15.94 |
+| windows/amd64 | 18,036,736 | 17.20 |
+| windows/arm64 | 16,888,832 | 16.11 |
+
+All six well under the 25 MB CI budget (worst case, windows/amd64, has
+~7.8 MB / ~31% headroom remaining). Sizes grew from the 5.1–5.6 batch's
+~11–12 MB (that batch built `./cmd/aliasdeck` with `-ldflags="-s -w"`; this
+run intentionally omitted strip flags to report an unstripped, worst-case
+size against the budget per the orchestrator's instruction — the CI gate
+itself, task 10.2, is unimplemented until Phase 10 and will decide its own
+flags then).
+
+### Deliberately left out of this batch
+
+- **A device-kind-gated route to directly HTTP-test rotation/revocation.**
+  No such route exists yet (sync, `GET /api/v1/sync`, is Phase 6 and out of
+  this batch's scope) — `TestDevicesRotateTokenInvalidatesThePreviousToken`
+  and `TestDevicesRevokeInvalidatesItsToken` instead assert directly against
+  the persisted token's `RevokedAt` field via `auth.Parse` + `ByLookup`,
+  which is the exact property the future sync route's `RequireKind` check
+  will rely on. Flagged rather than papered over with a synthetic route that
+  would not exist in production.
+- **A `codeInvalidName` error constant.** Deliberately never introduced —
+  design decision 16 means an alias name issue never reaches `writeError` at
+  all, so a dedicated error code for it would be dead code by construction.
+- **Login timing side-channel hardening** (calling `verifyPassword` with a
+  dummy hash even when the username is unknown, to make the two failure
+  paths cost the same wall time). Not requested by any task or spec
+  scenario in this batch's scope; `handleLogin` returns "invalid
+  credentials" identically for both cases at the response-body level, but
+  an unknown username currently returns faster than a wrong password
+  because it skips the semaphore/KDF call entirely. Noted here rather than
+  silently shipped as if it were a considered non-issue.
+- **Operator-facing enrollment-token listing/revocation endpoints** (e.g.
+  `GET /api/v1/enrollment-tokens`, `DELETE /api/v1/enrollment-tokens/{id}`).
+  Not named by 5.9/5.10's task text or any spec scenario; `TokenRepo.Revoke`
+  exists and is exercised by `handleDevicesRevoke`/`handleDevicesRotateToken`,
+  but no route currently exposes revoking an *unconsumed* enrollment token
+  before it is used. Flagged as a plausible gap for a future task, not
+  implemented speculatively here.
+
+## Work Unit Evidence (Phase 5, 5.7–5.15)
+
+| Evidence | Value |
+|---|---|
+| Focused test command and exact result | `go test -count=1 ./internal/api/...` → `ok github.com/angeltonio/aliasdeck/internal/api` (all test functions pass, including under `-race`) |
+| Runtime harness command/scenario and exact result | `httptest.NewServer` wrapping the real `NewRouter` output, used by `TestLoginConcurrencySemaphoreBoundsConcurrentVerifyPasswordCalls` for genuine concurrent network requests (not `httptest.NewRecorder`, which cannot exercise real concurrency) — result: PASS, semaphore bounds concurrency to `loginConcurrency` as designed. `go test -count=1 ./internal/server/...` (real `Run`, ephemeral listener, `TestRunHealthEndpointRequiresNoAuthentication`) → PASS, confirming the new `api.NewRouter` wiring keeps the health route reachable unauthenticated. |
+| Rollback boundary | Revert every file under "Files created"/"Files modified" above, plus `docs/openapi.yaml` and this batch's `tasks.md`/`design.md`-adjacent doc edits (task 5.15's entry). `internal/server/handler.go`'s deletion and `server.go`'s wiring edit are the only changes outside `internal/api`; reverting both together restores Phase 4's stub wiring exactly, and nothing else in the tree references either. |
+
+## Workload / PR Boundary (Phase 5, 5.7–5.15)
+
+- Mode: Feature Branch Chain slice, PR 5 per `tasks.md`'s "Suggested Work
+  Units" — this batch completes Phase 5 entirely (5.1–5.15)
+- Current work unit: Phase 5 — Server API (`internal/api`), now including
+  the deferred `internal/server.Run` wiring
+- Boundary: see Rollback boundary above
+- Estimated review budget impact: High for this batch alone (13 new files,
+  6 error-code constants, a route table, ~20 new tests) — consistent with
+  `tasks.md`'s own forecast that PR 5 is one of the larger units in this
+  milestone's Feature Branch Chain; the maintainer already has size:exception
+  context via the chain strategy rather than a single-PR budget decision
+
+## Status (superseded by the Phase 5 correction pass below for current totals)
+
+Phases 1–4 complete (30/30). Phase 5 complete (15/15, including task 5.15
+added for the `internal/server.Run` wiring). Remaining: Phases 6–10
+(`internal/sync`, `ServerSource`/credentials, CLI wiring, cross-cutting
+verification, release/CI/docs). Ready for `sdd-verify` on this slice, or for
+the next apply batch to start Phase 6.
+
+## Phase 5 — Bounded-Review Correction Pass (third pass, four-lens)
+
+**Scope**: a four-lens review of the already-complete Phase 5
+(`internal/api`) found 1 CRITICAL and 6 WARNING findings. All were fixed in
+this batch. `tasks.md` 5.16 records the batch-level summary at its natural
+location; this section is the full detail. `internal/domain`,
+`internal/validate`, `internal/renderers`, and `internal/store` were read
+but not modified. The one permitted excursion into `internal/auth` is
+scoped to exactly `internal/auth/middleware.go`'s refusal mechanism
+(WARNING 2) — no other file in that package was touched.
+
+### CRITICAL 1 — the login semaphore acquire was not context-aware
+
+**Finding**: `internal/api/auth.go`'s `handleLogin` acquired its login
+semaphore with a bare `a.loginSem <- struct{}{}` send. Design decision 24
+claimed, in writing, that overflow was "bounded in turn by the handler's
+existing `http.TimeoutHandler` 20s bound … never a second, separate
+timeout." That claim was false as shipped: `http.TimeoutHandler` cancels
+the request context and writes its own response when its deadline fires,
+but does not interrupt a handler goroutine that never observes that
+cancellation. A goroutine parked on a bare send stays parked — past both an
+ordinary 20s timeout and an earlier client disconnect — until it eventually
+wins a slot, regardless of whether its own client is still there.
+
+**Fix**: the acquire is now `select { case a.loginSem <- struct{}{}: case
+<-r.Context().Done(): writeError(...503...); return }`. `design.md` decision
+24 and the Bounded Operations table's "Concurrent password verification"
+row are both corrected to state the previous claim was false and describe
+the actual fix, rather than silently updating the code while leaving a
+design document asserting a bound it did not implement.
+
+**On the requested demonstration and its two false starts, both reported
+honestly per the correction prompt's own instruction**:
+
+1. A context cancelled *before* `ByUsername` proves nothing: `ByUsername`
+   itself fails fast on a dead context, before the acquire is ever reached.
+   The real window is narrower — a client that disconnects *after*
+   `ByUsername` succeeds and *while* queued on the send.
+2. The first working construction of that narrower window used a real
+   `httptest.Server` and a client-side `context.CancelFunc`, synchronized via
+   a test-only `fakeStore.byUsernameHook`. It was **not deterministic**: a
+   client-side context cancellation only reaches the server by the OS
+   actually tearing down the TCP connection and the server's own background
+   reader noticing it — an inherently asynchronous, best-effort race with no
+   assertable bound. Empirically, this version's "free the filler slots,
+   then assert no further entrant" step raced the server's own disconnect
+   detection and produced a **false failure** (the target request grabbing a
+   freed slot via the legitimate `select`-send branch, not a bug) — captured
+   directly:
+
+   ```
+   DEBUG before select for target len= 4 cap= 4 ctxerr= <nil>
+   DEBUG acquired via slot for target
+       auth_test.go:409: the target request entered verifyPassword after its
+       own context was already cancelled and its client had given up — the
+       semaphore acquire did not observe context cancellation
+   --- FAIL: TestLoginSemaphoreAcquireObservesContextCancellationAfterUsernameLookup
+   ```
+
+   against the *already-fixed* production code — proving the test, not the
+   fix, was wrong. Root cause: the test froze the fillers' slots only after
+   the *client* saw its own request error, which happens purely client-side
+   and does not wait for the server to have noticed anything.
+3. **Final, deterministic construction**: call `(*api).handleLogin` directly
+   (not through `NewRouter`/`http.TimeoutHandler`/a real listener), with a
+   request already carrying a test-owned `context.WithCancel`. This makes
+   `r.Context().Done()` the exact same channel the test's own `cancel()`
+   closes — synchronous, in-process, no network layer, no propagation delay
+   to race against. This also sidesteps a second, subtler false-positive
+   risk: `http.TimeoutHandler` derives its own child context and reacts to
+   the same cancellation independently, so calling through the full router
+   could make the outer `ServeHTTP` call return regardless of whether this
+   package's own semaphore acquire ever observed anything — exactly a
+   "passes for an unrelated reason" result.
+
+Filed as `TestLoginSemaphoreAcquireObservesContextCancellationAfterUsernameLookup`
+(`internal/api/auth_test.go`).
+
+### WARNING 2 — 18 of 22 routes answered 401 in a different shape
+
+**Finding**: `internal/auth/middleware.go`'s `refuse()` used `http.Error`
+(`text/plain`), while every other response in this API answers
+`application/json` with the `{"error":{...}}` shape `docs/openapi.yaml`
+itself declares.
+
+**Fix**: inverted control. `internal/auth.RequireKind` gained a `Refuse
+func(http.ResponseWriter)` parameter; a nil value falls back to the old
+plain-text `defaultRefuse`, so every pre-existing caller (all of
+`middleware_test.go`, updated mechanically to pass `nil`) keeps its exact
+prior behavior. `internal/api/router.go` supplies a new `writeUnauthorized`
+(`errors.go`) using this package's own shape. No other file in
+`internal/auth` was touched. Recorded as `design.md` decision 25.
+
+**Closing the coverage gap the finding named** ("the bidirectional coverage
+test compares route existence, so it cannot see response-shape drift"):
+added `TestGuardedRoutesReturn401InTheStandardErrorShape`
+(`internal/api/router_test.go`), which walks the real, production
+`(*api).routes()` table and asserts every non-`Public` route's `401` is
+`application/json` and decodes as the standard error shape — 18 subtests,
+one per guarded route.
+
+### WARNING 3 — 10 of 22 handlers were never invoked authenticated
+
+**Finding**: `handleAliasesGet/Update/Delete`, `handleProfilesGet/Update/
+Delete`, `handleDevicesList/Get/Update/Delete` were only ever reached by
+unauthenticated-rejection tests, which return `401` before the handler body
+runs. On inspection, none of the three hypothetical defects the review
+described as illustrative risk ("a no-op delete", "a body-discarding
+update", "an id-ignoring get") were actually present in the shipped code —
+but nothing proved that before this batch.
+
+**Fix**: ten new authenticated round-trip tests (`aliases_test.go`,
+`profiles_test.go`, `devices_test.go`), each mutation-verified against the
+exact defect shape the review named. One test bug was caught and fixed
+during this process: `TestDevicesGetReturnsTheRequestedDeviceByID`
+originally registered "laptop" then "desktop" and requested the second
+(`desktop`) — but `fakeDeviceRepo.List` sorts by name, so `desktop` sorts
+first, meaning an id-ignoring `list[0]` mutation coincidentally returned
+the *correct* device and the test passed for the wrong reason (confirmed
+empirically — see the mutation table below, first attempt). Fixed by
+requesting the alphabetically-non-first device instead; the corrected test
+does catch the mutation.
+
+### WARNING 4 — partial state on a failed second step
+
+**Finding**: `handleDevicesRegister`'s device-token `Create` (after the
+atomic `auth.ConsumeEnrollment`) and `handleDevicesRotateToken`'s
+replacement-token `Create` (after `Tokens().RevokeSubject`) are each a
+separate, non-atomic write. A failure in either leaves partial state: an
+orphaned device with no token, or a device with zero valid tokens.
+
+**Decision**: accept and document both, not compensate or reorder — recorded
+as `design.md` decision 27. Compensating (deleting the orphaned device) was
+rejected as a *third* unguarded write racing the same failure class it
+tries to undo, for a device that is already recoverable without it
+(`POST devices/{id}/token` mints a working token with no need to repeat the
+single-use enrollment exchange). Reordering rotation (mint-then-revoke) was
+rejected because `RevokeSubject`'s filter (kind + subjectID + unrevoked)
+cannot distinguish the brand-new token from the old one without a
+`internal/store` change, out of this correction's scope.
+
+**Fix**: both failure responses now name the affected device's id in
+`details.deviceId`, and the doc comments state the recovery path plainly.
+`fakeStore` gained a test-only `tokenCreateErr` (returned once, then
+cleared) to force this exact window deterministically. Two new tests:
+`TestDevicesRegisterLeavesADiscoverableDeviceWhenTokenIssuanceFails` (proves
+the device is discoverable and rotate-token recovers it) and
+`TestDevicesRotateTokenIsSafeToRetryWhenTokenIssuanceFails` (proves a bare
+retry succeeds, because `RevokeSubject` on an already-fully-revoked device
+is a no-op).
+
+### WARNING 5 — list endpoints unbounded and unowned
+
+**Finding**: `validate.MaxAliases` (design decision 4's own stated
+assumption — "already bounds the set size") was never actually enforced
+from the API's create path, only from client-side `config.yaml` parsing,
+which a server-created alias never passes through.
+
+**Fix**: `handleAliasesCreate` now calls a new `checkAliasCapacity`, which
+lists the current alias count and rejects (`400`, `codeTooManyAliases`)
+once it reaches `validate.MaxAliases`. Devices and profiles remain
+unbounded, deliberately: recorded as `design.md` decision 26 as an accepted,
+owned decision for a single-operator control plane (server-auth spec, "One
+Operator Account"), not a silent gap. `TestAliasesCreateRejectsOnceAtMaxAliases`
+seeds the store directly to the cap (bypassing HTTP, for speed) and asserts
+the 5001st create through the real handler is rejected with the alias count
+left unchanged.
+
+### WARNING 6 — `decodeJSON` accepted unknown fields
+
+**Fix**: `dec.DisallowUnknownFields()` added to `decodeJSON`, applying to
+every route including the two unauthenticated ones (login, device
+registration). Verified against the complete pre-existing test suite with
+no legitimate request breaking (`go test -count=1 ./...` green both before
+and after). New `internal/api/json_test.go`:
+`TestDecodeJSONRejectsUnknownFields` (RED) and
+`TestDecodeJSONAcceptsAKnownFieldBody` (GREEN-path counterpart).
+
+### WARNING 7 — a test comment claimed a property the code does not have
+
+**Finding**: `TestLoginRejectsWrongPassword`'s doc comment said an unknown
+username "is refused identically" with "no signal to distinguish" it from a
+wrong password. False: an unknown username returns in roughly the time of a
+map/index lookup, while a real operator's wrong password pays the full
+~12.8 ms argon2id cost (design's Bounded Operations table) — a real, known
+timing oracle.
+
+**Fix**: rewrote the comment to state the actual, measured property and why
+it is accepted rather than fixed: equalizing the timing (routing every
+username through `verifyPassword` regardless of existence) would let an
+attacker exhaust the `loginConcurrency` semaphore with garbage usernames
+alone — trading a harmless oracle for a real availability problem. It leaks
+nothing today specifically because design decision 20 fixes and publishes
+the only operator account at `admin`; the comment now says to revisit this
+acceptance if that constraint ever changes. No code changed for this
+finding — comment-only, per the correction prompt's own instruction not to
+"fix" it by equalizing timing.
+
+### Mutation Evidence (all seven findings, verbatim)
+
+Every mutation below was applied directly to the production file (or, for
+CRITICAL 1's first construction attempt, to the *test* — see above),
+confirmed to fail the named test with `go test`, then reverted and the full
+package re-verified green (`go build ./...` after every revert).
+
+| # | Finding | Mutation | Verbatim result |
+|---|---|---|---|
+| 1 | CRITICAL 1 | Reverted `handleLogin`'s acquire from `select{...}` back to a bare `a.loginSem <- struct{}{}` | `--- FAIL: TestLoginSemaphoreAcquireObservesContextCancellationAfterUsernameLookup` — `auth_test.go:400: handleLogin never returned after its own context was cancelled while queued on the semaphore — it stayed parked on a bare send` (5.02s, hit the test's own 5s bound) |
+| 2 | WARNING 2 | `router.go`: `auth.RequireKind(tokens, r.RequiredKind, now, writeUnauthorized)` → `auth.RequireKind(tokens, r.RequiredKind, now, nil)` | `TestGuardedRoutesReturn401InTheStandardErrorShape`: all 17 non-health-adjacent guarded-route subtests FAIL on `Content-Type = "text/plain; charset=utf-8", want "application/json; charset=utf-8"` |
+| 3 | WARNING 3 (aliases) | `handleAliasesGet` → `List()[0]`; `handleAliasesUpdate` → `Update(domain.Alias{ID: in.ID})` (drops every other field); `handleAliasesDelete` → no-op `204` | Three separate FAILs: `returned {...Name:first...}, want the alias named "second"`; `Command after update = "", want "git status -sb"`; `GET a deleted alias = 200, want 404` |
+| 4 | WARNING 3 (profiles) | Same three shapes applied to `handleProfilesGet/Update/Delete` | Three separate FAILs, same pattern: wrong profile returned, `Description` not applied, deleted profile still `GET`-able |
+| 5 | WARNING 3 (devices) | Same shapes applied to `handleDevicesList/Get/Update/Delete` | Four separate FAILs — including the corrected `Get` test only after fixing its own alphabetical-order bug (see WARNING 3 discussion above; the *first* attempt at this mutation produced a false PASS, itself captured as evidence that the original test needed fixing) |
+| 6 | WARNING 4 (register) | `handleDevicesRegister`'s failing-`Create` branch reverted to bare `writeStoreError(w, err)` | `TestDevicesRegisterLeavesADiscoverableDeviceWhenTokenIssuanceFails` FAILs: `error response did not name the orphaned device id: {"error":{"code":"internal","message":"internal error"}}` |
+| 7 | WARNING 4 (rotate) | `handleDevicesRotateToken`'s failing-`Create` branch reverted to bare `writeStoreError(w, err)` | `TestDevicesRotateTokenIsSafeToRetryWhenTokenIssuanceFails` FAILs: `error response deviceId = "", want "<uuid>"` |
+| 8 | WARNING 5 | Removed the `checkAliasCapacity` call from `handleAliasesCreate` | `TestAliasesCreateRejectsOnceAtMaxAliases` FAILs: `POST /api/v1/aliases at the MaxAliases cap = 201, want 400` |
+| 9 | WARNING 6 | Removed `dec.DisallowUnknownFields()` from `decodeJSON` | `TestDecodeJSONRejectsUnknownFields` FAILs: `decodeJSON with an unknown field = true, want false; decoded into {Command:echo hi}` |
+
+No mutation in this table failed to produce a failure once corrected —
+every one had teeth, including the one (#5) whose first draft did not and
+was fixed before being reported as evidence.
+
+### Verification (this batch)
+
+```
+$ go test -count=1 ./...
+ok  	github.com/angeltonio/aliasdeck/cmd/aliasdeck
+ok  	github.com/angeltonio/aliasdeck/internal/api
+ok  	github.com/angeltonio/aliasdeck/internal/app
+ok  	github.com/angeltonio/aliasdeck/internal/apply
+ok  	github.com/angeltonio/aliasdeck/internal/archtest
+ok  	github.com/angeltonio/aliasdeck/internal/auth
+ok  	github.com/angeltonio/aliasdeck/internal/config
+ok  	github.com/angeltonio/aliasdeck/internal/domain
+ok  	github.com/angeltonio/aliasdeck/internal/renderers
+ok  	github.com/angeltonio/aliasdeck/internal/server
+?   	github.com/angeltonio/aliasdeck/internal/shelltest	[no test files]
+ok  	github.com/angeltonio/aliasdeck/internal/source
+ok  	github.com/angeltonio/aliasdeck/internal/state
+ok  	github.com/angeltonio/aliasdeck/internal/store
+ok  	github.com/angeltonio/aliasdeck/internal/store/sqlitestore
+?   	github.com/angeltonio/aliasdeck/internal/store/storetest	[no test files]
+?   	github.com/angeltonio/aliasdeck/internal/sync	[no test files]
+ok  	github.com/angeltonio/aliasdeck/internal/validate
+
+$ go test -count=1 -race ./internal/api/...
+ok  	github.com/angeltonio/aliasdeck/internal/api
+
+$ gofmt -l .
+(no output)
+
+$ go vet ./...
+(no output)
+
+$ go test -count=1 ./internal/archtest
+ok  	github.com/angeltonio/aliasdeck/internal/archtest
+```
+
+Six-target `CGO_ENABLED=0` cross-compile (no `-ldflags`, unstripped,
+ephemeral scratch output paths, no fixed port bound anywhere, no
+long-running process started or stopped by this batch):
+
+| Target | Bytes | MiB |
+|---|---|---|
+| darwin/amd64 | 17,902,208 | 17.07 |
+| darwin/arm64 | 17,150,914 | 16.36 |
+| linux/amd64 | 17,546,255 | 16.73 |
+| linux/arm64 | 16,712,560 | 15.94 |
+| windows/amd64 | 18,039,296 | 17.20 |
+| windows/arm64 | 16,890,880 | 16.11 |
+
+All six well under the 25 MB CI budget, essentially unchanged from the
+prior Phase 5 batch (this pass added test code and a handful of small
+production-code additions, not new dependencies).
+
+## Work Unit Evidence (Phase 5 correction pass)
+
+| Evidence | Value |
+|---|---|
+| Focused test command and exact result | `go test -count=1 ./internal/api/...` and `go test -count=1 ./internal/auth/...` → both `ok`, all tests pass including under `-race` for `internal/api` |
+| Runtime harness command/scenario and exact result | N/A beyond `internal/api`'s own `httptest.NewRecorder`/direct-handler-call harness (already the smallest correct harness for CRITICAL 1's context-cancellation property, per the test-construction discussion above); no new real-listener runtime path was introduced by this batch |
+| Rollback boundary | Revert `internal/api/{auth,devices,aliases,errors,json,router}.go` and their `_test.go` siblings, `internal/api/json_test.go` (new file), `internal/auth/middleware.go` and `middleware_test.go`, plus the `design.md`/`tasks.md` doc edits (decisions 25–27, 5.16). Nothing outside `internal/api` and `internal/auth/middleware.go` was touched; Phases 6–10 do not exist yet to depend on any of it |
+
+## Workload / PR Boundary (Phase 5 correction pass)
+
+- Mode: Feature Branch Chain slice, continuing PR 5's boundary (this is a
+  correction pass over the same work unit, not a new one)
+- Current work unit: Phase 5 correction — 1 CRITICAL + 6 WARNING findings,
+  all fixed
+- Boundary: see Rollback boundary above
+- Estimated review budget impact: moderate — one new test file, ten new
+  authenticated-round-trip tests, two new WARNING-4 tests, one new
+  CRITICAL-1 test, a handful of small production-code changes (a
+  `select`/`ctx.Done()` acquire, a `Refuse` parameter inversion, a capacity
+  check, two enriched error responses, one `DisallowUnknownFields` call);
+  no new dependencies, no new files outside `internal/api` and one test
+  file in `internal/auth`
+
+## Status
+
+Phases 1–4 complete (30/30). Phase 5 complete (16/16, including this
+correction pass as task 5.16). Remaining: Phases 6–10 (`internal/sync`,
+`ServerSource`/credentials, CLI wiring, cross-cutting verification,
+release/CI/docs). Ready for `sdd-verify` on this corrected slice, or for the
+next apply batch to start Phase 6.

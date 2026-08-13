@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/angeltonio/aliasdeck/internal/api"
 	"github.com/angeltonio/aliasdeck/internal/auth"
 )
 
@@ -122,7 +123,17 @@ func Run(ctx context.Context, cfg Config) error {
 		return fmt.Errorf("server: listening: %w", err)
 	}
 
-	srv := newHTTPServer(newHandler())
+	// Phase 5's full route table (internal/api.NewRouter) replaces the
+	// Phase 4 stub mux that only ever wired GET /api/v1/health directly:
+	// decision 23 requires that route stay reachable without
+	// authentication, and (*api).routes() (internal/api/router.go)
+	// registers it Public — never re-guarded — for exactly that reason.
+	handler, err := api.NewRouter(st, time.Now)
+	if err != nil {
+		return fmt.Errorf("server: building router: %w", err)
+	}
+
+	srv := newHTTPServer(handler)
 
 	serveErr := make(chan error, 1)
 	go func() {

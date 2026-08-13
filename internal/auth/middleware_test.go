@@ -62,7 +62,7 @@ func TestRequireKindAcceptsAMatchingCurrentToken(t *testing.T) {
 	wire := seedToken(t, repo, store.TokenKindDevice, nil)
 
 	inner, called := newRecordingHandler()
-	handler := RequireKind(repo, store.TokenKindDevice, fixedNow(now))(inner)
+	handler := RequireKind(repo, store.TokenKindDevice, fixedNow(now), nil)(inner)
 
 	rec := doRequest(t, handler, wire)
 
@@ -85,7 +85,7 @@ func TestRequireKindRefusesWrongKindForTheRoute(t *testing.T) {
 	deviceWire := seedToken(t, repo, store.TokenKindDevice, nil)
 
 	inner, called := newRecordingHandler()
-	handler := RequireKind(repo, store.TokenKindSession, fixedNow(now))(inner)
+	handler := RequireKind(repo, store.TokenKindSession, fixedNow(now), nil)(inner)
 
 	rec := doRequest(t, handler, deviceWire)
 
@@ -100,7 +100,7 @@ func TestRequireKindRefusesWrongKindForTheRoute(t *testing.T) {
 func TestRequireKindRefusesMissingAuthorizationHeader(t *testing.T) {
 	repo := newFakeTokenRepo()
 	inner, called := newRecordingHandler()
-	handler := RequireKind(repo, store.TokenKindDevice, fixedNow(time.Now()))(inner)
+	handler := RequireKind(repo, store.TokenKindDevice, fixedNow(time.Now()), nil)(inner)
 
 	rec := doRequest(t, handler, "")
 
@@ -115,7 +115,7 @@ func TestRequireKindRefusesMissingAuthorizationHeader(t *testing.T) {
 func TestRequireKindRefusesMalformedBearerToken(t *testing.T) {
 	repo := newFakeTokenRepo()
 	inner, called := newRecordingHandler()
-	handler := RequireKind(repo, store.TokenKindDevice, fixedNow(time.Now()))(inner)
+	handler := RequireKind(repo, store.TokenKindDevice, fixedNow(time.Now()), nil)(inner)
 
 	rec := doRequest(t, handler, "not-a-wire-token-at-all")
 
@@ -136,7 +136,7 @@ func TestRequireKindRefusesUnknownLookup(t *testing.T) {
 	}
 
 	inner, called := newRecordingHandler()
-	handler := RequireKind(repo, store.TokenKindDevice, fixedNow(time.Now()))(inner)
+	handler := RequireKind(repo, store.TokenKindDevice, fixedNow(time.Now()), nil)(inner)
 
 	rec := doRequest(t, handler, minted.Wire)
 
@@ -163,7 +163,7 @@ func TestRequireKindRefusesWrongSecret(t *testing.T) {
 	wrongWire := "add_" + minted.Lookup + ".not-the-real-secret"
 
 	inner, called := newRecordingHandler()
-	handler := RequireKind(repo, store.TokenKindDevice, fixedNow(time.Now()))(inner)
+	handler := RequireKind(repo, store.TokenKindDevice, fixedNow(time.Now()), nil)(inner)
 
 	rec := doRequest(t, handler, wrongWire)
 
@@ -186,7 +186,7 @@ func TestRequireKindRefusesExpiredToken(t *testing.T) {
 	})
 
 	inner, called := newRecordingHandler()
-	handler := RequireKind(repo, store.TokenKindSession, fixedNow(now))(inner)
+	handler := RequireKind(repo, store.TokenKindSession, fixedNow(now), nil)(inner)
 
 	rec := doRequest(t, handler, wire)
 
@@ -206,7 +206,7 @@ func TestRequireKindRefusesRevokedToken(t *testing.T) {
 	})
 
 	inner, called := newRecordingHandler()
-	handler := RequireKind(repo, store.TokenKindDevice, fixedNow(now))(inner)
+	handler := RequireKind(repo, store.TokenKindDevice, fixedNow(now), nil)(inner)
 
 	rec := doRequest(t, handler, wire)
 
@@ -215,5 +215,67 @@ func TestRequireKindRefusesRevokedToken(t *testing.T) {
 	}
 	if *called {
 		t.Fatal("the wrapped handler was invoked with a revoked token")
+	}
+}
+
+// TestRequireKindWithNilRefuseUsesThePlainTextDefault is the GREEN-path
+// counterpart to WARNING 2's own correction: a caller that passes a nil
+// Refuse (this package's previous, only, hardcoded behavior) still gets a
+// working 401 — internal/auth is not left non-functional by inverting
+// control to its callers, it simply stops opinionating about the shape by
+// default.
+func TestRequireKindWithNilRefuseUsesThePlainTextDefault(t *testing.T) {
+	repo := newFakeTokenRepo()
+	inner, called := newRecordingHandler()
+	handler := RequireKind(repo, store.TokenKindDevice, fixedNow(time.Now()), nil)(inner)
+
+	rec := doRequest(t, handler, "")
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401 with a nil Refuse", rec.Code)
+	}
+	if *called {
+		t.Fatal("the wrapped handler was invoked with no Authorization header at all")
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "text/plain; charset=utf-8" {
+		t.Fatalf("Content-Type with a nil Refuse = %q, want the plain-text default (http.Error's own), not a caller-specific shape", ct)
+	}
+}
+
+// TestRequireKindCallsTheProvidedRefuseInsteadOfItsOwnDefault is WARNING 2's
+// own RED test: internal/auth must not hardcode a response shape — the
+// caller's own Refuse must be what actually writes the response, for every
+// one of RequireKind's five distinct rejection paths (missing header,
+// malformed token, unknown lookup, wrong secret, wrong kind/expired/
+// revoked — Verify's own combined check). Mutation this test detects:
+// RequireKind calling defaultRefuse (or inlining http.Error) instead of the
+// provided refuse parameter — the custom status/body below would never
+// appear.
+func TestRequireKindCallsTheProvidedRefuseInsteadOfItsOwnDefault(t *testing.T) {
+	const customStatus = http.StatusTeapot
+	const customBody = `{"custom":"shape"}`
+	custom := func(w http.ResponseWriter) {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(customStatus)
+		_, _ = w.Write([]byte(customBody))
+	}
+
+	repo := newFakeTokenRepo()
+	inner, called := newRecordingHandler()
+	handler := RequireKind(repo, store.TokenKindDevice, fixedNow(time.Now()), custom)(inner)
+
+	rec := doRequest(t, handler, "")
+
+	if rec.Code != customStatus {
+		t.Fatalf("status = %d, want the caller-supplied Refuse's own %d", rec.Code, customStatus)
+	}
+	if got := rec.Body.String(); got != customBody {
+		t.Fatalf("body = %q, want the caller-supplied Refuse's own %q", got, customBody)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/json; charset=utf-8" {
+		t.Fatalf("Content-Type = %q, want the caller-supplied Refuse's own application/json — internal/auth must not override it with a shape of its own", ct)
+	}
+	if *called {
+		t.Fatal("the wrapped handler was invoked despite no Authorization header at all")
 	}
 }
