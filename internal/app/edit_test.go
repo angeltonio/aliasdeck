@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/angeltonio/aliasdeck/internal/config"
+	"github.com/angeltonio/aliasdeck/internal/source"
 )
 
 // TestEditNeverInvokesAShell is the required RED test for the "Editor
@@ -123,6 +124,54 @@ func TestEditHasNoSyncSideEffect(t *testing.T) {
 
 	if _, err := os.Stat(filepath.Join(te.Base, "aliases.zsh")); err == nil {
 		t.Error("Edit() must not sync/render/apply as a side effect")
+	}
+}
+
+// TestEditGitSourcePerformsNoGitWrite is the RED test for config-source
+// spec's "GitSource Is Read-Only in v0.2": opening a git-sourced
+// aliases.yaml in $EDITOR must never clone, fetch, commit, or push — Edit
+// never calls dc.Source.Resolve at all, so proving the cache directory was
+// never even created is the strongest available proof no git process ran.
+func TestEditGitSourcePerformsNoGitWrite(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script fixture requires a POSIX shell")
+	}
+
+	te := newTestEnv(t)
+	url := "https://example.com/dotfiles.git"
+	cfg := nativeDeviceConfig("test-device")
+	cfg.Source = config.Source{Type: config.SourceTypeGit, Git: config.GitSourceConfig{URL: url}}
+	writeConfigYAML(t, te.Base, cfg)
+	te.setenv("ALIASDECK_PLATFORM", "macos")
+	te.setenv("ALIASDECK_SHELL", "zsh")
+
+	captureFile := filepath.Join(t.TempDir(), "captured-args")
+	scriptPath := filepath.Join(t.TempDir(), "fakeeditor")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + captureFile + "\n"
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("writing fake editor script: %v", err)
+	}
+	te.setenv("EDITOR", "fakeeditor")
+	te.Env.LookPath = func(file string) (string, error) {
+		if file == "fakeeditor" {
+			return scriptPath, nil
+		}
+		return "", errors.New("not found")
+	}
+
+	report, err := Edit(context.Background(), te.Env, EditOptions{})
+	if err != nil {
+		t.Fatalf("Edit() returned an error: %v", err)
+	}
+
+	wantCacheDir := source.GitCacheDir(te.Base, url)
+	wantPath := filepath.Join(wantCacheDir, "aliases.yaml")
+	if report.Path != wantPath {
+		t.Errorf("report.Path = %q, want %q", report.Path, wantPath)
+	}
+
+	if _, err := os.Stat(wantCacheDir); !os.IsNotExist(err) {
+		t.Errorf("Edit() must not create a git checkout as a side effect; stat(%q) err = %v", wantCacheDir, err)
 	}
 }
 

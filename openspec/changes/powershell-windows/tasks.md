@@ -80,15 +80,15 @@ Base ordering if Feature Branch Chain is chosen: PR1 → PR2/PR3/PR4/PR5 (parall
 
 ## Phase 6: GitSource (`internal/source`) + State Staleness
 
-- [ ] 6.1 RED (**threat-matrix: Git subprocess environment**): `internal/source/git_test.go` — injected `Run` recording argv; every invocation carries `GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=Never`, `BatchMode=yes`; never `sh -c`.
-- [ ] 6.2 RED (**threat-matrix: Git repository selection**): clone vs fetch dispatch (absent `.git` ⇒ `clone --quiet -- <url> <cache>`; else `fetch --quiet --prune origin` + reset); ref default via `remote set-head origin --auto`; hostile URL (`-`-prefixed, `ext::`) rejected before any exec.
-- [ ] 6.3 RED: offline-with-cache (stale, no failure) and offline-without-cache (hard error, no partial state) (config-source, "GitSource Offline Behavior and Staleness").
-- [ ] 6.4 GREEN: new `internal/source/git.go` — `GitSource{URL, Ref, Path, CacheDir, Run}`, `Resolve`, `Descriptor`; cache at `<base>/cache/git/<sha256(url)[:12]>`.
-- [ ] 6.5 RED: `source.git.path` (Phase 1.1's decision) must resolve inside the cache; a `..`-bearing path must be rejected before reading `aliases.yaml`.
-- [ ] 6.6 GREEN: path-join + containment check ahead of the `os.ReadFile` in `git.go`.
-- [ ] 6.7 GREEN: optional `ResolveReporter{ LastResolve() ResolveInfo }`; `state.State` gains `SourceStale bool`, `SourceFetchedAt time.Time` (`omitempty`); `Descriptor.Ref` becomes `<url>#<ref>@<short-sha>`.
-- [ ] 6.8 GREEN: `internal/app/context.go` — `resolveSource` dispatches `config.SourceTypeGit` to `GitSource` instead of erroring; `syncWithContext` type-asserts `ResolveReporter` and records staleness into `state.State`.
-- [ ] 6.9 RED/GREEN: `edit` use case performs no git write when `source.type: git` (config-source, "GitSource Is Read-Only in v0.2").
+- [x] 6.1 RED (**threat-matrix: Git subprocess environment**): `internal/source/git_test.go` — injected `Run` recording argv; every invocation carries `GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=Never`, `BatchMode=yes`; never `sh -c`.
+- [x] 6.2 RED (**threat-matrix: Git repository selection**): clone vs fetch dispatch (absent `.git` ⇒ `clone --quiet -- <url> <cache>`; else `fetch --quiet --prune origin` + reset); ref default via `remote set-head origin --auto`; hostile URL (`-`-prefixed, `ext::`) rejected before any exec.
+- [x] 6.3 RED: offline-with-cache (stale, no failure) and offline-without-cache (hard error, no partial state) (config-source, "GitSource Offline Behavior and Staleness").
+- [x] 6.4 GREEN: new `internal/source/git.go` — `GitSource{URL, Ref, Path, CacheDir, Run}`, `Resolve`, `Descriptor`; cache at `<base>/cache/git/<sha256(url)[:12]>`.
+- [x] 6.5 RED: `source.git.path` (Phase 1.1's decision) must resolve inside the cache; a `..`-bearing path must be rejected before reading `aliases.yaml`.
+- [x] 6.6 GREEN: path-join + containment check ahead of the `os.ReadFile` in `git.go`.
+- [x] 6.7 GREEN: optional `ResolveReporter{ LastResolve() ResolveInfo }`; `state.State` gains `SourceStale bool`, `SourceFetchedAt time.Time` (`omitempty`); `Descriptor.Ref` becomes `<url>#<ref>@<short-sha>`.
+- [x] 6.8 GREEN: `internal/app/context.go` — `resolveSource` dispatches `config.SourceTypeGit` to `GitSource` instead of erroring; `syncWithContext` type-asserts `ResolveReporter` and records staleness into `state.State`.
+- [x] 6.9 RED/GREEN: `edit` use case performs no git write when `source.type: git` (config-source, "GitSource Is Read-Only in v0.2").
 
 ## Phase 7: CLI Reporting — status/doctor
 

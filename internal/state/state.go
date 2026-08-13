@@ -20,18 +20,25 @@ import (
 // State is the local sync-state record for one device (sync-state spec,
 // "Sync State Is Recorded After Apply").
 type State struct {
-	Version       int             `json:"version"` // 1
-	Revision      string          `json:"revision"`
-	OutputPath    string          `json:"outputPath"`
-	OutputHash    string          `json:"outputHash"` // sha256 hex of rendered bytes
-	AliasCount    int             `json:"aliasCount"`
-	Platform      domain.Platform `json:"platform"`
-	Shell         domain.Shell    `json:"shell"`
-	SourceType    string          `json:"sourceType"`
-	SourceRef     string          `json:"sourceRef"`
-	LastSyncAt    time.Time       `json:"lastSyncAt"`
-	ClientVersion string          `json:"clientVersion"`
-	Bootstrap     *Bootstrap      `json:"bootstrap,omitempty"`
+	Version    int             `json:"version"` // 1
+	Revision   string          `json:"revision"`
+	OutputPath string          `json:"outputPath"`
+	OutputHash string          `json:"outputHash"` // sha256 hex of rendered bytes
+	AliasCount int             `json:"aliasCount"`
+	Platform   domain.Platform `json:"platform"`
+	Shell      domain.Shell    `json:"shell"`
+	SourceType string          `json:"sourceType"`
+	SourceRef  string          `json:"sourceRef"`
+	// SourceStale and SourceFetchedAt are populated only for a ConfigSource
+	// that implements source.ResolveReporter (GitSource); FileSource leaves
+	// both at their zero value (design decision 14). A v0.1 state.json read
+	// by v0.2 therefore yields SourceStale=false, which is correct for a
+	// file source.
+	SourceStale     bool       `json:"sourceStale,omitempty"`
+	SourceFetchedAt time.Time  `json:"sourceFetchedAt,omitempty"`
+	LastSyncAt      time.Time  `json:"lastSyncAt"`
+	ClientVersion   string     `json:"clientVersion"`
+	Bootstrap       *Bootstrap `json:"bootstrap,omitempty"`
 }
 
 // Bootstrap records the shell rc file bootstrap AliasDeck performed, if any.

@@ -106,9 +106,9 @@ func loadDeviceContext(env Env, opts Options) (deviceContext, error) {
 
 // resolveSource builds the ConfigSource devCfg.Source declares.
 //
-// Only file sources are implemented in this milestone (git and server are
-// Milestone 3+, PROJECT.md §7); selecting either today is an explicit
-// error rather than a silent fallback to a file.
+// File and git sources are implemented (PROJECT.md §7; design decisions
+// 11-16). Server is Milestone 4+; selecting it today is an explicit error
+// rather than a silent fallback to a file.
 func resolveSource(devCfg config.DeviceFileConfig, cenv config.Env, base string) (path string, src source.ConfigSource, desc source.Descriptor, err error) {
 	switch devCfg.Source.Type {
 	case config.SourceTypeFile, "":
@@ -123,10 +123,37 @@ func resolveSource(devCfg config.DeviceFileConfig, cenv config.Env, base string)
 		}
 		fs := source.FileSource{Path: path}
 		return path, fs, fs.Descriptor(), nil
+	case config.SourceTypeGit:
+		return resolveGitSource(devCfg.Source.Git, base)
 	default:
 		return "", nil, source.Descriptor{}, fmt.Errorf(
 			"source type %q is not supported in this version of AliasDeck", devCfg.Source.Type)
 	}
+}
+
+// resolveGitSource builds a *source.GitSource from config.yaml's
+// source.git: block (design decisions 11-16). It fails fast — before a
+// checkout ever runs — when the URL is missing or source.git.path would
+// escape the checkout, rather than deferring either failure to sync time.
+func resolveGitSource(g config.GitSourceConfig, base string) (path string, src source.ConfigSource, desc source.Descriptor, err error) {
+	if g.URL == "" {
+		return "", nil, source.Descriptor{}, fmt.Errorf("source.git.url is required for a git source")
+	}
+
+	cacheDir := source.GitCacheDir(base, g.URL)
+	path, err = source.GitAliasesPath(cacheDir, g.Path)
+	if err != nil {
+		return "", nil, source.Descriptor{}, fmt.Errorf("resolving source.git.path: %w", err)
+	}
+
+	gs := &source.GitSource{
+		URL:      g.URL,
+		Ref:      g.Ref,
+		Path:     g.Path,
+		CacheDir: cacheDir,
+		Run:      source.RunGit,
+	}
+	return path, gs, gs.Descriptor(), nil
 }
 
 // resolveBackend builds the SyncBackend devCfg.Backend declares.

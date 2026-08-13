@@ -3,6 +3,7 @@ package state
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -67,6 +68,61 @@ func TestStateRoundTrip(t *testing.T) {
 		got.Bootstrap.RCHash != want.Bootstrap.RCHash ||
 		!got.Bootstrap.AddedAt.Equal(want.Bootstrap.AddedAt) {
 		t.Errorf("Bootstrap round trip mismatch:\ngot:  %+v\nwant: %+v", got.Bootstrap, want.Bootstrap)
+	}
+}
+
+// TestStateRoundTripWithGitStaleness pins design decision 14: state.State
+// gains SourceStale and SourceFetchedAt so a GitSource's offline fallback
+// survives a save/load cycle instead of being reported as current.
+func TestStateRoundTripWithGitStaleness(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	want := sampleState()
+	want.SourceType = "git"
+	want.SourceRef = "https://example.com/dotfiles.git#main@0123456789ab"
+	want.SourceStale = true
+	want.SourceFetchedAt = time.Date(2026, 1, 10, 8, 0, 0, 0, time.UTC)
+
+	if err := Save(path, want); err != nil {
+		t.Fatalf("Save() returned an error: %v", err)
+	}
+
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() returned an error: %v", err)
+	}
+
+	if got.SourceStale != want.SourceStale {
+		t.Errorf("SourceStale = %v, want %v", got.SourceStale, want.SourceStale)
+	}
+	if !got.SourceFetchedAt.Equal(want.SourceFetchedAt) {
+		t.Errorf("SourceFetchedAt = %v, want %v", got.SourceFetchedAt, want.SourceFetchedAt)
+	}
+	if got.SourceRef != want.SourceRef {
+		t.Errorf("SourceRef = %q, want %q", got.SourceRef, want.SourceRef)
+	}
+}
+
+// TestStateOmitsSourceStaleWhenFalse pins the "omitempty" half of design
+// decision 14 for the field it actually applies to: encoding/json's
+// omitempty never omits a zero-value time.Time (it is a struct, not one of
+// the basic types isEmptyValue recognizes), so only SourceStale's `false`
+// is genuinely omitted from a v0.1-shaped file source's state.json.
+func TestStateOmitsSourceStaleWhenFalse(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	want := sampleState() // file source: SourceStale/SourceFetchedAt left at zero value
+
+	if err := Save(path, want); err != nil {
+		t.Fatalf("Save() returned an error: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading state.json: %v", err)
+	}
+	if strings.Contains(string(data), "sourceStale") {
+		t.Errorf("state.json contains sourceStale for a non-stale file source:\n%s", data)
 	}
 }
 

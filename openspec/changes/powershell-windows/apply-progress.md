@@ -1,6 +1,6 @@
 # Apply Progress: PowerShell, Windows and Git-hosted config — Milestone 3 (v0.2)
 
-**Batches**: 1 (Phases 1–2) + 2 (Phase 3) + 3 (Phase 4) + 4 (Phase 5), per orchestrator scope
+**Batches**: 1 (Phases 1–2) + 2 (Phase 3) + 3 (Phase 4) + 4 (Phase 5) + 5 (Phase 6), per orchestrator scope
 **Mode**: Strict TDD
 
 ## Completed Tasks
@@ -83,6 +83,38 @@ FAIL
 $ rm internal/app/scratch_inversion_check_test.go
 ```
 
+### Phase 6 (this batch): `GitSource` (`internal/source`) + State Staleness
+
+- [x] 6.1 RED (**threat-matrix: Git subprocess environment**): new `internal/source/gitrun_test.go` — `TestRunGitSetsNonInteractiveEnvironment` (a fake executable named `git`, first on `PATH`, dumps `env` to a file; asserts `GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=Never`, `GIT_SSH_COMMAND=ssh -o BatchMode=yes` are all present), `TestRunGitNeverInvokesAShell` (a hostile argv element containing `;` arrives at the fake script as one literal argument; no canary file is created), `TestRunGitReturnsStderrOnFailure`. **Deviation from the task's literal file name, not from its intent** (see "Deviations from Design" below): design decision 12's `Run func(ctx, dir string, args ...string) ([]byte, error)` seam has no environment parameter, so `internal/source/git_test.go`'s injected-`Run` fakes structurally cannot observe real subprocess environment variables — verified by reading `gitrun.go`'s eventual signature before writing this test, not assumed. The three env vars are instead attached by `RunGit`, the concrete default `Run` implementation, which is what this test exercises directly. Observed failing to compile (`undefined: RunGit`) before any production code existed.
+- [x] 6.2 RED (**threat-matrix: Git repository selection**): new `internal/source/git_test.go` — `TestGitSourceClonesWhenNoCheckoutExists` (exact argv sequence: `clone --quiet -- <url> <cache>` run with `dir` = the cache's not-yet-existing parent, then `remote set-head origin --auto`, then `reset --hard refs/remotes/origin/HEAD`, then `rev-parse HEAD`, the remaining three run with `dir` = the cache itself), `TestGitSourceClonesWithExplicitRefSkipsDefaultBranchResolution` (an explicit `source.ref` resets straight to it, no `remote set-head` call), `TestGitSourceFetchesWhenCheckoutExists` (`fetch --quiet --prune origin` instead of a second clone), `TestGitSourceHostileURLRejectedBeforeAnyExec` (table: leading `-`, leading `--`, `ext::`, and `Ext::` mixed-case — `Run` must never be invoked, and the returned config must not be partially applied). Observed failing to compile (`undefined: GitSource`) before any production code existed.
+- [x] 6.3 RED: same file — `TestGitSourceOfflineWithCacheResolvesStale` (a pre-seeded fake checkout, `Run` fails only on `fetch`; `Resolve` must still succeed and `LastResolve().Stale` must be `true`) and `TestGitSourceOfflineWithoutCacheFailsHard` (no pre-seeded checkout, `Run` fails; `Resolve` must return an error naming the URL and a zero `ResolvedConfig`). Same compile-error RED as 6.2 (one new file, one RED observation covers 6.1's orchestration-level assertions too, since `GitSource`/`ResolveInfo`/`ResolveReporter` did not exist yet).
+- [x] 6.4 GREEN: new `internal/source/git.go` — `ResolveInfo{Ref, Commit, FetchedAt, Stale}`, `ResolveReporter{ LastResolve() ResolveInfo }` (additive optional interface, design decision 14), `GitSource{URL, Ref, Path, CacheDir, Run}` with pointer-receiver methods (`Resolve`, `Descriptor`, `LastResolve` all mutate/read an unexported `last ResolveInfo` field, so a caller must store `*GitSource`, documented on the type), `GitCacheDir` (design decision 11, `sha256(url)[:12]` under `<base>/cache/git/`), `fetchOrClone` (clone-vs-fetch dispatch + the ref-resolution/reset sequence design decisions 12–13 require), `resolveCommit`, `checkoutFetchedAt` (reads `.git/FETCH_HEAD`'s mtime rather than `time.Now()`, so a *stale* resolution reports the time of the last successful fetch, not the failed attempt — see "Non-obvious design choice" below), `validateGitURL`, `dirExists`. New `internal/source/gitrun.go` — `RunGit(ctx, dir, args...)`: `git -C <dir> <args>` via `exec.CommandContext`, never a shell, with the three env vars from decision 15. All of 6.1/6.2/6.3's RED tests pass; `internal/source/file.go`/`file_test.go` untouched (`git diff --stat` empty).
+- [x] 6.5 RED: same file — `TestGitSourcePathEscapingCheckoutRejected` (`source.git.path: ../passwd` against a pre-seeded checkout with a canary file one level *above* the checkout root; `Resolve` must fail before ever calling `os.ReadFile` on anything outside the cache — proven structurally, since `GitAliasesPath`'s containment check runs and returns before `Resolve` reaches its `os.ReadFile` call at all) and `TestGitSourcePathPresentResolvesRelativeToCheckoutRoot` (positive case: `source.git.path: config/aliases.yaml` resolves `<cache>/config/aliases.yaml`). Folded into 6.2's RED observation (same file, same compile-error RED).
+- [x] 6.6 GREEN (same task as 6.4's `git.go`): `GitAliasesPath(cacheDir, relPath)` — `filepath.Join` + `filepath.Rel` containment check (mirrors `internal/apply/bootstrap.go`'s `relUnderHome` pattern from Phase 4's Defect A fix: reject a result of `".."` or a `".."`-prefixed remainder), called by `Resolve` *before* `os.ReadFile`, and exported so `internal/app/context.go` can reuse the identical check at `resolveSource` time (6.8) rather than duplicating the logic.
+- [x] 6.7 GREEN: `GitSource.Descriptor()`/`LastResolve()` (design decision 14, folded into 6.4's `git.go`); `internal/state/state.go` — `State` gained `SourceStale bool` (`json:"sourceStale,omitempty"`) and `SourceFetchedAt time.Time` (`json:"sourceFetchedAt,omitempty"`). **Documented Go stdlib limitation, not a bug** (see "Deviations from Design"/"Issues Found" below): `encoding/json`'s `omitempty` never omits a zero-value struct, so `SourceFetchedAt`'s tag is honest to the design text but a no-op in practice; `SourceStale`'s `omitempty` does work, since `bool` is one of the types `isEmptyValue` recognizes. `ShortSHA(sha string) string` added to `internal/source/git.go` (12-char truncation), exported so `internal/app/sync.go` can build the same `<url>#<ref>@<short-sha>` shape for `state.State.SourceRef` without a second type assertion.
+- [x] 6.8 GREEN: `internal/app/context.go` — `resolveSource` gained `case config.SourceTypeGit:` delegating to new `resolveGitSource(g config.GitSourceConfig, base string)`, which fails fast (before `loadDeviceContext` ever succeeds) when `source.git.url` is empty or `source.git.path` escapes the checkout, and wires `Run: source.RunGit` into the constructed `*source.GitSource`. `internal/app/sync.go`'s `syncWithContext` type-asserts `dc.Source.(source.ResolveReporter)` after a successful `Resolve` and, when present, folds `LastResolve()`'s `Stale`/`FetchedAt` into the persisted `state.State` and appends `"@" + source.ShortSHA(info.Commit)` to the recorded `SourceRef` when a commit is known. `server` sources remain an explicit, unchanged error (`TestResolveSourceServerStillUnsupported` pins this — the new `case` did not silently widen the `default:` branch's coverage).
+- [x] 6.9 RED/GREEN: new `internal/app/edit_test.go` test `TestEditGitSourcePerformsNoGitWrite`. **This one was GREEN by construction against the already-landed 6.8** (see "RED evidence for 6.9" below for the adversarial proof this is still a genuine regression guard, not a vacuous test): `Edit` never calls `dc.Source.Resolve` at all — it only opens `dc.AliasesPath` in `$EDITOR` — so once 6.8's dispatch exists, no git process ever runs for a git-sourced `edit`. The test proves this the strongest available way: it asserts the git cache directory `source.GitCacheDir(base, url)` was never created on disk at all after `Edit` returns successfully, plus that `report.Path` correctly named the (never-checked-out) intended path inside that cache.
+
+**RED evidence for 6.9's adversarial validation, reproduced exactly** (proving the test is a genuine regression guard for the *combination* of 6.8's dispatch existing and `Edit`'s never-calls-`Resolve` invariant, not a test that would pass unconditionally):
+
+```
+$ git stash push -- internal/app/context.go   # temporarily removes 6.8's git dispatch
+$ go test ./internal/app/... -run TestEditGitSourcePerformsNoGitWrite -v
+=== RUN   TestEditGitSourcePerformsNoGitWrite
+    edit_test.go:164: Edit() returned an error: source type "git" is not supported in this version of AliasDeck
+--- FAIL: TestEditGitSourcePerformsNoGitWrite (0.00s)
+FAIL
+FAIL	github.com/angeltonio/aliasdeck/internal/app	0.376s
+FAIL
+$ git stash pop   # restores 6.8
+$ go test ./internal/app/... -run TestEditGitSourcePerformsNoGitWrite -v
+=== RUN   TestEditGitSourcePerformsNoGitWrite
+--- PASS: TestEditGitSourcePerformsNoGitWrite (0.29s)
+PASS
+```
+
+**Non-obvious design choice made during 6.4, not literally spelled out in design.md**: `ResolveInfo.FetchedAt` is derived from `.git/FETCH_HEAD`'s filesystem modification time (`checkoutFetchedAt`), not `time.Now()`. This matters specifically for the *stale* path: if `FetchedAt` were simply "the time `Resolve` ran," a stale resolution (whose fetch just failed) would report the time of the failed attempt as if it were a successful fetch time — silently misrepresenting how old the cached content actually is, which is exactly the kind of silent failure the non-negotiable constraints call out. Since `.git/FETCH_HEAD` is written by both `git clone` and `git fetch` and left untouched by a failed fetch, its mtime is a truthful proxy for "when this checkout was last actually current" in both the fresh and the stale case, using only information already on disk — no extra clock field needed on `GitSource`. `TestGitSourceOfflineWithCacheResolvesStale`'s fake `Run` never touches disk (by design, per the "tests must not require the network" instruction), so this specific mtime-sourcing behavior is exercised through `checkoutFetchedAt`'s own logic rather than asserted end-to-end in that test; `TestSyncRecordsGitSourceStaleness` (in `internal/app/sync_test.go`) instead pins the *propagation* of a given `ResolveInfo.FetchedAt` value through to `state.State`, using a `fakeGitSource` test double that returns a fixed `ResolveInfo` directly, sidestepping the need to fabricate a real `.git/FETCH_HEAD` file with a controlled mtime.
+
 ## TDD Cycle Evidence
 
 | Task | RED (test written first, observed failing) | GREEN (implementation, observed passing) | REFACTOR |
@@ -100,6 +132,12 @@ $ rm internal/app/scratch_inversion_check_test.go
 | 5.3 | The old `app/misc_test.go:177` assertion reproduced verbatim in a throwaway scratch test and run with `go test ./internal/app/... -run TestScratchOldAssertionNowFails -v` **after** 5.4/5.5's GREEN — failed: `resolveRCPath() must fail for a shell with no rc-file convention` (see "RED evidence for the inversion" above) | `misc_test.go` updated to the three inverted/new sub-tests plus the retained `fish`-based unsupported-shell case; `go test ./internal/app/... -run TestResolveRCPath -v` passes | None needed |
 
 **Note on 5.3's RED ordering**: unlike 5.1/5.2/5.4/5.5 (new behavior, test-first), 5.3 is an *inversion* of an existing assertion — the same pattern Phase 3 (`posix_test.go` `TestForUnsupportedShell`/`TestSupported`) and Phase 4 (`native_test.go` `TestNativeBackendOutputPathUnsupportedShell`) used: the RED evidence is the pre-existing assertion breaking once the new capability lands, not a new test written before code that doesn't exist yet. The scratch file made that breakage an explicit, observed, reproducible step instead of an inferred one.
+
+| 6.1 | `go test ./internal/source/... -v` (new `gitrun_test.go`) — compile error: `undefined: RunGit` | Same command passes after adding `gitrun.go`'s `RunGit` | None needed |
+| 6.2/6.3/6.5 | `go test ./internal/source/... -v` (new `git_test.go`) — compile error: `undefined: GitSource` (and `GitCacheDir`, once the first was fixed) | Same command passes after adding `git.go` in full (`GitSource`, `ResolveInfo`, `ResolveReporter`, `GitCacheDir`, `GitAliasesPath`, `ShortSHA`, `fetchOrClone`, `resolveCommit`, `checkoutFetchedAt`, `validateGitURL`, `dirExists`) | None needed — every RED test in this file passed on the first `git.go`/`gitrun.go` write, with zero iteration; see "Verification" below for the full `-v` transcript |
+| 6.7/6.8 (state + app wiring) | `go test ./internal/app/... -run TestSyncRecordsGitSourceStaleness -v` — failed: `state.SourceStale = false, want true` (`state.go` had no such field yet, so this was also a compile-time RED one command earlier: `internal/state/state_test.go`'s `TestStateRoundTripWithGitStaleness` failed with `want.SourceStale undefined`) | `state.go`'s two new fields, then `sync.go`'s `ResolveReporter` type assertion in `syncWithContext`, made both commands pass | None needed |
+| 6.8 (dispatch) | `go test ./internal/app/... -run TestResolveSource -v` — failed: `resolveSource() returned an error: source type "git" is not supported in this version of AliasDeck` | `context.go`'s new `case config.SourceTypeGit:` and `resolveGitSource` helper fixed it | None needed — `resolveGitSource` factored out rather than inlined into the `switch`, matching the existing one-case-per-branch shape |
+| 6.9 | `TestEditGitSourcePerformsNoGitWrite` passed immediately once written, since 6.8 had already landed in this same batch — RED was instead demonstrated adversarially by temporarily stashing `context.go`'s 6.8 changes and rerunning (see the "RED evidence for 6.9" transcript above) | Restoring `context.go` (`git stash pop`) returned the suite to green | None needed |
 
 ## Work Unit Evidence
 
@@ -135,6 +173,14 @@ $ rm internal/app/scratch_inversion_check_test.go
 | Runtime integration harness | N/A, as the tasks artifact's own forecast for this unit states: "fake `Env.LookPath`, no real process spawned by design." Confirmed: `resolvePowerShellProfile` never calls `exec.LookPath` directly — only through the injected `Env.LookPath` field, which is `lookPathFake` (never a real binary lookup) in every test in this batch. `windowsDocumentsDir` and `pathExists`/`isDir` touch only `t.TempDir()` paths, no real `$HOME`. |
 | Rollback boundary | Remove `internal/app/pwshprofile.go` and `internal/app/pwshprofile_test.go`; revert the `case domain.ShellPowerShell:` branch added to `internal/app/rcpath.go`'s switch (restores the pre-change `"no rc file convention defined for shell..."` error for PowerShell); revert `internal/app/misc_test.go`'s three new/inverted sub-tests back to the single pre-change `"unsupported shell is an error"` assertion. No other package calls `resolvePowerShellProfile`/`pwshProfilePaths`/`windowsDocumentsDir` yet (Phase 7's `status`/`doctor` wiring has not landed), so this reverts cleanly. |
 
+### Unit 5 (Phase 6)
+
+| Evidence | Value |
+|---|---|
+| Focused test command and exact result | `go test ./internal/source/... ./internal/state/... ./internal/app/... -v` → all tests pass, including every new/extended test named above; `go test ./internal/source/... -cover` → 87.0%, `go test ./internal/state/... -cover` → 73.0%, `go test ./internal/app/... -cover` → 83.0% |
+| Runtime integration harness | `TestRunGitSetsNonInteractiveEnvironment`/`TestRunGitNeverInvokesAShell`/`TestRunGitReturnsStderrOnFailure` — a real subprocess (`exec.CommandContext`) runs against a fake executable literally named `git`, first on `PATH`; not the network, not real git, but a genuine process boundary, gated with `t.Skip` on `runtime.GOOS == "windows"` the same way `edit_test.go`'s existing fake-editor-script tests already are. `GitSource.Resolve` itself is exercised only through the injected `Run` fake (no network), per the task prompt's explicit "tests must not require the network" instruction. |
+| Rollback boundary | Remove `internal/source/git.go`, `git_test.go`, `gitrun.go`, `gitrun_test.go`, and `internal/app/context_test.go`; revert `internal/app/context.go`'s `resolveGitSource`/`case config.SourceTypeGit:` (back to the pre-change `default:` error for `git`), `internal/app/sync.go`'s `ResolveReporter` type assertion, `internal/state/state.go`'s two new fields, and the new test cases appended to `internal/app/edit_test.go`/`sync_test.go`/`internal/state/state_test.go`. `internal/source/file.go`/`file_test.go` are untouched (`git diff --stat` empty), so `FileSource` is unaffected by the revert. No other package calls `GitSource`/`RunGit`/`ResolveReporter` yet (Phase 7's `status`/`doctor` wiring has not landed), so this reverts cleanly. |
+
 ## Files Changed
 
 | File | Action | What Was Done |
@@ -168,8 +214,25 @@ $ rm internal/app/scratch_inversion_check_test.go
 | `internal/app/rcpath.go` | Modified | `resolveRCPath` gained `case domain.ShellPowerShell:` delegating to `resolvePowerShellProfile(env, platform)` |
 | `internal/app/misc_test.go` | Modified | `TestResolveRCPath` gained 3 PowerShell sub-tests (macOS Core path — **inversion** of the old error assertion, Windows Documents path, `--rc-file` override); retained `"unsupported shell is an error"` now uses `domain.Shell("fish")` instead of `domain.ShellPowerShell` |
 | `openspec/changes/powershell-windows/design.md` | Modified | Decision 8's row updated to the implemented `resolvePowerShellProfile(env, platform)` signature, with rationale for the added `platform` parameter |
+| `internal/source/git.go` | Created | `ResolveInfo`, `ResolveReporter` (additive optional interface, design decision 14), `GitSource{URL, Ref, Path, CacheDir, Run}` (pointer-receiver methods), `GitCacheDir` (decision 11), `GitAliasesPath` (decision 16 containment check, shared with `internal/app/context.go`), `ShortSHA`, `Resolve`/`fetchOrClone`/`resolveCommit`/`checkoutFetchedAt`/`validateGitURL`/`dirExists` |
+| `internal/source/git_test.go` | Created | `TestGitSourceClonesWhenNoCheckoutExists`, `TestGitSourceClonesWithExplicitRefSkipsDefaultBranchResolution`, `TestGitSourceFetchesWhenCheckoutExists`, `TestGitSourceHostileURLRejectedBeforeAnyExec` (4-case table), `TestGitSourceOfflineWithCacheResolvesStale`, `TestGitSourceOfflineWithoutCacheFailsHard`, `TestGitSourcePathEscapingCheckoutRejected`, `TestGitSourcePathPresentResolvesRelativeToCheckoutRoot`, `TestGitSourceResolveFiltersHostileInputIdenticallyToFileSource`, `TestGitCacheDirIsHashedAndDeterministic`, `TestGitSourceDescriptorIncludesResolvedCommit` |
+| `internal/source/gitrun.go` | Created | `RunGit(ctx, dir, args...)` — `git -C <dir> <args>` via `exec.CommandContext`, the three non-interactive env vars from design decision 15 |
+| `internal/source/gitrun_test.go` | Created | `TestRunGitSetsNonInteractiveEnvironment`, `TestRunGitNeverInvokesAShell`, `TestRunGitReturnsStderrOnFailure` — real subprocess against a fake `git` executable, no network |
+| `internal/state/state.go` | Modified | `State` gained `SourceStale bool` (`omitempty`) and `SourceFetchedAt time.Time` (`omitempty`, no-op for the zero value per the documented `encoding/json` limitation) |
+| `internal/state/state_test.go` | Modified | Added `TestStateRoundTripWithGitStaleness`, `TestStateOmitsSourceStaleWhenFalse` |
+| `internal/app/context.go` | Modified | `resolveSource` gained `case config.SourceTypeGit:` delegating to new `resolveGitSource`, which validates `source.git.url`/`source.git.path` and wires `Run: source.RunGit` |
+| `internal/app/context_test.go` | Created | `TestResolveSourceDispatchesGitSource`, `TestResolveSourceGitRequiresURL`, `TestResolveSourceGitPathEscapingCheckoutRejected`, `TestResolveSourceServerStillUnsupported` |
+| `internal/app/sync.go` | Modified | `syncWithContext` type-asserts `source.ResolveReporter` after a successful `Resolve` and folds `Stale`/`FetchedAt`/the commit-augmented `SourceRef` into the persisted `state.State` |
+| `internal/app/sync_test.go` | Modified | Added `fakeGitSource`/`gitDeviceContext` test doubles, `TestSyncRecordsGitSourceStaleness`, `TestSyncFileSourceLeavesStalenessUnset`, `TestSyncUnreachableGitSourceWithoutCacheFailsAndNamesSource` |
+| `internal/app/edit_test.go` | Modified | Added `TestEditGitSourcePerformsNoGitWrite` (config-source spec, "GitSource Is Read-Only in v0.2") |
+| `openspec/changes/powershell-windows/tasks.md` | Modified | Marked 6.1–6.9 as `[x]` (batch 5) |
 
 ## Deviations from Design
+
+**Two deviations for Phase 6, both narrower-than-literal-text but design-intent-preserving, neither corrected in `design.md` since neither changes a decision's outcome — only which file a test physically lives in, and a documented stdlib limitation on a tag the design text already specified correctly:**
+
+1. Task 6.1 named `internal/source/git_test.go` as the file for the "Git subprocess environment" RED test. It landed in a new `internal/source/gitrun_test.go` instead, testing `RunGit` (the concrete default `Run` implementation) directly rather than through `GitSource.Resolve`'s injected-`Run` seam. Reason, verified before writing any test: design decision 12's `Run func(ctx, dir string, args ...string) ([]byte, error)` signature has no environment parameter, so a fake `Run` used by `git_test.go`'s orchestration-level tests (clone/fetch dispatch, ref resolution, staleness) structurally cannot observe or assert on real subprocess environment variables — there is nothing to inspect through that seam. The three env vars decision 15 requires are attached where they actually live: inside `RunGit` itself, via `exec.Cmd.Env`. Testing `RunGit` directly, using a fake executable literally named `git` on `PATH`, is the only way to observe this behavior without a real git binary or the network. `git_test.go` still exists and still contains every orchestration-level RED test from 6.2/6.3/6.5.
+2. Design decision 14 says `state.State` gains `SourceFetchedAt time.Time` "(`omitempty`)". The `omitempty` tag was added exactly as specified — but `encoding/json`'s `isEmptyValue` never treats a struct type (which `time.Time` is) as empty, regardless of its value, so this tag is a no-op for `SourceFetchedAt` specifically: a zero-value `SourceFetchedAt` still serializes as `"0001-01-01T00:00:00Z"`, unlike `SourceStale` (a `bool`), whose `omitempty` does work as written. This is a pre-existing Go stdlib behavior, not a bug introduced here, and it does not affect correctness: `state.Load` still round-trips the field correctly either way, and every existing `LastSyncAt time.Time` field in the same struct already has no `omitempty` at all, so this is consistent with the file's own prior convention of not fighting that limitation. Flagged explicitly (and pinned by `TestStateOmitsSourceStaleWhenFalse`) rather than silently left for a future reader to discover.
 
 **One deviation for Phase 5, corrected in `design.md` itself (see the Phase 5 task list above for the full rationale)**: decision 8's row wrote `resolvePowerShellProfile(env) (pwshProfile, error)`, with no platform parameter. Implemented as `resolvePowerShellProfile(env Env, platform domain.Platform)`. Reason: decisions 9 (Windows `Documents`/OneDrive) and 10 (non-Windows `~/.config/powershell`) are genuinely different platform behaviors, not a filesystem-shape heuristic; reading `runtime.GOOS` directly inside the function (the only alternative that matches the literal no-platform-parameter signature) would make decision 9's Windows-only branch permanently untestable on this project's actual CI hosts (macOS/Linux) until Phase 8's Windows runner exists — which would leave 5.1/5.2's RED/GREEN cycle impossible to observe on this machine, violating Strict TDD's "observed failing" requirement. Threading the `platform domain.Platform` parameter `resolveRCPath` already receives (itself resolved via `config.DetectPlatform`, which already carries Phase 2's `$ALIASDECK_PLATFORM` test seam) avoids adding any new test seam and keeps every Windows-path test a pure, real, no-mocking-of-globals unit test. `internal/app/init.go` needed zero changes: its one `resolveRCPath` call site already passed `dc.Device.Platform`.
 
@@ -187,6 +250,10 @@ One clarification worth flagging: design decision 16 and the "Windows Path Handl
 
 ## Issues Found
 
+**One known, deliberately-not-fixed limitation for Phase 6** (documented here per "never fail silently," rather than fixed, to keep this batch's scope matched to tasks 6.1–6.9): `syncWithContext`'s no-op skip path (design decision 5 — resolved revision *and* on-disk hash both already match) returns before the `ResolveReporter` staleness fields are ever folded into `state.State`. Concretely: if a git-sourced device's content is unchanged between two `sync` runs but the remote's reachability *changes* between those two runs (e.g. it was reachable on run 1, unreachable on run 2, or vice versa), the no-op skip on run 2 means `state.SourceStale`/`SourceFetchedAt` keep whatever value run 1 recorded, not run 2's actual result — a genuine staleness-visibility gap in the specific case where content happens not to have changed. This is out of tasks.md's literal 6.1–6.9 scope (none of the nine tasks mention the no-op-skip interaction), and fixing it correctly would mean persisting new state on what design decision 5 currently treats as a pure no-write path — a change to already-shipped Milestone-2 behavior that deserves its own reviewed decision rather than being folded silently into this batch. `TestSyncNoOpSkipWhenUnchanged` (pre-existing, Milestone 2) still passes unmodified, confirming this batch did not change the no-op-skip contract for file sources. Flagged here for Phase 7 (which reads these same fields for `status`/`doctor`) and for whoever picks this back up.
+
+Note for whoever reviews or extends `internal/source` next (Phase 7's `status`/`doctor` wiring, and Milestone 4's `ServerSource`): `GitSource`'s methods have pointer receivers specifically so `Resolve` can record `last ResolveInfo` for a later `Descriptor()`/`LastResolve()` call to see. `resolveGitSource` in `internal/app/context.go` already returns `*source.GitSource`, not a value — any new construction site must do the same, or `Descriptor()` calls after `Resolve` will silently keep reporting the pre-resolve (no-commit) value instead of erroring, since Go does not catch "method call on a copy" at compile time here.
+
 None for Phase 5.
 
 Note for whoever reviews or extends this package next (Phase 7 wires `status`/`doctor`): `resolvePowerShellProfile`'s `pwshProfile.OtherPath`/`OtherExists` are already computed on every code path specifically so Phase 7's `doctor` "other-edition-profile-exists" warning (non-negotiable constraint 1) needs no new detection logic — just read the fields off a call to `resolvePowerShellProfile(env, dc.Device.Platform)`. Do not call `resolvePowerShellProfile` a second time with different inputs elsewhere; if `status`/`doctor` need the same resolution `init`/`sync` used, thread the already-resolved `pwshProfile` (or re-derive it identically) rather than risking two call sites disagreeing on which edition was chosen — that would recreate exactly the silent-mismatch failure mode this phase exists to prevent.
@@ -201,12 +268,16 @@ Note carried from Phase 3 for whoever reviews or extends this package: Go's `gof
 
 ## Remaining Tasks (not in this batch's scope)
 
-- [ ] Phase 6: GitSource + State Staleness (6.1–6.9)
 - [ ] Phase 7: CLI Reporting — status/doctor (7.1–7.4)
 - [ ] Phase 8: CI Matrix & Release (8.1–8.6)
 - [ ] Phase 9: Docs & Final Verification (9.1–9.4)
 
 ## Workload / PR Boundary
+
+- Mode: `ask-on-risk` forecast in tasks.md remains unresolved for the overall change (chain strategy still `pending`); this batch executes Work Unit 5 ("`GitSource` + config schema + state staleness (Phases 1 git parts + 6)") as an autonomous, revertible slice, following Units 1–4 (Phases 1–5, already landed in this working tree) and regardless of which chain strategy the orchestrator ultimately picks for the remaining units. The orchestrator explicitly scoped this batch to "Phase 6 only," so this executor proceeded without re-raising the unresolved chain-strategy decision, consistent with how every prior batch (Phases 3, 4, 5) proceeded on its own explicitly-scoped batch.
+- Current work unit: Unit 5 of 6 (per the Suggested Work Units table in `tasks.md`)
+- Boundary: starts from Phase 5 complete (Unit 4); ends with Phase 6 fully green, isolated from Phase 7 (`status`/`doctor`'s planned `PowerShellEdition`/`SourceRef`/`SourceStale` fields have not landed yet, so nothing downstream depends on this unit outside `internal/app/context.go`'s new `case` branch and `sync.go`'s new type assertion). Per this unit's own rollback boundary (see "Unit 5 (Phase 6)" work-unit-evidence row above): remove `internal/source/git.go`/`git_test.go`/`gitrun.go`/`gitrun_test.go` and `internal/app/context_test.go`, and revert `internal/app/context.go`, `internal/app/sync.go`, `internal/state/state.go`, and the three touched `_test.go` files together as one commit.
+- Estimated review budget impact: `git diff --stat` for this unit's modified files: `internal/app/context.go` +30/-3, `internal/app/edit_test.go` +49/0, `internal/app/sync.go` +38/-7, `internal/app/sync_test.go` +127/0, `internal/state/state.go` +23/-8, `internal/state/state_test.go` +56/0 (341 changed lines) — plus five new untracked files totaling 981 lines (`internal/app/context_test.go` 123, `internal/source/git.go` 287, `internal/source/git_test.go` 422, `internal/source/gitrun.go` 34, `internal/source/gitrun_test.go` 115). Total authored change ≈ 1,322 lines — well over the 400-line single-PR guard on its own, driven by `git_test.go`'s breadth (clone/fetch dispatch, explicit-vs-default ref, hostile-URL table, offline-with/without-cache, path-containment positive+negative, hostile-input filtering, cache-dir hashing, descriptor formatting — each pinning a distinct threat-matrix row or config-source scenario the task list explicitly requires) and by the three-package wiring (`source`, `state`, `app`) decision 14's staleness reporting inherently spans. Flagged here per the review workload guard; the orchestrator's overall delivery-strategy decision for this change remains `pending`/`ask-on-risk`, and this unit's own rollback boundary above keeps it independently revertible regardless of how that decision resolves.
 
 - Mode: `ask-on-risk` forecast in tasks.md remains unresolved for the overall change (chain strategy still `pending`); this batch executes Work Unit 4 ("`$PROFILE` resolution, both editions + macOS/Linux Core (Phase 5)") as an autonomous, revertible slice, following Units 1–3 (Phases 1–4, already landed in this working tree) and regardless of which chain strategy the orchestrator ultimately picks for the remaining units. The orchestrator explicitly scoped this batch to "Phase 5 only," so this executor proceeded without re-raising the unresolved chain-strategy decision, consistent with how Phases 3 and 4 each proceeded on their own explicitly-scoped batch.
 - Current work unit: Unit 4 of 6 (per the Suggested Work Units table in `tasks.md`)
@@ -505,4 +576,102 @@ $ git status --porcelain internal/app/
 
 ## Engram
 
-`mem_save`/`mem_search`/`mem_update` tools were not bound in this session's tool set (consistent with prior batches — Phases 1–2, 3, and 4 all reported the same, and Phase 5 confirms it again: the tool list available to this executor contained only `Read`, `Edit`, `Write`, `Bash`, and `mcp__codegraph__codegraph_explore`, no `mem_*` tools). Progress was persisted only to this file (`openspec/changes/powershell-windows/apply-progress.md`) and to `tasks.md`. No Engram tool call was attempted or fabricated.
+`mem_save`/`mem_search`/`mem_update` tools were not bound in this session's tool set (consistent with every prior batch — Phases 1–2, 3, 4, and 5 all reported the same, and Phase 6 confirms it again: the tool list available to this executor contained only `Read`, `Edit`, `Write`, `Bash`, and `mcp__codegraph__codegraph_explore`, no `mem_*` tools). Progress was persisted only to this file (`openspec/changes/powershell-windows/apply-progress.md`) and to `tasks.md`. No Engram tool call was attempted or fabricated.
+
+### Phase 6 (this batch)
+
+```
+$ go test ./internal/source/... -v
+--- PASS: TestFileSourceResolveReadsConfiguredPathOnly (0.00s)
+--- PASS: TestFileSourceResolveErrorNotPartiallyApplied (0.00s)
+    --- PASS: TestFileSourceResolveErrorNotPartiallyApplied/missing_file (0.00s)
+    --- PASS: TestFileSourceResolveErrorNotPartiallyApplied/malformed_YAML (0.00s)
+--- PASS: TestFileSourceResolveFiltersHostileInput (0.00s)
+--- PASS: TestFileSourceDescriptorNamesTheActiveSource (0.00s)
+--- PASS: TestGitSourceClonesWhenNoCheckoutExists (0.00s)
+--- PASS: TestGitSourceClonesWithExplicitRefSkipsDefaultBranchResolution (0.00s)
+--- PASS: TestGitSourceFetchesWhenCheckoutExists (0.00s)
+--- PASS: TestGitSourceHostileURLRejectedBeforeAnyExec (0.00s)
+    --- PASS: TestGitSourceHostileURLRejectedBeforeAnyExec/leading_dash_is_read_as_a_flag (0.00s)
+    --- PASS: TestGitSourceHostileURLRejectedBeforeAnyExec/leading_double-dash_flag (0.00s)
+    --- PASS: TestGitSourceHostileURLRejectedBeforeAnyExec/ext::_transport_executes_a_command (0.00s)
+    --- PASS: TestGitSourceHostileURLRejectedBeforeAnyExec/ext::_transport,_mixed_case (0.00s)
+--- PASS: TestGitSourceOfflineWithCacheResolvesStale (0.00s)
+--- PASS: TestGitSourceOfflineWithoutCacheFailsHard (0.00s)
+--- PASS: TestGitSourcePathEscapingCheckoutRejected (0.00s)
+--- PASS: TestGitSourcePathPresentResolvesRelativeToCheckoutRoot (0.00s)
+--- PASS: TestGitSourceResolveFiltersHostileInputIdenticallyToFileSource (0.00s)
+--- PASS: TestGitCacheDirIsHashedAndDeterministic (0.00s)
+--- PASS: TestGitSourceDescriptorIncludesResolvedCommit (0.00s)
+--- PASS: TestRunGitSetsNonInteractiveEnvironment (0.29s)
+--- PASS: TestRunGitNeverInvokesAShell (0.30s)
+--- PASS: TestRunGitReturnsStderrOnFailure (0.34s)
+PASS
+ok  	github.com/angeltonio/aliasdeck/internal/source	1.336s
+
+$ go test ./...
+ok  	github.com/angeltonio/aliasdeck/cmd/aliasdeck	0.404s
+ok  	github.com/angeltonio/aliasdeck/internal/app	3.424s
+ok  	github.com/angeltonio/aliasdeck/internal/apply	(cached)
+ok  	github.com/angeltonio/aliasdeck/internal/config	(cached)
+ok  	github.com/angeltonio/aliasdeck/internal/domain	(cached)
+ok  	github.com/angeltonio/aliasdeck/internal/renderers	(cached)
+?   	github.com/angeltonio/aliasdeck/internal/shelltest	[no test files]
+ok  	github.com/angeltonio/aliasdeck/internal/source	1.904s
+ok  	github.com/angeltonio/aliasdeck/internal/state	0.282s
+ok  	github.com/angeltonio/aliasdeck/internal/validate	(cached)
+
+$ make ci
+go vet ./...
+go test -race ./...
+ok  	github.com/angeltonio/aliasdeck/cmd/aliasdeck	1.426s
+ok  	github.com/angeltonio/aliasdeck/internal/app	5.111s
+ok  	github.com/angeltonio/aliasdeck/internal/apply	(cached)
+ok  	github.com/angeltonio/aliasdeck/internal/config	(cached)
+ok  	github.com/angeltonio/aliasdeck/internal/domain	(cached)
+ok  	github.com/angeltonio/aliasdeck/internal/renderers	(cached)
+?   	github.com/angeltonio/aliasdeck/internal/shelltest	[no test files]
+ok  	github.com/angeltonio/aliasdeck/internal/source	3.811s
+ok  	github.com/angeltonio/aliasdeck/internal/state	2.472s
+ok  	github.com/angeltonio/aliasdeck/internal/validate	(cached)
+CI checks passed
+
+$ go test ./internal/source/... -cover
+ok  	github.com/angeltonio/aliasdeck/internal/source	coverage: 87.0% of statements
+$ go test ./internal/state/... -cover
+ok  	github.com/angeltonio/aliasdeck/internal/state	coverage: 73.0% of statements
+$ go test ./internal/app/... -cover
+ok  	github.com/angeltonio/aliasdeck/internal/app	coverage: 83.0% of statements
+
+$ gofmt -l .
+(no output — everything formatted)
+
+$ git diff --stat internal/source/file.go internal/source/file_test.go
+(empty — FileSource and its tests are byte-identical to before this batch)
+```
+
+**Rejection proofs, exact output** (per the task prompt's explicit requirement):
+
+```
+$ go test ./internal/source/... -run 'TestGitSourceHostileURLRejectedBeforeAnyExec|TestGitSourcePathEscapingCheckoutRejected|TestGitSourceOfflineWithCacheResolvesStale|TestGitSourceOfflineWithoutCacheFailsHard' -v
+=== RUN   TestGitSourceHostileURLRejectedBeforeAnyExec
+=== RUN   TestGitSourceHostileURLRejectedBeforeAnyExec/leading_dash_is_read_as_a_flag
+=== RUN   TestGitSourceHostileURLRejectedBeforeAnyExec/leading_double-dash_flag
+=== RUN   TestGitSourceHostileURLRejectedBeforeAnyExec/ext::_transport_executes_a_command
+=== RUN   TestGitSourceHostileURLRejectedBeforeAnyExec/ext::_transport,_mixed_case
+--- PASS: TestGitSourceHostileURLRejectedBeforeAnyExec (0.00s)
+    --- PASS: TestGitSourceHostileURLRejectedBeforeAnyExec/leading_dash_is_read_as_a_flag (0.00s)
+    --- PASS: TestGitSourceHostileURLRejectedBeforeAnyExec/leading_double-dash_flag (0.00s)
+    --- PASS: TestGitSourceHostileURLRejectedBeforeAnyExec/ext::_transport_executes_a_command (0.00s)
+    --- PASS: TestGitSourceHostileURLRejectedBeforeAnyExec/ext::_transport,_mixed_case (0.00s)
+=== RUN   TestGitSourceOfflineWithCacheResolvesStale
+--- PASS: TestGitSourceOfflineWithCacheResolvesStale (0.00s)
+=== RUN   TestGitSourceOfflineWithoutCacheFailsHard
+--- PASS: TestGitSourceOfflineWithoutCacheFailsHard (0.00s)
+=== RUN   TestGitSourcePathEscapingCheckoutRejected
+--- PASS: TestGitSourcePathEscapingCheckoutRejected (0.00s)
+PASS
+ok  	github.com/angeltonio/aliasdeck/internal/source	0.240s
+```
+
+No git commit was created. Changes are left in the working tree per the orchestrator's delivery-strategy instructions.
