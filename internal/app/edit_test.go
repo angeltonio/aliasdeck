@@ -207,6 +207,97 @@ func TestEditGitSourcePerformsNoGitWrite(t *testing.T) {
 	}
 }
 
+// TestEditFailsUnderServerSourceNamingTheAPIAndOpensNoFile is the RED test
+// for task 8.10 / cli-commands spec's "Editing aliases under a server
+// source is refused": there is no local aliases.yaml for a server-backed
+// device, so Edit must fail with an explicit error pointing at the API
+// instead of the OS-level error `os.ReadFile("")` would otherwise produce
+// (a prior gap noted in internal/app/context.go's resolveServerSource
+// comment). $EDITOR must never even be looked up on PATH — proving no
+// subprocess was ever attempted, not merely that its exit code went
+// unchecked.
+func TestEditFailsUnderServerSourceNamingTheAPIAndOpensNoFile(t *testing.T) {
+	te := newTestEnv(t)
+	cfg := nativeDeviceConfig("server-device")
+	cfg.Source = config.Source{Type: config.SourceTypeServer, URL: "https://aliases.example.com"}
+	writeConfigYAML(t, te.Base, cfg)
+	te.setenv("ALIASDECK_PLATFORM", "macos")
+	te.setenv("ALIASDECK_SHELL", "zsh")
+	seedCredentials(t, te.Base, config.Credentials{DeviceToken: "adt_lookup.secret"})
+
+	te.setenv("EDITOR", "some-editor")
+	lookedUp := false
+	te.Env.LookPath = func(file string) (string, error) {
+		lookedUp = true
+		return "", errors.New("LookPath must not be called under a server source")
+	}
+
+	_, err := Edit(context.Background(), te.Env, EditOptions{})
+	if err == nil {
+		t.Fatal("Edit() must fail under a server source")
+	}
+	if err != ErrEditAliasesUnderServerSource {
+		t.Errorf("Edit() error = %v, want ErrEditAliasesUnderServerSource", err)
+	}
+	if !strings.Contains(err.Error(), "server") {
+		t.Errorf("error %q does not point at the server/API as the place to manage aliases", err.Error())
+	}
+	if lookedUp {
+		t.Error("Edit() must never look up $EDITOR's executable under a server source")
+	}
+}
+
+// TestEditConfigStillOpensLocalConfigUnderServerSource pins cli-commands
+// spec's "Editing local config.yaml remains available under a server
+// source": config.yaml is the user's own local file regardless of the
+// active source, so --config must keep working normally even when aliases
+// themselves live on the server.
+func TestEditConfigStillOpensLocalConfigUnderServerSource(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script fixture requires a POSIX shell")
+	}
+
+	te := newTestEnv(t)
+	cfg := nativeDeviceConfig("server-device")
+	cfg.Source = config.Source{Type: config.SourceTypeServer, URL: "https://aliases.example.com"}
+	writeConfigYAML(t, te.Base, cfg)
+	te.setenv("ALIASDECK_PLATFORM", "macos")
+	te.setenv("ALIASDECK_SHELL", "zsh")
+	seedCredentials(t, te.Base, config.Credentials{DeviceToken: "adt_lookup.secret"})
+
+	captureFile := filepath.Join(t.TempDir(), "captured-args")
+	scriptPath := filepath.Join(t.TempDir(), "fakeeditor")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + captureFile + "\n"
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("writing fake editor script: %v", err)
+	}
+	te.setenv("EDITOR", "fakeeditor")
+	te.Env.LookPath = func(file string) (string, error) {
+		if file == "fakeeditor" {
+			return scriptPath, nil
+		}
+		return "", errors.New("not found")
+	}
+
+	report, err := Edit(context.Background(), te.Env, EditOptions{Target: EditTargetConfig})
+	if err != nil {
+		t.Fatalf("Edit() returned an error: %v", err)
+	}
+
+	want := config.ConfigFile(te.Base)
+	if report.Path != want {
+		t.Errorf("report.Path = %q, want %q", report.Path, want)
+	}
+
+	captured, err := os.ReadFile(captureFile)
+	if err != nil {
+		t.Fatalf("reading captured args: %v", err)
+	}
+	if strings.TrimSpace(string(captured)) != want {
+		t.Errorf("editor received %q, want %q", strings.TrimSpace(string(captured)), want)
+	}
+}
+
 func TestEditReturnsErrorWhenEditorNotSet(t *testing.T) {
 	te := newTestEnv(t)
 	seedSyncableDevice(t, te)

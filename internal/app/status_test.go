@@ -2,7 +2,9 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -134,5 +136,47 @@ func TestStatusReportsGitRefAndStaleness(t *testing.T) {
 	}
 	if !report.SourceFetchedAt.Equal(fetchedAt) {
 		t.Errorf("SourceFetchedAt = %v, want %v", report.SourceFetchedAt, fetchedAt)
+	}
+}
+
+// TestStatusReportsServerSourceURLWithoutTheDeviceToken pins task 8.8/8.9 and
+// cli-commands spec's "status reports server URL without the token": under
+// source.type: server, status must name ServerSource and its URL, and the
+// device token value must never appear anywhere in the reported output — not
+// truncated, not prefixed, absent (server-source spec, "Credential file").
+//
+// Descriptor already carries only {Type, Ref: URL} (design decision 11), and
+// StatusReport never reads config.Credentials at all, so this test also
+// proves that stays true rather than merely asserting it once. Formatting
+// the full report with "%+v" (rather than checking report.Source alone)
+// means a future field added anywhere on StatusReport that happened to carry
+// the token would still be caught here.
+func TestStatusReportsServerSourceURLWithoutTheDeviceToken(t *testing.T) {
+	te := newTestEnv(t)
+	url := "https://aliases.example.com"
+	cfg := nativeDeviceConfig("server-device")
+	cfg.Source = config.Source{Type: config.SourceTypeServer, URL: url}
+	writeConfigYAML(t, te.Base, cfg)
+	te.setenv("ALIASDECK_PLATFORM", "macos")
+	te.setenv("ALIASDECK_SHELL", "zsh")
+
+	const deviceToken = "adt_verysecretlookup.verysecretvalue"
+	seedCredentials(t, te.Base, config.Credentials{DeviceToken: deviceToken})
+
+	report, err := Status(context.Background(), te.Env, Options{})
+	if err != nil {
+		t.Fatalf("Status() returned an error: %v", err)
+	}
+
+	if report.Source.Type != "server" {
+		t.Errorf("Source.Type = %q, want %q", report.Source.Type, "server")
+	}
+	if report.Source.Ref != url {
+		t.Errorf("Source.Ref = %q, want %q", report.Source.Ref, url)
+	}
+
+	rendered := fmt.Sprintf("%+v", report)
+	if strings.Contains(rendered, deviceToken) {
+		t.Errorf("rendered status output contains the device token: %s", rendered)
 	}
 }

@@ -43,6 +43,15 @@ type UninstallReport struct {
 	// checkout, whose .git/config records the source URL — was deleted.
 	CacheRemoved bool
 
+	// CredentialsRemoved reports that credentials.json — holding a live
+	// server session token and/or device token, when either was ever
+	// obtained (design decision 14) — was deleted. Removal is unconditional
+	// on the source type, mirroring CacheRemoved: a device can carry a
+	// leftover credentials file from an earlier server registration even
+	// after switching back to a file or git source, and the file holds a
+	// live credential either way (server-source spec, "Credential file").
+	CredentialsRemoved bool
+
 	StateRemoved bool
 }
 
@@ -98,6 +107,20 @@ func Uninstall(_ context.Context, env Env, opts UninstallOptions) (UninstallRepo
 		} else if !os.IsNotExist(rmErr) {
 			return report, fmt.Errorf("removing the source cache at %s: %w", cacheRoot, rmErr)
 		}
+	}
+
+	// credentials.json holds a live server session and/or device token — a
+	// stronger case for removal than the Git cache above, which only *may*
+	// carry a URL-embedded credential: this file exists for no other reason
+	// than to hold one. os.Remove on a nonexistent file is tolerated
+	// identically to every other cleanup step here, so uninstall still
+	// succeeds cleanly for the common case of a device that never
+	// registered against a server at all.
+	credsPath := config.CredentialsFile(dc.Base)
+	if rmErr := os.Remove(credsPath); rmErr == nil {
+		report.CredentialsRemoved = true
+	} else if !os.IsNotExist(rmErr) {
+		return report, fmt.Errorf("removing %s: %w", credsPath, rmErr)
 	}
 
 	if st.Bootstrap != nil {

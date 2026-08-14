@@ -13,7 +13,13 @@ import (
 // StatusReport is what `aliasdeck status` always prints (cli-commands
 // spec, "status Always Reports the Active Source").
 type StatusReport struct {
-	Base    string
+	Base string
+	// Source names the active ConfigSource and its location. For a server
+	// source this is Descriptor{Type: "server", Ref: <URL>} (design decision
+	// 11) — the device token is never part of Descriptor and StatusReport
+	// never reads config.Credentials itself, so there is structurally
+	// nothing here for a future field to leak it through (cli-commands spec,
+	// "status reports server URL without the token"; task 8.8/8.9).
 	Source  source.Descriptor
 	Backend string
 	Device  domain.Device

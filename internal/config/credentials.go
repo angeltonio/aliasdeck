@@ -19,6 +19,19 @@ type Credentials struct {
 	DeviceID    string    `json:"deviceId"`
 	DeviceToken string    `json:"deviceToken"`
 	ObtainedAt  time.Time `json:"obtainedAt"`
+
+	// SessionToken and SessionExpiresAt hold the operator session `login`
+	// obtains (design decision 17): a distinct field from DeviceToken, in
+	// the same 0600 file rather than a fourth on-disk mechanism, satisfying
+	// "stored separately from config.yaml and from any device token"
+	// (cli-commands spec, "login Authenticates the Operator") without
+	// inventing a second credentials file for one more secret of the same
+	// sensitivity class this file already exists to hold. `logout` clears
+	// both fields and leaves DeviceID/DeviceToken/ObtainedAt untouched — the
+	// two credentials are independent and are revoked independently (design
+	// decision 17's own closing note).
+	SessionToken     string    `json:"sessionToken,omitempty"`
+	SessionExpiresAt time.Time `json:"sessionExpiresAt,omitzero"`
 }
 
 // LoadCredentials reads path. A missing file returns a zero Credentials and

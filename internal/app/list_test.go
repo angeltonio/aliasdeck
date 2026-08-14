@@ -2,7 +2,11 @@ package app
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
+
+	"github.com/angeltonio/aliasdeck/internal/config"
 )
 
 const testMultiPlatformAliasesYAML = `version: 1
@@ -56,5 +60,36 @@ func TestListShowsDeviceScopedEntries(t *testing.T) {
 	}
 	if byName["disabled-one"].Reason != "disabled" {
 		t.Errorf(`"disabled-one" reason = %q, want %q`, byName["disabled-one"].Reason, "disabled")
+	}
+}
+
+// TestListFailsUnderServerSourceInsteadOfReadingAnEmptyPath is the
+// regression test for a gap a scope audit found: resolveServerSource leaves
+// AliasesPath empty, so `aliasdeck list` under a server source failed with
+// `reading : open : no such file or directory` — the raw OS complaint about
+// an empty path, which tells a user nothing.
+//
+// List reads the declared set on purpose, because its whole value is showing
+// aliases that are declared but inactive and why. A server source has no
+// local declared set, and what the device can fetch is already resolved, so
+// the honest answer is to say so rather than to half-answer.
+func TestListFailsUnderServerSourceInsteadOfReadingAnEmptyPath(t *testing.T) {
+	te := newTestEnv(t)
+	cfg := nativeDeviceConfig("server-device")
+	cfg.Source = config.Source{Type: config.SourceTypeServer, URL: "https://aliases.example.com"}
+	writeConfigYAML(t, te.Base, cfg)
+	te.setenv("ALIASDECK_PLATFORM", "macos")
+	te.setenv("ALIASDECK_SHELL", "zsh")
+	seedCredentials(t, te.Base, config.Credentials{DeviceToken: "adt_lookup.secret"})
+
+	_, err := List(context.Background(), te.Env, Options{})
+	if err == nil {
+		t.Fatal("List() must fail under a server source")
+	}
+	if !errors.Is(err, ErrListAliasesUnderServerSource) {
+		t.Fatalf("List() error = %v, want ErrListAliasesUnderServerSource", err)
+	}
+	if strings.Contains(err.Error(), "no such file") {
+		t.Errorf("error %q leaks the raw empty-path OS error this test exists to replace", err.Error())
 	}
 }

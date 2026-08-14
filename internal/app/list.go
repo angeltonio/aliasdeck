@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 
@@ -24,16 +25,36 @@ type ListReport struct {
 	Entries []AliasListing
 }
 
+// ErrListAliasesUnderServerSource is returned when the active source is a
+// server. List's whole value is showing aliases that are declared but
+// *inactive*, with the reason — which requires the declared set, and under
+// a server source that set lives on the server. What the device can fetch
+// is already resolved: the server applied the targeting, so the inactive
+// entries and their reasons are exactly what is missing.
+//
+// Reading aliases.yaml anyway produced `reading : open : no such file or
+// directory`, because resolveServerSource leaves AliasesPath empty. This
+// mirrors ErrEditAliasesUnderServerSource rather than inventing a second
+// way of saying the same thing.
+var ErrListAliasesUnderServerSource = errors.New(
+	"aliases live on the server for this device; `aliasdeck status` reports what is applied, " +
+		"and the server's API lists what is declared")
+
 // List reports every declared alias, marking which apply to this device
 // after platform/shell/profile filtering.
 //
 // It reads and parses aliases.yaml directly rather than going through
 // Source.Resolve, which already drops everything that does not apply — the
-// same reason Doctor performs its own independent pass.
+// same reason Doctor performs its own independent pass. That is also why
+// it cannot serve a server source; see ErrListAliasesUnderServerSource.
 func List(_ context.Context, env Env, opts Options) (ListReport, error) {
 	dc, err := loadDeviceContext(env, opts)
 	if err != nil {
 		return ListReport{}, err
+	}
+
+	if dc.SourceDesc.Type == "server" {
+		return ListReport{}, ErrListAliasesUnderServerSource
 	}
 
 	data, err := os.ReadFile(dc.AliasesPath)

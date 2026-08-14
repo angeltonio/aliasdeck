@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -212,6 +214,99 @@ func TestRunHealthEndpointRequiresNoAuthentication(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Run() did not return after ctx cancellation")
+	}
+}
+
+// TestRunAnnouncesTheRealBoundListenerAddress is the bounded-review
+// regression test for finding 5 ("serve announces nothing on startup"):
+// with --addr 127.0.0.1:0, cfg.Addr itself never names the real ephemeral
+// port, so Run must print the listener's own Addr() — not cfg.Addr — to
+// cfg.Stdout once Listen succeeds. This also proves the line carries
+// nothing else: no schema version, no operator/device identity, no build
+// metadata (design decision 35).
+//
+// Mutation check: reverting Run to print cfg.Addr — or to print nothing at
+// all — fails this test; see apply-progress for the verbatim before/after
+// output.
+func TestRunAnnouncesTheRealBoundListenerAddress(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "server.db")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var stdout bytes.Buffer
+	lnReady := make(chan net.Listener, 1)
+	cfg := Config{
+		DBPath: dbPath,
+		Stdout: &stdout,
+		Listen: func() (net.Listener, error) {
+			ln, err := net.Listen("tcp", "127.0.0.1:0")
+			if err == nil {
+				lnReady <- ln
+			}
+			return ln, err
+		},
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- Run(ctx, cfg) }()
+
+	var ln net.Listener
+	select {
+	case ln = <-lnReady:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run() never called Listen")
+	}
+
+	// The announcement happens synchronously right after Listen succeeds
+	// and before Serve starts accepting, but is written to stdout from a
+	// different goroutine than this test — wait for the health endpoint to
+	// answer as a reliable signal that Run has moved well past the
+	// announcement line before asserting stdout's content, without a real
+	// sleep.
+	waitForHealthy(t, ln)
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run() = %v, want nil", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run() did not return after ctx cancellation")
+	}
+
+	got := stdout.String()
+	wantAddr := ln.Addr().String()
+	if !strings.Contains(got, wantAddr) {
+		t.Fatalf("stdout = %q, want it to name the real bound address %q (not cfg.Addr)", got, wantAddr)
+	}
+	if strings.Contains(got, "127.0.0.1:0") {
+		t.Errorf("stdout = %q, want the resolved port, not the unresolved cfg.Addr literal", got)
+	}
+}
+
+// waitForHealthy polls GET /api/v1/health until it answers or the bound
+// elapses, giving Run's own goroutine time to reach Serve without a real
+// sleep in the test itself.
+func waitForHealthy(t *testing.T, ln net.Listener) {
+	t.Helper()
+	deadline := time.After(5 * time.Second)
+	tick := time.NewTicker(5 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		resp, err := http.Get("http://" + ln.Addr().String() + "/api/v1/health")
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				return
+			}
+		}
+		select {
+		case <-tick.C:
+		case <-deadline:
+			t.Fatal("server never became healthy")
+		}
 	}
 }
 
