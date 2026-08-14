@@ -73,9 +73,11 @@ This is not a degraded mode. It is the primary entry point, and it is what the p
 
 ### 3.2 Self-hosted second, and easy
 
-When a user does want the control plane, the reference deployment is a **single static binary** serving the API and web UI, storing data in SQLite. Docker is a convenience, not a requirement.
+When a user does want the control plane, the reference deployment is **`aliasdeck-server`**: its own single static binary, serving the API and (from Milestone 5) the web UI, storing data in SQLite. Docker is the primary way to run it, because deploying a long-lived service is what Docker is for; a plain binary is published too, for people who prefer systemd.
 
-Installation friction is the main adoption risk for self-hosted software. A three-service Compose stack is a worse first experience than `./aliasdeck serve`.
+Installation friction is the main adoption risk for self-hosted software. A three-service Compose stack is a worse first experience than `docker run ghcr.io/angeltonio/aliasdeck-server` or `./aliasdeck-server`.
+
+**`aliasdeck-server` is a separate binary from `aliasdeck`, not a hidden mode of it** — this reverses the project's original design (design decision 1, `openspec/changes/archive/2026-08-14-server/design.md`; full rationale in `docs/WHAT-WE-ARE-BUILDING.md`). §10 records the same reversal against the repository tree; §17 records it against the decisions table. In short: the client binary measures **6.6 MB** against **11.7 MB** for the combined binary this project actually shipped — a 43% saving, not the fourfold one an earlier draft claimed from a probe that omitted cobra and every command, compared against a binary that included the web UI (all figures darwin/arm64, stripped, release flags), and the single-binary model needed repeated explanation to this project's own author — a model that needs explaining to the person who designed it will not survive contact with someone arriving from a README.
 
 ### 3.3 Native first, integrations second
 
@@ -472,8 +474,9 @@ source:
 
 ```text
                   ┌──────────────────────────────────────┐
-                  │      aliasdeck serve                 │
-                  │      (single static binary)          │
+                  │      aliasdeck-server                │
+                  │      (single static binary, separate │
+                  │       from the aliasdeck client)      │
                   │                                      │
                   │  ┌────────────────────────────────┐  │
                   │  │  embedded web UI (embed.FS)    │  │
@@ -549,9 +552,10 @@ Milestone 1 (the renderer core: `internal/domain`, `internal/renderers`, `intern
 
 ### 9.5 Build and release
 
-- `goreleaser` for cross-compiled artifacts
-- Web assets built before the Go build and embedded
-- Docker image as a thin wrapper around the same binary
+- `goreleaser` for cross-compiled artifacts, as **two builds**: `aliasdeck` (client, `cmd/aliasdeck`) and `aliasdeck-server` (server, `cmd/aliasdeck-server`) — six platforms each, twelve build artifacts total
+- Web assets built before the Go build and embedded into `aliasdeck-server`
+- Docker image as a thin wrapper around the `aliasdeck-server` binary only
+- The Homebrew cask and Scoop bucket publish the client (`aliasdeck`) exclusively; the server is distributed as its own release binaries and, primarily, as a container image
 
 ---
 
@@ -560,9 +564,11 @@ Milestone 1 (the renderer core: `internal/domain`, `internal/renderers`, `intern
 ```text
 aliasdeck/
 ├── cmd/
-│   └── aliasdeck/          # the single binary: CLI and `aliasdeck serve`
-│                           # (no separate cmd/aliasdeck-server/ — one static binary, decided
-│                           # before this section's first draft; see Milestone 4 history below)
+│   ├── aliasdeck/          # the client binary: init, sync, status, list, doctor, edit,
+│   │                       # uninstall, login, register, logout. No `serve` command —
+│   │                       # see Milestone 4 history below for why this is now two binaries.
+│   └── aliasdeck-server/   # the server binary: its only job is `serve` (migrate, bootstrap,
+│                           # Run(ctx)), so it has no subcommands — the binary itself serves
 ├── internal/
 │   ├── domain/             # entities, shared by server and CLI
 │   ├── renderers/          # shell renderers (bash, zsh, powershell)
@@ -576,8 +582,10 @@ aliasdeck/
 │   ├── shelltest/          # the one rule shared by every test that runs a real shell binary
 │   ├── archtest/           # import-graph boundary assertions (design decision 2): no server
 │   │                       # package may depend on internal/renderers; no client package may
-│   │                       # depend on internal/store or modernc.org/sqlite
-│   ├── server/             # `aliasdeck serve` composition root: migrate, bootstrap, Run(ctx)
+│   │                       # depend on internal/store or modernc.org/sqlite; and cmd/aliasdeck
+│   │                       # itself may never depend on internal/store, internal/api,
+│   │                       # internal/server, internal/sync, or modernc.org/sqlite
+│   ├── server/             # aliasdeck-server's composition root: migrate, bootstrap, Run(ctx)
 │   ├── api/                # HTTP handlers, middleware, routing, embedded OpenAPI spec
 │   ├── auth/               # operator sessions, device tokens, one-time bootstrap credential
 │   ├── store/              # repository interfaces; SQLite is the only implementation shipped
@@ -603,6 +611,8 @@ aliasdeck/
 ```
 
 Two corrections to this section's own history, both settled before Milestone 4's implementation began (recorded in `openspec/changes/server/design.md`, decisions 1 and 5): an earlier draft of this tree showed a second `cmd/aliasdeck-server/` binary, which contradicted §3.2/§16/§17's own "one static binary" framing and was never built; and it showed a repository-root `migrations/` directory, which does not compile — Go's `embed` package cannot reference a path outside the embedding file's own package directory, so the migrations live at `internal/store/migrations/` instead.
+
+**A third correction, this one reversing rather than merely fixing the first:** `cmd/aliasdeck-server/` now exists after all. This project keeps wrong claims beside their corrections on purpose (see design decision 24's precedent in `openspec/changes/archive/2026-08-14-server/design.md`) rather than quietly editing history, so the paragraph above stays as written — it was the right call when it was made, for the reasons it gives. It stopped being the right call once two facts were measured that the original decision could not have used, because they did not exist yet: the client binary measures **6.6 MB** against **11.7 MB** for the combined binary this project actually shipped — a 43% saving, not the fourfold one an earlier draft claimed from a probe that omitted cobra and every command, compared against a binary that included the web UI (all figures darwin/arm64, stripped, release flags), and that combined binary's own `serve` command needed repeated explanation to this project's own author. Full rationale in `docs/WHAT-WE-ARE-BUILDING.md`; the decision itself is recorded as decision 28 in `openspec/changes/archive/2026-08-14-server/design.md` (the archived file, not a new one — that document already accumulated bounded-review corrections numbered 24 through 27 before it was archived, so it is this milestone's live decision log, not a frozen snapshot, and a numbered continuation there is this project's established practice rather than a new one).
 
 ---
 
@@ -739,8 +749,9 @@ aliasdeck sync
 Server:
 
 ```bash
-curl -sSL https://.../install.sh | sh
-./aliasdeck serve
+docker run -v aliasdeck:/data ghcr.io/angeltonio/aliasdeck-server
+# or, as a plain binary (e.g. under systemd):
+./aliasdeck-server
 ```
 
 Device:
@@ -806,7 +817,7 @@ The standalone product now covers all three operating systems and composes with 
 
 ### Milestone 4 — Server · **v0.3**
 
-- `aliasdeck serve`, SQLite schema and embedded migrations
+- `aliasdeck-server` (a binary separate from the client — §3.2), SQLite schema and embedded migrations
 - Authentication, device registration, device tokens
 - Alias/profile/device CRUD over REST, OpenAPI spec
 - Server-side resolution and sync endpoint
@@ -852,7 +863,8 @@ Settled as of 2026-08-12:
 | Web | Vite + React + Tailwind + shadcn/ui, embedded via `embed.FS` |
 | Database | SQLite by default (pure-Go driver), PostgreSQL optional |
 | Query layer | `sqlc`, no ORM |
-| Deployment | Single static binary; Docker as convenience |
+| Deployment (original, reversed — see §3.2/§10, decision 28 in `openspec/changes/archive/2026-08-14-server/design.md`) | Single static binary; Docker as convenience |
+| Deployment (current) | Two static binaries, `aliasdeck` (client) and `aliasdeck-server` (server); Docker is the primary way to run the server, a plain binary is published too |
 | First shells | zsh + bash, PowerShell in v0.2 |
 | Sync model | Pull-based, manual, no daemon |
 | Native apply backend | Required |

@@ -1,7 +1,7 @@
 # AliasDeck Server API
 
 This is a human-readable reference for the `/api/v1` control-plane surface
-exposed by `aliasdeck serve`. It is written from [`docs/openapi.yaml`](openapi.yaml),
+exposed by `aliasdeck-server`. It is written from [`docs/openapi.yaml`](openapi.yaml),
 the source of truth: that document is embedded in the server binary and
 served live at `GET /api/v1/openapi.yaml`, and a bidirectional coverage test
 (`internal/api/openapi_coverage_test.go`) fails the build if the router's own

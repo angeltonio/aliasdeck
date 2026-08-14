@@ -38,6 +38,11 @@ before:
   hooks:
     - go mod tidy
 
+# Two builds, two archive sets: the client (cmd/aliasdeck) and the server
+# (cmd/aliasdeck-server) ship as separate binaries (design decision
+# reversing the earlier single-binary model, docs/WHAT-WE-ARE-BUILDING.md).
+# Twelve build artifacts total (six platforms × two binaries) instead of
+# six — the cost named in that document as the price of the split.
 builds:
   - id: aliasdeck
     main: ./cmd/aliasdeck
@@ -58,6 +63,21 @@ builds:
     ldflags:
       - -s -w
 
+  - id: aliasdeck-server
+    main: ./cmd/aliasdeck-server
+    binary: aliasdeck-server
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+
 archives:
   - id: aliasdeck
     ids:
@@ -69,6 +89,18 @@ archives:
     # Windows users expect zip, not tar.gz; Scoop itself extracts zip
     # archives, so this also keeps the Scoop manifest below (which points at
     # this same archive) working without an extra unpack step.
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+
+  - id: aliasdeck-server
+    ids:
+      - aliasdeck-server
+    name_template: >-
+      {{ .ProjectName }}-server_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    formats:
+      - tar.gz
     format_overrides:
       - goos: windows
         formats:
@@ -88,6 +120,11 @@ changelog:
 # Casks, not formulae. GoReleaser deprecated `brews` because the formulae it
 # generated for pre-compiled binaries were a workaround for a problem Homebrew
 # solves properly with casks.
+#
+# `ids: [aliasdeck]` is load-bearing, not incidental: it is what makes
+# `brew install aliasdeck` install the 3.3 MB client archive and nothing
+# else (docs/WHAT-WE-ARE-BUILDING.md). The server is never published here —
+# it ships as its own release binaries and, primarily, as a container.
 homebrew_casks:
   - name: aliasdeck
     # `auto` skips publishing to the package manager when the tag looks like a
@@ -137,6 +174,9 @@ homebrew_casks:
 # a silent skip) if angeltonio/scoop-bucket or its token is missing, since
 # both are release prerequisites, not optional extras — see the comment at
 # the top of this file.
+#
+# `ids: [aliasdeck]` is the same client-only scoping as homebrew_casks
+# above: `scoop install aliasdeck` gets the client, never the server.
 scoops:
   - name: aliasdeck
     # `auto` skips publishing to the package manager when the tag looks like a
@@ -192,7 +232,7 @@ release:
     only that file's path is printed. It is never written to a log either
     way.
 
-    **The default bind is loopback only.** `aliasdeck serve` with no
+    **The default bind is loopback only.** `aliasdeck-server` with no
     `--addr` binds `127.0.0.1:8080` and nothing else. Reaching it from
     another machine requires an explicit, wider `--addr` — a deliberate
     operator choice, not a default to work around.

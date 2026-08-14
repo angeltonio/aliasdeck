@@ -12,7 +12,7 @@ import (
 // config.yaml at 0600, and flips config.yaml's source.type to server (design
 // decision 14; cli-commands spec, "register Consumes a Single-Use
 // Enrollment Token"). Registered on the root command alongside
-// `login`/`logout`/`serve` (task 8.14).
+// `login`/`logout` (task 8.14).
 func newRegisterCmd() *cobra.Command {
 	var (
 		url               string

@@ -39,8 +39,8 @@ type Config struct {
 	// writes a freshly generated operator password instead of printing it
 	// to Stdout (design decision 22): under systemd's default
 	// StandardOutput=journal, Stdout is a persistent log, and server-auth
-	// spec.md forbids writing the password to any log. The caller (
-	// cmd/aliasdeck/serve.go) is the one place that knows whether Stdout
+	// spec.md forbids writing the password to any log. The caller
+	// (cmd/aliasdeck-server/main.go) is the one place that knows whether Stdout
 	// is really a console a person will read, and resolves this field
 	// accordingly; Run and Config never inspect Stdout themselves. Empty
 	// means "Stdout is a console — print the password directly", which is
@@ -54,7 +54,7 @@ type Config struct {
 	// defaultShutdownTimeout. Tests inject a short bound so a deliberately
 	// non-draining request does not make the suite itself wait 10 real
 	// seconds; production always gets the 10s default via
-	// cmd/aliasdeck/serve.go leaving this field zero.
+	// cmd/aliasdeck-server/main.go leaving this field zero.
 	ShutdownTimeout time.Duration
 
 	// OpenStore opens the store Run migrates and serves. Defaults to

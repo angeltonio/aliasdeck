@@ -1,4 +1,4 @@
-// Package server is the composition root for `aliasdeck serve`: it opens
+// Package server is the composition root for `aliasdeck-server`: it opens
 // and migrates internal/store, bootstraps the first operator via
 // internal/auth, and serves one bounded http.Server behind Run(ctx).
 //
