@@ -34,10 +34,11 @@ func registerGuardedSourcesWithTestCache(t *testing.T) {
 	}
 
 	// Every package on either side of the boundary, plus the renderers the
-	// server must never reach.
+	// server must never reach, plus the client binary itself (design
+	// decision reversing the single-binary model, docs/WHAT-WE-ARE-BUILDING.md).
 	guarded := []string{
 		"internal/server", "internal/api", "internal/auth", "internal/store", "internal/sync",
-		"internal/source", "internal/app", "internal/renderers",
+		"internal/source", "internal/app", "internal/renderers", "cmd/aliasdeck",
 	}
 
 	for _, rel := range guarded {
@@ -205,6 +206,48 @@ func TestClientPackagesNeverImportServerPersistence(t *testing.T) {
 			for _, f := range forbidden {
 				if hasForbidden(deps, f) {
 					t.Fatalf("%s depends on %s: internal/source and internal/app must never depend on server persistence (design decision 2)", pkg, f)
+				}
+			}
+		})
+	}
+}
+
+// TestClientBinaryNeverImportsServerPackages is the mechanism behind
+// AliasDeck shipping two binaries instead of one (design decision reversing
+// the earlier single-binary model, docs/WHAT-WE-ARE-BUILDING.md): cmd/
+// aliasdeck — the binary Homebrew and Scoop distribute — must never depend
+// on internal/store, internal/api, internal/server, internal/sync, or
+// modernc.org/sqlite. Every one of those is either the server's persistence
+// layer or its transport/composition root; cmd/aliasdeck-server is the only
+// binary allowed to link them. A convention that the client "should not"
+// import server code erodes the first time it is merely inconvenient — this
+// assertion fails the build instead, the same day someone reaches for
+// server.Config to wire a new client feature. This is what keeps the client
+// at its measured 3.3 MB instead of drifting back toward the 14.0 MB
+// combined binary that existed before the split.
+func TestClientBinaryNeverImportsServerPackages(t *testing.T) {
+	requireGo(t)
+	registerGuardedSourcesWithTestCache(t)
+
+	forbidden := []string{
+		modulePath + "/internal/store",
+		modulePath + "/internal/api",
+		modulePath + "/internal/server",
+		modulePath + "/internal/sync",
+		"modernc.org/sqlite",
+	}
+
+	pkgs := listPackages(t, modulePath+"/cmd/aliasdeck/...")
+	if len(pkgs) == 0 {
+		t.Fatal("expected cmd/aliasdeck to resolve to at least one package")
+	}
+
+	for _, pkg := range pkgs {
+		t.Run(pkg, func(t *testing.T) {
+			deps := depsOf(t, pkg)
+			for _, f := range forbidden {
+				if hasForbidden(deps, f) {
+					t.Fatalf("%s depends on %s: cmd/aliasdeck is the client binary and must never link server persistence or transport packages — that belongs to cmd/aliasdeck-server", pkg, f)
 				}
 			}
 		})

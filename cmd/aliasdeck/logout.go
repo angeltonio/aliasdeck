@@ -10,7 +10,7 @@ import (
 // newLogoutCmd builds `aliasdeck logout`: it removes the locally stored
 // operator session only, and never contacts the server (design decision 17;
 // cli-commands spec, "logout Clears the Locally Stored Session"). Registered
-// on the root command alongside `login`/`register`/`serve` (task 8.14).
+// on the root command alongside `login`/`register` (task 8.14).
 func newLogoutCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "logout",

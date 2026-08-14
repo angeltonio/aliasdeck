@@ -266,20 +266,25 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      # Builds the real six release artifacts with goreleaser itself — the
+      # Builds the real twelve release artifacts with goreleaser itself — the
       # same CGO_ENABLED=0 targets and the same `-s -w` ldflags .goreleaser.yaml
       # ships with — rather than a convenience `go build` that would police a
       # number no user ever downloads. `--snapshot` skips the git-tag/publish
-      # requirements; nothing is published.
+      # requirements; nothing is published. Two builds (aliasdeck,
+      # aliasdeck-server) × six platforms each, since the client and server
+      # ship as separate binaries (design decision reversing the earlier
+      # single-binary model, docs/WHAT-WE-ARE-BUILDING.md).
       - uses: goreleaser/goreleaser-action@v6
         with:
           version: "~> v2"
           args: build --snapshot --clean
-      # Task 10.2: measure each of the six built binaries and fail, naming
-      # the artifact and its size, if any exceeds the 25 MB budget. As of
-      # this milestone the largest artifact (windows/amd64) measures ~12.4 MB
-      # — comfortably inside budget, so the build-tag contingency (design
-      # decision 1) is not needed.
+      # Task 10.2, extended by the client/server split: measure each of the
+      # twelve built binaries and fail, naming the exact binary (client or
+      # server, and platform) and its size, if any exceeds the 25 MB budget.
+      # As of this milestone the largest client artifact measures ~7.2 MB and
+      # the largest server artifact ~11.2 MB — both comfortably inside
+      # budget, so the build-tag contingency (design decision 1, now
+      # superseded by the two-binary split itself) is not needed.
       - name: Enforce the 25 MB per-binary release budget
         shell: bash
         run: |
@@ -294,9 +299,12 @@ jobs:
               echo "::error file=$f::$f is ${mb} MB, over the 25 MB release budget"
               over=1
             fi
-          done < <(find dist -mindepth 2 -maxdepth 2 -type f \( -name 'aliasdeck' -o -name 'aliasdeck.exe' \) -print0)
+          done < <(find dist -mindepth 2 -maxdepth 2 -type f \( \
+              -name 'aliasdeck' -o -name 'aliasdeck.exe' \
+              -o -name 'aliasdeck-server' -o -name 'aliasdeck-server.exe' \
+            \) -print0)
           if [ "$over" -ne 0 ]; then
-            echo "One or more release artifacts exceed the 25 MB budget."
+            echo "One or more release artifacts exceed the 25 MB budget (named above)."
             exit 1
           fi
 

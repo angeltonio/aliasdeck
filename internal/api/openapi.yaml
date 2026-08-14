@@ -3,7 +3,7 @@ info:
   title: AliasDeck Server API
   version: "0.3.0"
   description: >
-    The /api/v1 control-plane surface exposed by `aliasdeck serve`: CRUD for
+    The /api/v1 control-plane surface exposed by `aliasdeck-server`: CRUD for
     aliases, profiles and devices; operator session auth; single-use
     enrollment tokens for device registration; device token rotation and
     revocation. This document is embedded in the server binary

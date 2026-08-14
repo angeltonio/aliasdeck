@@ -10,7 +10,7 @@ import (
 // newLoginCmd builds `aliasdeck login`: it authenticates the operator
 // against a running server and stores the resulting session token outside
 // config.yaml (design decision 17). Registered on the root command alongside
-// `register`/`logout`/`serve` (task 8.14).
+// `register`/`logout` (task 8.14).
 func newLoginCmd() *cobra.Command {
 	var (
 		url               string

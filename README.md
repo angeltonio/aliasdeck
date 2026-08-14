@@ -6,9 +6,18 @@ You write an alias once. AliasDeck compiles it into the right syntax for every s
 
 It is not a dotfile manager. Dotfile managers copy files; AliasDeck understands what an alias *is*, which is why it can turn one definition into three different shells.
 
+AliasDeck ships **two programs**, for two different audiences. Full reasoning in [`docs/WHAT-WE-ARE-BUILDING.md`](docs/WHAT-WE-ARE-BUILDING.md).
+
+| | `aliasdeck` | `aliasdeck-server` |
+| --- | --- | --- |
+| Who runs it | Everybody — installed on every machine you use | Almost nobody, once, somewhere that stays on |
+| What it does | Renders your aliases into shell syntax | Holds aliases for many machines, serves a REST API (and, later, a web UI) |
+| Install with | `brew`/`scoop`/install script | Docker (primary), or a plain binary for systemd |
+| Listens on a port | Never | Yes |
+
 ---
 
-## Install
+## Install the client
 
 **Homebrew** (macOS and Linux):
 
@@ -31,6 +40,8 @@ scoop bucket add angeltonio https://github.com/angeltonio/scoop-bucket
 scoop install aliasdeck
 ```
 
+This installs `aliasdeck` only — a client with no `serve` command, no database, and no network dependency beyond fetching its own config. Standalone (no server at all) is the default and the primary way to use it.
+
 ## Getting started
 
 ```bash
@@ -44,16 +55,36 @@ aliasdeck list      # aliases that apply to this device, and why others are skip
 
 Reload your shell and your aliases are live. `aliasdeck uninstall` reverses all of it, leaving your rc file byte-identical to how it was found.
 
-## Status
+## Deploy the server
 
-**v0.3** — adds a self-hosted server. `aliasdeck serve` runs a single static
-binary with an embedded SQLite database, exposing a REST API under
-`/api/v1` for aliases, profiles and devices, guarded by operator sessions
-and per-device tokens (`login`, `register`, `logout` on the CLI side). It is
-API-only: there is no web UI yet (that is v0.4). TLS is not built in — put a
-reverse proxy in front for anything reachable beyond loopback. The default
-bind (`aliasdeck serve --addr`) is `127.0.0.1:8080`, loopback only; widening
-it to another interface is a deliberate, explicit operator choice.
+Deployed once, somewhere that stays on — a VPS, a homelab box, a Raspberry Pi. Docker is the primary way to run it:
+
+```bash
+docker run -v aliasdeck:/data ghcr.io/angeltonio/aliasdeck-server
+```
+
+A plain binary is published too, for people who prefer systemd:
+
+```bash
+./aliasdeck-server
+```
+
+**v0.3** — `aliasdeck-server` runs a single static binary with an embedded
+SQLite database, exposing a REST API under `/api/v1` for aliases, profiles
+and devices, guarded by operator sessions and per-device tokens (`login`,
+`register`, `logout` on the client side). It is API-only: there is no web UI
+yet (that is v0.4). TLS is not built in — put a reverse proxy in front for
+anything reachable beyond loopback. The default bind (`--addr`) is
+`127.0.0.1:8080`, loopback only; widening it to another interface is a
+deliberate, explicit operator choice.
+
+Then, on each device:
+
+```bash
+aliasdeck login https://aliases.example.com
+aliasdeck register --name macbook
+aliasdeck sync
+```
 
 | Component | State |
 | --- | --- |
@@ -63,8 +94,8 @@ it to another interface is a deliberate, explicit operator choice.
 | PowerShell renderer and Windows support | ✅ |
 | Git-hosted configuration | ✅ |
 | Standalone CLI (`init`, `sync`, `status`, `list`, `doctor`, `edit`, `uninstall`) | ✅ |
-| Homebrew, Scoop and install script | ✅ |
-| Self-hosted server (`serve`, REST API, SQLite, device enrollment) | ✅ |
+| Homebrew, Scoop and install script (client only) | ✅ |
+| Self-hosted server (`aliasdeck-server`, REST API, SQLite, device enrollment) | ✅ |
 | Web UI | ⬜ Later |
 
 ---
@@ -143,13 +174,13 @@ aliasdeck edit
 aliasdeck sync
 ```
 
-**Control plane** — a self-hosted server for managing many machines centrally: a REST API under `/api/v1`, guarded by operator sessions and per-device tokens. A single static binary with an embedded SQLite database — no separate database server to run. There is no web UI yet (v0.4) and no official Docker image yet; TLS is not built in, so put a reverse proxy in front for anything reachable beyond loopback.
+**Control plane** — a self-hosted server for managing many machines centrally: a REST API under `/api/v1`, guarded by operator sessions and per-device tokens. A single static binary with an embedded SQLite database — no separate database server to run. There is no web UI yet (v0.4); TLS is not built in, so put a reverse proxy in front for anything reachable beyond loopback.
 
 ```bash
-aliasdeck serve
+docker run -v aliasdeck:/data ghcr.io/angeltonio/aliasdeck-server
 ```
 
-Same binary, same renderers, same validation. The server is an upgrade, never a prerequisite.
+`aliasdeck-server` is a separate binary from the client, published separately — not a hidden mode of `aliasdeck` you opt into with a flag. Same renderers, same validation, same module. The server is an upgrade, never a prerequisite.
 
 ---
 
@@ -189,7 +220,8 @@ Requires Go 1.25 or newer.
 git clone https://github.com/angeltonio/aliasdeck
 cd aliasdeck
 make check              # format, vet, test
-go build -o aliasdeck ./cmd/aliasdeck
+go build -o aliasdeck ./cmd/aliasdeck               # the client
+go build -o aliasdeck-server ./cmd/aliasdeck-server # the server
 ```
 
 Useful targets:

@@ -54,7 +54,7 @@ An alias referencing a profile not declared in the top-level `profiles:` list MU
 
 ### Requirement: config.yaml Strict Schema and Device Identity
 
-The system MUST parse `config.yaml` (`version`, `device`, `source`, `backend`) strictly, and MUST derive a stable device identity from `device.name` (or a generated fallback if omitted). When `source.type: git`, the system MUST require `source.git.url` and MUST reject unknown fields under `source.git`, identical in strictness to `source.type: file`. `source.git.ref` MAY be omitted.
+The system MUST parse `config.yaml` (`version`, `device`, `source`, `backend`) strictly, and MUST derive a stable device identity from `device.name` (or a generated fallback if omitted). When `source.type: git`, the system MUST require `source.git.url` and MUST reject unknown fields under `source.git`, identical in strictness to `source.type: file`. `source.git.ref` MAY be omitted. When `source.type: server`, the system MUST require `source.url` and MUST reject unknown fields under the server source block, identical in strictness to `source.type: file` and `source.type: git`. The device token MUST NOT be read from `config.yaml`; it is resolved from a separate token file.
 
 #### Scenario: Valid config.yaml parses
 - GIVEN a well-formed `config.yaml` matching §7.3
@@ -75,6 +75,16 @@ The system MUST parse `config.yaml` (`version`, `device`, `source`, `backend`) s
 - GIVEN `source: {type: git}` with no `url`
 - WHEN parsed
 - THEN parsing fails naming the missing required field
+
+#### Scenario: Server source without a url rejected
+- GIVEN `source: {type: server}` with no `url`
+- WHEN parsed
+- THEN parsing fails naming the missing required field
+
+#### Scenario: Server source token absent from config.yaml
+- GIVEN `source: {type: server, url: https://aliases.example.com}`
+- WHEN parsed
+- THEN parsing succeeds and no token field is read from or required in this file
 
 ### Requirement: Platform and Shell Auto-Detection
 

@@ -5,19 +5,22 @@ import (
 	"testing"
 )
 
-// wantServerCLICommands is every command Milestone 4 adds to the root
-// command tree, plus the pre-existing ones, so a regression that drops any
-// single one — new or old — is caught in the same place.
+// wantRootCommands is every command cmd/aliasdeck registers, so a
+// regression that drops any single one is caught in the same place.
+// `serve` is deliberately absent: cmd/aliasdeck is client-only — the server
+// lives in cmd/aliasdeck-server, which has no subcommands of its own
+// (design decision reversing the earlier single-binary model,
+// docs/WHAT-WE-ARE-BUILDING.md).
 var wantRootCommands = []string{
 	"init", "sync", "status", "list", "doctor", "edit", "uninstall",
-	"serve", "login", "register", "logout",
+	"login", "register", "logout",
 }
 
-// TestRootCommandRegistersEveryServerCLICommand is task 8.14's own proof:
-// after Phase 8, `serve`, `login`, `register`, and `logout` must all be
-// reachable from the root command tree — not merely implemented as
-// free-standing newXCmd() constructors nobody wires in (as login/register/
-// logout were before this task). Deleting any one of them from
+// TestRootCommandRegistersEveryServerCLICommand is task 8.14's own proof,
+// extended by the client/server split: `login`, `register`, and `logout`
+// must all be reachable from the root command tree — not merely implemented
+// as free-standing newXCmd() constructors nobody wires in (as login/
+// register/logout were before task 8.14). Deleting any one of them from
 // root.AddCommand's argument list (cmd/aliasdeck/root.go) makes this test
 // fail, naming exactly which command went missing.
 func TestRootCommandRegistersEveryServerCLICommand(t *testing.T) {
@@ -52,9 +55,25 @@ func TestRootCommandHelpNamesEveryServerCLICommandWithADescription(t *testing.T)
 	if code != exitOK {
 		t.Fatalf("--help exit code = %d, want %d", code, exitOK)
 	}
-	for _, name := range []string{"serve", "login", "register", "logout"} {
+	for _, name := range []string{"login", "register", "logout"} {
 		if !strings.Contains(stdout, name) {
 			t.Errorf("--help output does not mention %q:\n%s", name, stdout)
+		}
+	}
+}
+
+// TestRootCommandNeverRegistersServe is the regression test for the client/
+// server split: cmd/aliasdeck must never regain a `serve` command. Its
+// structural counterpart is
+// internal/archtest.TestClientBinaryNeverImportsServerPackages, which fails
+// the build the first time cmd/aliasdeck imports internal/server at all;
+// this test fails just as fast if a `serve` command is ever added back
+// without importing internal/server directly (e.g. by shelling out).
+func TestRootCommandNeverRegistersServe(t *testing.T) {
+	root := newRootCmd()
+	for _, c := range root.Commands() {
+		if c.Name() == "serve" {
+			t.Fatal("root command tree registers \"serve\": cmd/aliasdeck is client-only, serve belongs to cmd/aliasdeck-server")
 		}
 	}
 }

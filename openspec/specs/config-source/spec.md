@@ -31,7 +31,7 @@ Every `ConfigSource` implementation MUST return a `ResolvedConfig` already filte
 
 ### Requirement: Every Source Is Hostile Input
 
-`FileSource` and `GitSource` output MUST pass through `validate.FilterValid` before reaching `renderers.Render`, identically regardless of origin (§12.1). A local file receives no lesser scrutiny than a Git or server source would. Name validation MUST match reserved words case-insensitively when the target shell is `powershell`, and duplicate-name detection MUST treat names as case-insensitive for `powershell` while remaining case-sensitive for POSIX shells.
+`FileSource`, `GitSource`, and `ServerSource` output MUST pass through `validate.FilterValid` before reaching `renderers.Render`, identically regardless of origin (§12.1). A sync response receives no lesser scrutiny than a local file. Name validation MUST match reserved words case-insensitively when the target shell is `powershell`, and duplicate-name detection MUST treat names as case-insensitive for `powershell` while remaining case-sensitive for POSIX shells.
 
 #### Scenario: Invalid alias name filtered
 - GIVEN a local `aliases.yaml` containing an alias name with a shell metacharacter
@@ -47,6 +47,11 @@ Every `ConfigSource` implementation MUST return a `ResolvedConfig` already filte
 - GIVEN an `aliases.yaml` checked out via `GitSource` containing the same metacharacter-bearing name
 - WHEN resolved
 - THEN the entry is dropped by the same `validate.FilterValid` path used for `FileSource`
+
+#### Scenario: Server-sourced hostile entry filtered identically
+- GIVEN a sync response from `ServerSource` containing the same metacharacter-bearing name
+- WHEN resolved
+- THEN the entry is dropped by the same `validate.FilterValid` path used for `FileSource` and `GitSource`
 
 #### Scenario: PowerShell name collision case-insensitively
 - GIVEN aliases named `dps` and `DPS` on a device whose shell is `powershell`
@@ -71,6 +76,11 @@ A device MUST resolve through exactly one `ConfigSource`, as declared by `config
 - GIVEN `source.type: git` configured
 - WHEN `sync` or `status` run
 - THEN `status` names `GitSource` and its repository, and no other source is merged or attempted on failure
+
+#### Scenario: ServerSource is the sole active source
+- GIVEN `source.type: server` configured
+- WHEN `sync` or `status` run
+- THEN `status` names `ServerSource` and its URL, and no other source is merged or attempted on failure
 
 ### Requirement: GitSource Implements ConfigSource
 
