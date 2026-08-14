@@ -6,6 +6,10 @@ on:
 
 permissions:
   contents: write
+  # Pushing ghcr.io/angeltonio/aliasdeck-server below. GITHUB_TOKEN can write
+  # to this repository's own package namespace; the tap and bucket still need
+  # GORELEASER_PUBLISH_TOKEN, which is a different problem (see below).
+  packages: write
 
 jobs:
   release:
@@ -42,6 +46,31 @@ jobs:
           ALIASDECK_REQUIRE_SHELLS: "1"
         run: go test -race ./...
 
+      # README.md calls Docker the primary way to run the server and prints
+      # `docker run … ghcr.io/angeltonio/aliasdeck-server` as the first command
+      # a new operator types. That makes the image a release artifact, not an
+      # extra: if it is missing, the documented first step fails.
+      #
+      # QEMU is what lets one amd64 runner produce the linux/arm64 layer. The
+      # server is a static CGO_ENABLED=0 binary, so emulation costs a slow
+      # compile and nothing else.
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      # Built before anything is published, and deliberately not pushed yet.
+      # A Dockerfile that does not build is a failure that belongs here — at
+      # the same point the tests are — rather than after the GitHub release,
+      # the cask and the manifest are already out and the only way back is
+      # unpicking three published things by hand.
+      - name: Build the server image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: false
+          cache-to: type=gha,mode=max
+          cache-from: type=gha
+
       - uses: goreleaser/goreleaser-action@v6
         with:
           version: "~> v2"
@@ -58,3 +87,40 @@ jobs:
           # tap and the Scoop bucket; its scope names both repositories. See
           # .goreleaser.yaml's top-of-file comment for why it is not two.
           GORELEASER_PUBLISH_TOKEN: ${{ secrets.GORELEASER_PUBLISH_TOKEN }}
+
+      # Pushed only after goreleaser has succeeded. The image and the release
+      # notes describe the same version, and the notes are what tell an
+      # operator to back up the database before upgrading (see .goreleaser.yaml's
+      # release footer) — publishing the image first would let someone pull and
+      # migrate a database before that warning exists anywhere.
+      - name: Derive the image tags
+        id: image
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          tags="ghcr.io/${{ github.repository_owner }}/aliasdeck-server:${version}"
+          # A prerelease must never move `latest`, for the same reason
+          # .goreleaser.yaml sets `skip_upload: auto` on the cask and the
+          # manifest: `docker pull` with no tag is the unpinned default, and an
+          # rc arriving there ships an untested build to everyone who takes it.
+          case "$version" in
+            *-*) echo "prerelease: $version — not tagging latest" ;;
+            *)   tags="${tags},ghcr.io/${{ github.repository_owner }}/aliasdeck-server:latest" ;;
+          esac
+          echo "tags=${tags}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push the server image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.image.outputs.tags }}
+          # Same layers the build step above already produced and cached, so
+          # this republishes rather than recompiles.
+          cache-from: type=gha
