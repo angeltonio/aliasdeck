@@ -5,7 +5,6 @@
   <div class="copy-row">
     <button type="button" class="secondary" onclick="navigator.clipboard.writeText(document.getElementById('mint-commands').innerText)">Copy</button>
   </div>
-  <pre class="commands" id="mint-commands">aliasdeck register --url {{.URL}} --token {{.Token}}
-aliasdeck sync</pre>
+  <pre class="commands" id="mint-commands">{{.Command}}</pre>
 </div>
 {{end}}

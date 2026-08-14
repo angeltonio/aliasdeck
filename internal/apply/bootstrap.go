@@ -19,12 +19,12 @@ const (
 	endMarker   = "# <<< aliasdeck <<<"
 )
 
-// BootstrapLine returns the sourcing line for generatedPath.
+// BootstrapLine returns the shell integration block for generatedPath.
 //
-// For zsh and bash it is a POSIX `[ -f ... ] && . ...` guard that works
-// unmodified in both, even in `sh` compatibility mode, using `.` rather than
-// `source` (design decision 3/6). For PowerShell it is a `Test-Path`/dot-source
-// guard using the same marker-delimited block mechanism (design decision 3).
+// For zsh and bash it installs an aliasdeck function that delegates to the
+// binary and sources the generated aliases after a successful sync. For
+// PowerShell it remains a `Test-Path`/dot-source guard using the same
+// marker-delimited block mechanism (design decision 3).
 //
 // When generatedPath is under home, the line uses a literal "$HOME"-relative
 // form instead of the expanded absolute path, so the same rc file keeps
@@ -38,7 +38,14 @@ func BootstrapLine(sh domain.Shell, generatedPath, home string) string {
 		return bootstrapLinePowerShell(generatedPath, home)
 	}
 	display := homeRelativeDisplay(generatedPath, home)
-	return fmt.Sprintf(`[ -f %q ] && . %q`, display, display)
+	return fmt.Sprintf(`aliasdeck() {
+  local aliasdeck_status=0
+  command aliasdeck "$@" || aliasdeck_status=$?
+  if [ "$aliasdeck_status" -eq 0 ] && [ "$#" -gt 0 ] && [ "$1" = sync ] && [ -f %q ]; then
+    . %q
+  fi
+  return "$aliasdeck_status"
+}`, display, display)
 }
 
 // bootstrapLinePowerShell renders the PowerShell form of BootstrapLine

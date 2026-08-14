@@ -3,12 +3,24 @@ package apply
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/angeltonio/aliasdeck/internal/domain"
 )
+
+func posixBootstrapWant(path string) string {
+	return fmt.Sprintf(`aliasdeck() {
+  local aliasdeck_status=0
+  command aliasdeck "$@" || aliasdeck_status=$?
+  if [ "$aliasdeck_status" -eq 0 ] && [ "$#" -gt 0 ] && [ "$1" = sync ] && [ -f %q ]; then
+    . %q
+  fi
+  return "$aliasdeck_status"
+}`, path, path)
+}
 
 const (
 	testGeneratedPath = "/home/user/.config/aliasdeck/aliases.zsh"
@@ -28,21 +40,21 @@ func TestBootstrapLine(t *testing.T) {
 			shell:         domain.ShellZsh,
 			generatedPath: testGeneratedPath,
 			home:          testHome,
-			want:          `[ -f "$HOME/.config/aliasdeck/aliases.zsh" ] && . "$HOME/.config/aliasdeck/aliases.zsh"`,
+			want:          posixBootstrapWant(`$HOME/.config/aliasdeck/aliases.zsh`),
 		},
 		{
 			name:          "zsh: path outside home is used verbatim",
 			shell:         domain.ShellZsh,
 			generatedPath: "/etc/aliasdeck/aliases.zsh",
 			home:          testHome,
-			want:          `[ -f "/etc/aliasdeck/aliases.zsh" ] && . "/etc/aliasdeck/aliases.zsh"`,
+			want:          posixBootstrapWant(`/etc/aliasdeck/aliases.zsh`),
 		},
 		{
 			name:          "zsh: prefix collision is not mistaken for a home-relative path",
 			shell:         domain.ShellZsh,
 			generatedPath: "/home/user2/aliases.zsh",
 			home:          "/home/user",
-			want:          `[ -f "/home/user2/aliases.zsh" ] && . "/home/user2/aliases.zsh"`,
+			want:          posixBootstrapWant(`/home/user2/aliases.zsh`),
 		},
 		{
 			// bash shares the POSIX branch byte-for-byte with zsh (design
@@ -52,14 +64,14 @@ func TestBootstrapLine(t *testing.T) {
 			shell:         domain.ShellBash,
 			generatedPath: testGeneratedPath,
 			home:          testHome,
-			want:          `[ -f "$HOME/.config/aliasdeck/aliases.zsh" ] && . "$HOME/.config/aliasdeck/aliases.zsh"`,
+			want:          posixBootstrapWant(`$HOME/.config/aliasdeck/aliases.zsh`),
 		},
 		{
 			name:          "zsh: home empty uses the path verbatim",
 			shell:         domain.ShellZsh,
 			generatedPath: testGeneratedPath,
 			home:          "",
-			want:          `[ -f "/home/user/.config/aliasdeck/aliases.zsh" ] && . "/home/user/.config/aliasdeck/aliases.zsh"`,
+			want:          posixBootstrapWant(`/home/user/.config/aliasdeck/aliases.zsh`),
 		},
 		{
 			// Windows-shaped path (design decision 4, Defect A). generatedPath
@@ -121,6 +133,64 @@ func TestBootstrapLine(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := BootstrapLine(tt.shell, tt.generatedPath, tt.home); got != tt.want {
 				t.Errorf("BootstrapLine() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPOSIXBootstrapWrapperPreservesStatusAndReloadsSuccessfulSync(t *testing.T) {
+	got := BootstrapLine(domain.ShellBash, testGeneratedPath, testHome)
+	for _, fragment := range []string{
+		`command aliasdeck "$@"`,
+		`aliasdeck_status=$?`,
+		`[ "$1" = sync ]`,
+		`. "$HOME/.config/aliasdeck/aliases.zsh"`,
+		`return "$aliasdeck_status"`,
+	} {
+		if !strings.Contains(got, fragment) {
+			t.Errorf("BootstrapLine() missing %q in wrapper: %q", fragment, got)
+		}
+	}
+	if strings.Index(got, `command aliasdeck "$@"`) > strings.Index(got, `. "$HOME/.config/aliasdeck/aliases.zsh"`) {
+		t.Error("wrapper sources aliases before delegating to the binary")
+	}
+}
+
+func TestPOSIXBootstrapWrapperBehavesInSupportedShells(t *testing.T) {
+	for _, shell := range []string{"bash", "zsh"} {
+		t.Run(shell, func(t *testing.T) {
+			shellPath, err := exec.LookPath(shell)
+			if err != nil {
+				t.Skipf("%s is not installed", shell)
+			}
+
+			dir := t.TempDir()
+			generatedPath := filepath.Join(dir, "aliases."+shell)
+			if err := os.WriteFile(generatedPath, []byte("export ALIASDECK_WRAPPER_LOADED=1\n"), 0o600); err != nil {
+				t.Fatalf("writing generated aliases: %v", err)
+			}
+			binaryPath := filepath.Join(dir, "aliasdeck")
+			if err := os.WriteFile(binaryPath, []byte("#!/bin/sh\n[ \"$1\" = fail ] && exit 17\nexit 0\n"), 0o700); err != nil {
+				t.Fatalf("writing fake aliasdeck: %v", err)
+			}
+
+			script := fmt.Sprintf(`set -eu
+%s
+unset ALIASDECK_WRAPPER_LOADED || true
+aliasdeck status
+test -z "${ALIASDECK_WRAPPER_LOADED-}"
+if aliasdeck fail; then
+  exit 1
+else
+  test "$?" -eq 17
+fi
+aliasdeck sync
+test "${ALIASDECK_WRAPPER_LOADED-}" = 1
+`, BootstrapLine(domain.Shell(shell), generatedPath, dir))
+			cmd := exec.Command(shellPath, "-c", script)
+			cmd.Env = []string{"PATH=" + dir, "HOME=" + dir, "SHELL=" + shellPath}
+			if output, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("wrapper failed: %v\n%s", err, output)
 			}
 		})
 	}

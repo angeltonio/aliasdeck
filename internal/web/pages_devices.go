@@ -2,6 +2,7 @@ package web
 
 import (
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/angeltonio/aliasdeck/internal/auth"
@@ -61,15 +62,28 @@ func (a *webapp) handleDevicesAddPage(w http.ResponseWriter, r *http.Request) {
 // mintResultData is device_mint_result.html's data shape: the exact
 // copy-pasteable commands the prototype brief asks for.
 type mintResultData struct {
-	Token     string
-	URL       string
+	Command   string
 	ExpiresAt string
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
+}
+
+func mintCommand(url, token string) string {
+	// `init` cannot install a function into the parent shell that invoked it.
+	// Explicitly source the file after sync so the pasted POSIX flow has the
+	// same observable result even before the user starts a new shell. The path
+	// expression follows AliasDeck's supported ALIASDECK_HOME/XDG defaults and
+	// derives the extension from the current zsh/bash process.
+	aliasesPath := `"${ALIASDECK_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}/aliasdeck}/aliases.${SHELL##*/}"`
+	return "aliasdeck init --yes && aliasdeck register --url " + shellQuote(url) + " --token " + shellQuote(token) + " && aliasdeck sync && . " + aliasesPath
 }
 
 // handleDevicesMintToken is the "copy the commands" flow's entire
 // backend: mint a single-use enrollment token against the same
 // store.TokenRepo internal/api/auth.go's handleEnrollmentTokensCreate
-// writes to, and render the exact two lines the new machine needs.
+// writes to, and render the one-flow command the new machine needs.
 //
 // The URL is derived from the request itself (scheme + r.Host) rather
 // than from configuration — a pragmatic prototype shortcut. A real
@@ -105,8 +119,7 @@ func (a *webapp) handleDevicesMintToken(w http.ResponseWriter, r *http.Request) 
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = a.tmpl.mintResult.ExecuteTemplate(w, "device_mint_result", mintResultData{
-		Token:     minted.Wire,
-		URL:       scheme + "://" + r.Host,
+		Command:   mintCommand(scheme+"://"+r.Host, minted.Wire),
 		ExpiresAt: expiresAt.Format("2006-01-02 15:04:05 MST"),
 	})
 }
