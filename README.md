@@ -46,8 +46,14 @@ Reload your shell and your aliases are live. `aliasdeck uninstall` reverses all 
 
 ## Status
 
-**v0.2.0** — zsh, bash and PowerShell, on macOS, Linux and Windows. An
-`aliases.yaml` can live in a Git repository.
+**v0.3** — adds a self-hosted server. `aliasdeck serve` runs a single static
+binary with an embedded SQLite database, exposing a REST API under
+`/api/v1` for aliases, profiles and devices, guarded by operator sessions
+and per-device tokens (`login`, `register`, `logout` on the CLI side). It is
+API-only: there is no web UI yet (that is v0.4). TLS is not built in — put a
+reverse proxy in front for anything reachable beyond loopback. The default
+bind (`aliasdeck serve --addr`) is `127.0.0.1:8080`, loopback only; widening
+it to another interface is a deliberate, explicit operator choice.
 
 | Component | State |
 | --- | --- |
@@ -58,7 +64,8 @@ Reload your shell and your aliases are live. `aliasdeck uninstall` reverses all 
 | Git-hosted configuration | ✅ |
 | Standalone CLI (`init`, `sync`, `status`, `list`, `doctor`, `edit`, `uninstall`) | ✅ |
 | Homebrew, Scoop and install script | ✅ |
-| Server + web UI | ⬜ Later |
+| Self-hosted server (`serve`, REST API, SQLite, device enrollment) | ✅ |
+| Web UI | ⬜ Later |
 
 ---
 
@@ -136,7 +143,7 @@ aliasdeck edit
 aliasdeck sync
 ```
 
-**Control plane** — a self-hosted server with a web UI and API, for managing many machines centrally. A single static binary with SQLite; Docker optional.
+**Control plane** — a self-hosted server for managing many machines centrally: a REST API under `/api/v1`, guarded by operator sessions and per-device tokens. A single static binary with an embedded SQLite database — no separate database server to run. There is no web UI yet (v0.4) and no official Docker image yet; TLS is not built in, so put a reverse proxy in front for anything reachable beyond loopback.
 
 ```bash
 aliasdeck serve
@@ -168,7 +175,7 @@ These are the choices that shape everything else. The reasoning lives in [`docs/
 | — | Renderer core, validation, golden tests ✅ |
 | **v0.1** | Standalone CLI · zsh + bash · macOS + Linux ✅ |
 | **v0.2** | PowerShell + Windows · Git-hosted config ✅ |
-| v0.3 | Self-hosted server · devices, profiles, REST API |
+| **v0.3** | Self-hosted server · devices, profiles, REST API ✅ |
 | v0.4 | Web UI with live rendered preview |
 | later | Auto-sync, import/export, version history, Chezmoi backend, MCP server |
 

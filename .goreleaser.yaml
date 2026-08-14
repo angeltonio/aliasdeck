@@ -156,3 +156,38 @@ release:
     owner: angeltonio
     name: aliasdeck
   prerelease: auto
+  # v0.3 ships an embedded SQLite database and forward-only migrations
+  # (goose, internal/store/migrations). This footer is permanent, not
+  # v0.3-specific: every release from here on can migrate a database that a
+  # later downgrade would then refuse to open, so every release's own notes
+  # must carry the recovery path — not just the one that introduced it.
+  footer: |
+    ### Before you upgrade a running server
+
+    **Back up your database file first.** Migrations are forward-only: once
+    a database has been migrated by a newer binary, an older binary refuses
+    to start against it (`schema is newer than this binary`) rather than
+    migrating it down or silently corrupting it. If you upgrade, decide you
+    want the previous version back, and only then think about a backup, it
+    is too late — restoring the database file you backed up *before*
+    upgrading is the only way back down; there is no downgrade command.
+
+    **The one-time operator password.** On a brand-new database, `aliasdeck
+    serve` creates exactly one operator account (`admin`) and prints a
+    generated password once. On a real terminal it prints there; otherwise
+    (for example under systemd, where stdout is the journal) it is instead
+    written once, atomically, to a `0600` file next to the database, and
+    only that file's path is printed. It is never written to a log either
+    way.
+
+    **The default bind is loopback only.** `aliasdeck serve` with no
+    `--addr` binds `127.0.0.1:8080` and nothing else. Reaching it from
+    another machine requires an explicit, wider `--addr` — a deliberate
+    operator choice, not a default to work around.
+
+    **Do not front the sync endpoint with a redirecting proxy.** `GET
+    /api/v1/sync` refuses every HTTP redirect outright, on purpose — a
+    same-host, scheme-downgrading redirect would otherwise resend a
+    device's bearer token in cleartext. Terminate TLS and forward the
+    request directly; a 301/302 in front of this one route will just look
+    like the device is offline.

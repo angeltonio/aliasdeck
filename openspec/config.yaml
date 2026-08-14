@@ -21,6 +21,23 @@ context: |
   89.1%/validate 87.7% coverage.
   Style: MIT license, public repo, contributor-facing docs in README.md and
   docs/PROJECT.md (authoritative product/architecture spec).
+  Milestone 4 (v0.3) adds the self-hosted server: internal/{server,api,auth,
+  store,sync}, plus internal/{archtest,verify} for cross-cutting import-graph
+  and byte-identity guards, and cmd/aliasdeck/{serve,login,register,logout}.go.
+  New runtime deps: modernc.org/sqlite v1.56.0 (pure-Go SQLite driver, no
+  cgo — required for CGO_ENABLED=0 cross-compilation), github.com/pressly/
+  goose/v3 v3.27.3 (embedded forward-only migrations, library mode over
+  embed.FS), golang.org/x/crypto v0.55.0 (argon2id for the operator password
+  only — device/session tokens use a random secret plus sha256, not a KDF),
+  github.com/mattn/go-isatty v0.0.24 (detects a real console so the one-time
+  bootstrap password prints there instead of a 0600 file). sqlc
+  (github.com/sqlc-dev/sqlc) generates internal/store/sqlitestore from
+  query.sql but is invoked via a version-pinned `go run`, never a go.mod
+  tool directive (design.md decision 6) — its own dependency tree forces an
+  automatic `go` directive bump the asdf-pinned toolchain does not want.
+  Migrations are embedded at internal/store/migrations/, not a
+  repository-root migrations/: go:embed cannot reach outside its own
+  package directory.
 
 strict_tdd: true
 
