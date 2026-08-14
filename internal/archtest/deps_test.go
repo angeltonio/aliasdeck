@@ -38,7 +38,7 @@ func registerGuardedSourcesWithTestCache(t *testing.T) {
 	// decision reversing the single-binary model, docs/WHAT-WE-ARE-BUILDING.md).
 	guarded := []string{
 		"internal/server", "internal/api", "internal/auth", "internal/store", "internal/sync",
-		"internal/source", "internal/app", "internal/renderers", "cmd/aliasdeck",
+		"internal/source", "internal/app", "internal/renderers", "internal/web", "cmd/aliasdeck",
 	}
 
 	for _, rel := range guarded {
@@ -216,15 +216,20 @@ func TestClientPackagesNeverImportServerPersistence(t *testing.T) {
 // AliasDeck shipping two binaries instead of one (design decision reversing
 // the earlier single-binary model, docs/WHAT-WE-ARE-BUILDING.md): cmd/
 // aliasdeck — the binary Homebrew and Scoop distribute — must never depend
-// on internal/store, internal/api, internal/server, internal/sync, or
-// modernc.org/sqlite. Every one of those is either the server's persistence
-// layer or its transport/composition root; cmd/aliasdeck-server is the only
-// binary allowed to link them. A convention that the client "should not"
-// import server code erodes the first time it is merely inconvenient — this
-// assertion fails the build instead, the same day someone reaches for
-// server.Config to wire a new client feature. This is what keeps the client
-// at its measured 3.3 MB instead of drifting back toward the 14.0 MB
-// combined binary that existed before the split.
+// on internal/store, internal/api, internal/server, internal/sync,
+// internal/web, or modernc.org/sqlite. Every one of those is either the
+// server's persistence layer, its transport/composition root, or the web UI
+// mounted only inside that composition root; cmd/aliasdeck-server is the
+// only binary allowed to link them. internal/web never appears in
+// cmd/aliasdeck-server's own dependency list here either — this asserts the
+// client side of the same boundary, so a page handler pulled in for
+// convenience fails the build the same day, not merely a code-review
+// comment. A convention that the client "should not" import server code
+// erodes the first time it is merely inconvenient — this assertion fails
+// the build instead, the same day someone reaches for server.Config to wire
+// a new client feature. This is what keeps the client at its measured
+// 6.6 MB instead of drifting back toward the 11.7 MB combined binary that
+// existed before the split.
 func TestClientBinaryNeverImportsServerPackages(t *testing.T) {
 	requireGo(t)
 	registerGuardedSourcesWithTestCache(t)
@@ -234,6 +239,7 @@ func TestClientBinaryNeverImportsServerPackages(t *testing.T) {
 		modulePath + "/internal/api",
 		modulePath + "/internal/server",
 		modulePath + "/internal/sync",
+		modulePath + "/internal/web",
 		"modernc.org/sqlite",
 	}
 
