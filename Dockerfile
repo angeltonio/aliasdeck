@@ -1,6 +1,8 @@
-# AliasDeck server — a container around the same single static binary the
-# release ships. Nothing here changes how the program works; it only chooses
-# the two settings a container makes different.
+# AliasDeck server — a container around the aliasdeck-server binary the
+# release ships (docs/WHAT-WE-ARE-BUILDING.md: two binaries, two audiences —
+# this image runs the control plane, never the client). Nothing here changes
+# how the program works; it only chooses the two settings a container makes
+# different.
 #
 # Two of this project's deliberate decisions need a container-specific answer,
 # and both are chosen below rather than left to surprise an operator.
@@ -18,7 +20,12 @@ COPY . .
 # against, which is the whole reason the runtime stage below can be distroless.
 # It is also what modernc.org/sqlite buys us: a pure-Go SQLite with no C
 # toolchain in the image.
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/aliasdeck ./cmd/aliasdeck
+#
+# cmd/aliasdeck-server, not cmd/aliasdeck: the client never serves anything
+# (docs/WHAT-WE-ARE-BUILDING.md) and has no business in a container image at
+# all — this is the control-plane binary, the one artifact this image exists
+# to run.
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/aliasdeck-server ./cmd/aliasdeck-server
 
 # An empty /data owned by distroless's nonroot uid, carried into the runtime
 # stage below. Docker seeds a fresh named volume from whatever the image has
@@ -35,7 +42,7 @@ RUN mkdir -p /data && chown -R 65532:65532 /data
 # root in a container for no reason is a habit worth not forming.
 FROM gcr.io/distroless/static-debian12:nonroot
 
-COPY --from=build /out/aliasdeck /usr/local/bin/aliasdeck
+COPY --from=build /out/aliasdeck-server /usr/local/bin/aliasdeck-server
 COPY --from=build --chown=65532:65532 /data /data
 
 # The database lives on a volume. Without one, every container restart starts
@@ -58,5 +65,9 @@ USER nonroot
 # What that does NOT do is make exposure safe. `-p 0.0.0.0:8080:8080` still
 # puts it on your LAN over plaintext HTTP. Publish to 127.0.0.1, or put TLS in
 # front.
-ENTRYPOINT ["/usr/local/bin/aliasdeck"]
-CMD ["serve", "--addr", "0.0.0.0:8080", "--db", "/data/aliasdeck.db"]
+#
+# aliasdeck-server has no `serve` subcommand — the binary itself is the
+# command (docs/WHAT-WE-ARE-BUILDING.md), so the flags below go straight on
+# the entrypoint instead of behind a verb.
+ENTRYPOINT ["/usr/local/bin/aliasdeck-server"]
+CMD ["--addr", "0.0.0.0:8080", "--db", "/data/server.db"]

@@ -10,7 +10,7 @@
 # Override it with ALIASDECK_PORT if 8088 is taken too.
 
 services:
-  aliasdeck:
+  aliasdeck-server:
     build: .
     # Published to loopback on purpose. Drop the 127.0.0.1 prefix and the
     # control plane is on your LAN over plaintext HTTP, with one password in
