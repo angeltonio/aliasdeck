@@ -22,6 +22,12 @@ type RegisterOptions struct {
 	// Token is the single-use enrollment token to exchange.
 	Token string
 
+	// Force registers again even when this device already holds a device
+	// token. It is deliberately not the default: the result is a second
+	// device server-side that looks identical to the first in every column
+	// an operator can see, and one of them stops syncing forever.
+	Force bool
+
 	// AllowInsecureHTTP permits a non-loopback http:// URL for this
 	// registration request, and — on success — is persisted into
 	// config.yaml's source.allowInsecureHTTP (design decision 13), since
@@ -87,6 +93,41 @@ func Register(ctx context.Context, env Env, opts RegisterOptions) (RegisterRepor
 	id, err := loadDeviceIdentity(env, opts.Options)
 	if err != nil {
 		return RegisterReport{}, err
+	}
+
+	// Refuse to register a machine that already holds a device token, unless
+	// the operator says so explicitly.
+	//
+	// Registering again is not idempotent: each call consumes a fresh
+	// enrollment token and mints a *new* device row server-side. Doing it
+	// twice on one machine leaves two devices with the same hostname,
+	// platform and shell in the operator's list, identical in every visible
+	// column, one of which will never sync again because this machine only
+	// keeps the newest token. Found by doing exactly that during a trial and
+	// then being unable to tell the two apart in the UI.
+	//
+	// This runs before the exchange rather than after, so a refused
+	// re-registration also does not burn the enrollment token — otherwise
+	// the operator would have to mint another one just to recover from a
+	// command that did nothing.
+	//
+	// The check is for an existing *device token*, not merely a credentials
+	// file. A registration whose credentials save failed leaves no token, so
+	// the retry the comment above describes still works.
+	existing, err := config.LoadCredentials(config.CredentialsFile(id.base))
+	if err != nil {
+		return RegisterReport{}, fmt.Errorf("loading existing credentials: %w", err)
+	}
+	if existing.DeviceToken != "" && !opts.Force {
+		where := existing.ServerURL
+		if where == "" {
+			where = "a server"
+		}
+		return RegisterReport{}, fmt.Errorf(
+			"this device is already registered with %s as %s; "+
+				"run `aliasdeck sync` to update it, or re-run with --force to register again "+
+				"(which mints a second device server-side and abandons this one)",
+			where, existing.DeviceID)
 	}
 
 	deviceID, deviceToken, err := requestDeviceRegistration(ctx, opts.Client, opts.URL, opts.Token, id.device)
