@@ -296,6 +296,76 @@ func TestWriteThenLoadRoundTripsServerSource(t *testing.T) {
 	}
 }
 
+// TestWriteFailsWhenTheDirectoryCannotBeWrittenToPreservesExistingConfig is
+// the bounded-review regression test for the WARNING "config.yaml is written
+// non-atomically, and can be truncated": Write previously called
+// os.WriteFile directly, which truncates the destination before writing a
+// single byte of the replacement — an interrupted write left config.yaml
+// truncated or empty, not merely stale. This seeds a real config.yaml with
+// known content via a first successful Write, makes its directory
+// unwritable so neither a new temp file nor the final rename can be
+// created there, and asserts the original bytes survive a failed second
+// Write byte-for-byte — mirroring
+// TestCredentialsSaveFailsWhenTheDirectoryCannotBeWrittenToPreservesExistingCredentials's
+// construction for the same class of guarantee.
+//
+// Windows is skipped for the same reason that test skips it: Go's Chmod
+// there only toggles the read-only attribute and does not reliably block
+// file creation within a directory the way a POSIX write-permission bit
+// does.
+func TestWriteFailsWhenTheDirectoryCannotBeWrittenToPreservesExistingConfig(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("directory write-permission bits are not reliably enforced on Windows")
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	original := nativeConfigFor("macbook")
+	if err := Write(path, original); err != nil {
+		t.Fatalf("seeding the original config.yaml: %v", err)
+	}
+	wantBytes, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading the seeded config.yaml: %v", err)
+	}
+
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatalf("making the directory read-only: %v", err)
+	}
+	t.Cleanup(func() { os.Chmod(dir, 0o755) })
+
+	attempt := nativeConfigFor("macbook")
+	attempt.Source = Source{Type: SourceTypeServer, URL: "https://aliases.example.com"}
+	if err := Write(path, attempt); err == nil {
+		t.Fatal("Write() must return an error when its directory cannot be written to")
+	}
+
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatalf("restoring directory permissions: %v", err)
+	}
+
+	gotBytes, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading config.yaml after the failed write: %v", err)
+	}
+	if string(gotBytes) != string(wantBytes) {
+		t.Errorf("config.yaml changed after a failed write:\nbefore: %s\nafter:  %s", wantBytes, gotBytes)
+	}
+}
+
+// nativeConfigFor is a minimal, valid DeviceFileConfig, mirroring
+// nativeDeviceConfig (internal/app/testutil_test.go) for this package's own
+// tests, which do not import internal/app.
+func nativeConfigFor(name string) DeviceFileConfig {
+	return DeviceFileConfig{
+		Version: 1,
+		Device:  DeviceConfig{ID: name, Name: name},
+		Source:  Source{Type: SourceTypeFile},
+		Backend: BackendNative,
+	}
+}
+
 func TestSanitizeHostname(t *testing.T) {
 	tests := []struct {
 		name string

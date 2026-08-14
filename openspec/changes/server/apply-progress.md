@@ -1764,3 +1764,350 @@ has the same server-source `os.ReadFile("")` defect `edit` had, and no task
 in Phase 8 covers it despite design.md's File Changes table naming
 `list.go`. Ready for `sdd-verify` on this Phase 8 slice, or for the next
 apply batch to start Phase 9.
+
+## Phase 8 — Bounded Correction Pass (self-reproduced findings)
+
+**Scope**: five findings against the already-complete Phase 8, reproduced
+directly by the requester (not re-litigated here) — 2 WARNING, 2 informational
+design-recording gaps, and 1 behavioral gap. Recorded as task 8.15.
+`internal/domain`, `internal/validate`, `internal/renderers`, `internal/store`,
+`internal/auth`, `internal/api`, and `internal/sync` were untouched, per this
+batch's own constraint. `internal/server` was modified (finding 5, explicitly
+permitted) and `internal/config` was modified (finding 2, explicitly
+permitted); `internal/app` and `cmd/aliasdeck` were modified for findings 1
+and 3, which are not on the forbidden list.
+
+### WARNING 1 — `--password-stdin` blocks forever on a live, silent pipe
+
+`resolveLoginPassword` (`internal/app/login.go`) skipped `isInteractive`'s
+guard entirely on the `--password-stdin` path and called a bare
+`bufio.Scanner.Scan()`. `Login`'s own `ctx` never reached it. Reproduced by
+the requester with a pipe kept open and never written to (a stalled step in
+a script, not a closed pipe): "STILL BLOCKED after 3s".
+
+**Fix**: `resolveLoginPassword` now takes `ctx context.Context` (threaded
+from `Login`, which already had one) and calls a new
+`readLineFromStdinBounded(ctx, r, what)` on the `--password-stdin` path
+only. That function runs `readLineFromStdin` in its own goroutine and
+returns on whichever of the goroutine's result or `ctx.Done()` happens
+first. The interactive-prompt path (no `--password-stdin`, a real terminal)
+is unchanged and stays a plain blocking read — a person typing at a real
+terminal is exactly the case worth waiting for, and `isInteractive` already
+refuses to attempt this at all against anything else.
+
+**New test**: `TestLoginPasswordStdinDoesNotHangPastContextCancellationOnALivePipe`
+(`internal/app/login_test.go`) — a pipe kept open and never written to,
+`Login` called with a `context.WithTimeout(300ms)`, asserted to return
+(with a non-nil error) within a 5s test-side bound rather than hanging past
+its own ctx's deadline.
+
+**Mutation evidence**: reverted `resolveLoginPassword`'s `--password-stdin`
+branch to call `readLineFromStdin` directly (bypassing the bound):
+
+```
+$ go test -count=1 -run TestLoginPasswordStdinDoesNotHangPastContextCancellationOnALivePipe ./internal/app/... -v -timeout 20s
+=== RUN   TestLoginPasswordStdinDoesNotHangPastContextCancellationOnALivePipe
+    login_test.go:234: Login() blocked past its own ctx's deadline reading a live, silent --password-stdin pipe — this is exactly the hang the bounded-review finding reproduced
+--- FAIL: TestLoginPasswordStdinDoesNotHangPastContextCancellationOnALivePipe (5.00s)
+FAIL
+FAIL	github.com/angeltonio/aliasdeck/internal/app	5.362s
+FAIL
+```
+
+Reverted the mutation; full `internal/app` suite re-verified green
+(`go test -count=1 ./internal/app/...`).
+
+Design's Bounded Operations table (`login` row) was corrected to state the
+gap and the fix, rather than leaving the pre-correction claim standing.
+
+### WARNING 2 — `config.yaml` is written non-atomically, and can be truncated
+
+`config.Write` (`internal/config/device.go`) was a plain `os.WriteFile`,
+which truncates the destination before writing a single byte of the
+replacement content. Every sibling file this project writes
+(`state.json`, `credentials.json`, the bootstrap password file) already
+uses the temp-file-then-rename pattern; `config.yaml` was the one holdout.
+A reviewer's framing of this as "`register` leaves an orphaned device token
+when the final write fails" is real but secondary: the actual defect is
+that an interrupted write (full disk, killed process, a permission change
+mid-write) leaves `config.yaml` itself truncated or empty — the user's
+entire device configuration lost, not merely the pending update — and the
+gap is pre-existing from M2, affecting every caller of `Write` (`init`,
+`register`), not only `register`.
+
+**Fix**: `Write` now writes to a temp file in the same directory
+(`.config.*.tmp`), `Chmod(0600)`s it before any content touches it,
+`Sync`s, `Close`s, then `os.Rename`s over the destination, with a deferred
+temp-file cleanup — the fourth call site of this exact pattern
+(`state.Save`, `config.SaveCredentials`, `auth.writeBootstrapPasswordFile`
+being the other three). Recorded as design decision 33, explicitly
+extending decision 27's already-accepted "partial state on a failed second
+write" precedent to this new case.
+
+`register`'s own `config.Write` failure branch (`internal/app/register.go`)
+was rewritten to name the exact, safe recovery: by the time `config.Write`
+runs, the enrollment token is already consumed and the device token is
+already safely on disk in `credentials.json` — there is no fresh enrollment
+token to retry with, and nothing to compensate by deleting (the device
+already exists server-side and its token already works). The new error text
+tells the operator to hand-edit `config.yaml`'s `source:` block directly
+(`type: server`, `url`, and `allowInsecureHTTP` when the original request
+carried `--allow-insecure`) rather than leaving them to guess why `sync`
+still uses the old source after an apparently-successful `register`. This is
+accepted and documented, not compensated, mirroring decision 27's own
+reasoning for why a compensating rollback was rejected there too.
+
+**New test**:
+`TestWriteFailsWhenTheDirectoryCannotBeWrittenToPreservesExistingConfig`
+(`internal/config/device_test.go`) — seeds a real `config.yaml` via a first
+successful `Write`, makes its directory read-only (`0555`, skipped on
+Windows for the same reason `TestCredentialsSaveFailsWhenTheDirectoryCannotBeWrittenToPreservesExistingCredentials`
+already skips it there), attempts a second `Write`, and asserts the
+original bytes survive unchanged.
+
+**Mutation evidence**: reverted `Write` to a plain `os.MkdirAll` +
+`os.WriteFile` (no temp file, no rename):
+
+```
+$ go test -count=1 -run TestWriteFailsWhenTheDirectoryCannotBeWrittenToPreservesExistingConfig ./internal/config/... -v
+=== RUN   TestWriteFailsWhenTheDirectoryCannotBeWrittenToPreservesExistingConfig
+    device_test.go:341: Write() must return an error when its directory cannot be written to
+--- FAIL: TestWriteFailsWhenTheDirectoryCannotBeWrittenToPreservesExistingConfig (0.00s)
+FAIL
+FAIL	github.com/angeltonio/aliasdeck/internal/config	0.347s
+FAIL
+```
+
+Honest note on this mutation's shape: the naive `os.WriteFile` path did not
+fail with "content changed" — it succeeded outright (returned a nil error),
+because opening an *existing* file for a truncating write only requires
+write permission on the file itself, not on its containing directory (only
+*creating* a new directory entry, which the atomic path's `CreateTemp`
+does, needs that). The test still caught the regression, just via its first
+assertion ("`Write()` must return an error") rather than its second
+(byte-for-byte comparison) — reported here rather than silently rephrased
+to look like the assertion that "should" have fired. Reverted the mutation;
+full `internal/config` suite re-verified green.
+
+### Informational 3 — the three new commands' flag wiring was unproved
+
+`cmd/aliasdeck/root_test.go` proved `login`/`register`/`logout` are
+registered by name and appear in `--help`, but no test executed any of
+their `RunE` — the mapping of `--url`/`--token`/`--password-stdin`/
+`--allow-insecure` into each command's `app.*Options` was verified by
+nothing; `internal/app`'s own tests call `Login`/`Register`/`Logout`
+directly and bypass Cobra entirely.
+
+**Fix**: three new test files, each running the real Cobra tree through the
+existing `runCmd` harness (`cmd/aliasdeck/main_test.go`'s own pattern):
+
+- `cmd/aliasdeck/register_test.go` — `TestRegisterCommandRequiresURLAndToken`,
+  `TestRegisterCommandWiresFlagsIntoOptionsEndToEnd` (a real httptest
+  register server, asserting `config.yaml`'s `source.type`/`source.url` and
+  `credentials.json`'s device token afterward),
+  `TestRegisterCommandRejectsInsecureURLWithoutAllowInsecureFlag`.
+- `cmd/aliasdeck/login_test.go` — `TestLoginCommandRequiresURL`,
+  `TestLoginCommandWiresAllowInsecureAndPasswordStdinFlags` (os.Stdin
+  replaced with a controlled pipe — closed immediately for an
+  instantaneous EOF, never a hang — distinguishing three possible error
+  messages to prove both `--allow-insecure` and `--password-stdin` reached
+  `Options`), `TestLoginCommandSuccessEndToEnd` (a real httptest login
+  server, a pipe written to and then closed, full success through the real
+  `RunE`).
+- `cmd/aliasdeck/logout_test.go` — `TestLogoutCommandClearsSessionEndToEnd`,
+  `TestLogoutCommandSucceedsWithNoStoredSession`. `logout` takes no flags,
+  so there is no binding to mutate; its test proves the command is wired to
+  `app.Logout` at all, end to end.
+
+`cmd/aliasdeck/login.go`/`register.go`/`logout.go` call `app.OSEnv()`
+directly, which hardcodes `os.Stdin` — there is no injectable `Env` at the
+Cobra layer — so controlling stdin for the login tests required replacing
+the real `os.Stdin` package variable for the test's duration (the same
+technique `internal/server/server_test.go`'s `TestRunNeverReadsStdin`
+already uses, applied here in reverse: a deliberately non-hanging pipe,
+never a live terminal a human might be attached to).
+
+**Mutation evidence** (one per command with a flag to break):
+
+```
+$ # register.go: RegisterOptions.Token: token -> Token: ""
+$ go test -count=1 ./cmd/aliasdeck/... -run TestRegisterCommandWiresFlagsIntoOptionsEndToEnd -v
+=== RUN   TestRegisterCommandWiresFlagsIntoOptionsEndToEnd
+    register_test.go:106: register exit code = 1, want 0 (stderr: Error: --token is required
+        )
+--- FAIL: TestRegisterCommandWiresFlagsIntoOptionsEndToEnd (0.02s)
+FAIL
+FAIL	github.com/angeltonio/aliasdeck/cmd/aliasdeck	0.439s
+FAIL
+
+$ # login.go: LoginOptions.AllowInsecureHTTP: allowInsecureHTTP -> AllowInsecureHTTP: false
+$ go test -count=1 ./cmd/aliasdeck/... -run TestLoginCommandWiresAllowInsecureAndPasswordStdinFlags -v
+=== RUN   TestLoginCommandWiresAllowInsecureAndPasswordStdinFlags
+    login_test.go:126: stderr = "Error: server url \"http://aliases.example.com\" is not https and is not loopback; pass the explicit insecure opt-out (login --allow-insecure) to use it anyway\n", want --allow-insecure to have bypassed the URL rejection
+    login_test.go:129: stderr = "Error: server url \"http://aliases.example.com\" is not https and is not loopback; pass the explicit insecure opt-out (login --allow-insecure) to use it anyway\n", want the password-resolution error naming stdin, proving --password-stdin reached Options
+--- FAIL: TestLoginCommandWiresAllowInsecureAndPasswordStdinFlags (0.02s)
+FAIL
+FAIL	github.com/angeltonio/aliasdeck/cmd/aliasdeck	0.424s
+FAIL
+
+$ # logout.go: replaced app.Logout(...) call with a hardcoded LogoutReport{SessionCleared: false}
+$ go test -count=1 ./cmd/aliasdeck/... -run TestLogoutCommandClearsSessionEndToEnd -v
+=== RUN   TestLogoutCommandClearsSessionEndToEnd
+    logout_test.go:39: stdout = "No local session was stored.\n", want it to confirm the logout
+    logout_test.go:47: SessionToken = "ads_lookup.secret", want empty after logout
+--- FAIL: TestLogoutCommandClearsSessionEndToEnd (0.05s)
+FAIL
+FAIL	github.com/angeltonio/aliasdeck/cmd/aliasdeck	0.479s
+FAIL
+```
+
+All three mutations reverted; full `cmd/aliasdeck` suite re-verified green.
+
+### Informational 4 — the duplicated HTTP client is not recorded as a decision
+
+`internal/app/serverclient.go` re-implements `internal/source/server.go`'s
+timeout, redirect refusal, response limit, and no-retry posture. Both
+copies are currently correct and their constants match, but the duplication
+itself — and the obligation to keep both in step — previously lived only in
+inline code comments in `serverclient.go`, with no numbered design decision
+recording it the way decision 16 records `serverValidationShells`'s
+identical trade, or decision 31 records the redirect-refusal fix itself.
+Decision 24's own history is this project's precedent for why that matters:
+a bounds claim that lives only in a comment is a claim nobody is
+structurally obligated to notice has gone stale.
+
+**Fix**: recorded as design decision 34 — no code change, since both
+copies are already correct; this closes the documentation gap only, naming
+both call sites explicitly and stating the obligation to keep them in step.
+
+### Informational 5 — `serve` announces nothing on startup
+
+Reproduced by the requester: `serve` wrote nothing to stdout when it
+started — not the address it was listening on. With `--addr 127.0.0.1:0`
+there was no way for the operator to learn the bound port at all, and even
+a fixed `--addr` gave no confirmation the bind landed on what was asked.
+
+**Fix**: `internal/server.Run` (`internal/server/server.go`) now writes one
+line to `cfg.Stdout` — `"aliasdeck: listening on %s\n"` — using the real
+`net.Listener`'s own `Addr()`, immediately after `cfg.Listen()` succeeds and
+before the router is built. `ln.Addr()` was chosen over `cfg.Addr`
+specifically because `cfg.Addr` never resolves `"127.0.0.1:0"` to the real
+ephemeral port at all. Checked against decision 22's own constraint
+(the bootstrap password must never reach a persistent log): this line
+carries nothing else — no schema version, no operator or device identity,
+no build metadata — matching `handleHealth`'s own "expose nothing beyond
+readiness" posture (Phase 4 correction pass), applied here to startup
+instead of to a request. Recorded as design decision 35.
+
+**New test**: `TestRunAnnouncesTheRealBoundListenerAddress`
+(`internal/server/server_test.go`) — binds an ephemeral listener, waits for
+the health endpoint to answer (a real-signal poll via a ticker, not a
+sleep) as proof `Run` has moved past the announcement line, then asserts
+`cfg.Stdout` contains the listener's real address and does not contain the
+unresolved `"127.0.0.1:0"` literal.
+
+**Mutation evidence**: removed the `fmt.Fprintf(cfg.Stdout, ...)` line
+entirely from `Run`:
+
+```
+$ go test -count=1 -run TestRunAnnouncesTheRealBoundListenerAddress ./internal/server/... -v
+=== RUN   TestRunAnnouncesTheRealBoundListenerAddress
+    server_test.go:282: stdout = "Generated operator password for \"admin\" (save this now — it will not be shown again): 3gRBV6ccRB9wUeShbrMxTkDP\n", want it to name the real bound address "127.0.0.1:52505" (not cfg.Addr)
+--- FAIL: TestRunAnnouncesTheRealBoundListenerAddress (0.03s)
+FAIL
+FAIL	github.com/angeltonio/aliasdeck/internal/server	0.448s
+FAIL
+```
+
+Reverted the mutation; full `internal/server` suite re-verified green.
+
+### Verification (this batch)
+
+```
+$ gofmt -l .
+(no output)
+
+$ go vet ./...
+(no output)
+
+$ go test -count=1 ./...
+ok  	github.com/angeltonio/aliasdeck/cmd/aliasdeck
+ok  	github.com/angeltonio/aliasdeck/internal/api
+ok  	github.com/angeltonio/aliasdeck/internal/app
+ok  	github.com/angeltonio/aliasdeck/internal/apply
+ok  	github.com/angeltonio/aliasdeck/internal/archtest
+ok  	github.com/angeltonio/aliasdeck/internal/auth
+ok  	github.com/angeltonio/aliasdeck/internal/config
+ok  	github.com/angeltonio/aliasdeck/internal/domain
+ok  	github.com/angeltonio/aliasdeck/internal/renderers
+ok  	github.com/angeltonio/aliasdeck/internal/server
+?   	github.com/angeltonio/aliasdeck/internal/shelltest	[no test files]
+ok  	github.com/angeltonio/aliasdeck/internal/source
+ok  	github.com/angeltonio/aliasdeck/internal/state
+ok  	github.com/angeltonio/aliasdeck/internal/store
+ok  	github.com/angeltonio/aliasdeck/internal/store/sqlitestore
+?   	github.com/angeltonio/aliasdeck/internal/store/storetest	[no test files]
+ok  	github.com/angeltonio/aliasdeck/internal/sync
+ok  	github.com/angeltonio/aliasdeck/internal/validate
+
+$ go test -count=1 -race ./internal/app/... ./cmd/aliasdeck/...
+ok  	github.com/angeltonio/aliasdeck/internal/app
+ok  	github.com/angeltonio/aliasdeck/cmd/aliasdeck
+
+$ go test -count=1 ./internal/archtest
+ok  	github.com/angeltonio/aliasdeck/internal/archtest
+```
+
+Six-target `CGO_ENABLED=0` cross-compile (ephemeral scratch output paths
+under a `mktemp -d` directory, no fixed ports bound anywhere in this batch,
+no long-running process started or stopped — every listener this batch's
+new tests bind is `"127.0.0.1:0"`):
+
+| Target | Bytes | MiB |
+|---|---|---|
+| darwin/amd64 | 18,729,312 | 17.86 |
+| darwin/arm64 | 17,934,930 | 17.10 |
+| linux/amd64 | 18,347,063 | 17.50 |
+| linux/arm64 | 17,394,936 | 16.59 |
+| windows/amd64 | 18,852,352 | 17.98 |
+| windows/arm64 | 17,645,056 | 16.83 |
+
+All six well under the 25 MB CI budget.
+
+**Host safety**: no fixed port was bound anywhere in this batch, in
+production code or in any test (every listener is `"127.0.0.1:0"`); no
+process other than this batch's own short-lived `go build`/`go test`
+invocations was started, and nothing was stopped or killed that this batch
+did not itself start.
+
+## Workload / PR Boundary (Phase 8 correction pass)
+
+- Mode: Feature Branch Chain slice, continuing PR 8's own boundary
+  (`tasks.md`'s "Suggested Work Units")
+- Current work unit: Phase 8 bounded correction pass (task 8.15) —
+  `internal/app/login.go`, `internal/app/register.go`,
+  `internal/config/device.go`, `internal/server/server.go`, three new
+  `cmd/aliasdeck/*_test.go` files, plus `design.md` decisions 33–35 and this
+  file's own additions
+- Boundary: revert `internal/app/{login,register}.go`,
+  `internal/app/login_test.go`'s new test, `internal/config/device.go`,
+  `internal/config/device_test.go`'s new test, `internal/server/server.go`,
+  `internal/server/server_test.go`'s new test, and the three new
+  `cmd/aliasdeck/{login,register,logout}_test.go` files — nothing outside
+  this set was touched, and no other phase's tests depend on any of it
+- Estimated review budget impact: low-to-moderate — five small production
+  diffs (one new bounded-read helper, one atomic-write rewrite, one error
+  message, one one-line startup announcement, one error-message parameter),
+  five new/extended test functions across three packages, three new
+  cmd-level test files, and two documentation-only design decisions
+  (34 records an existing, unchanged duplication)
+
+## Status (Phase 8 correction pass complete)
+
+Phase 8 complete (14/14) plus this bounded correction pass (task 8.15, 5/5
+findings fixed and mutation-verified). Remaining: Phase 9 (cross-cutting
+verification), Phase 10 (release/CI/docs). The `internal/app/list.go`
+server-source gap flagged above (before this correction pass) remains open
+and unaddressed — out of this batch's assigned scope (five specific,
+pre-reproduced findings). Ready for `sdd-verify` on this correction-pass
+slice, or for the next apply batch to start Phase 9.

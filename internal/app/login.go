@@ -67,7 +67,7 @@ func Login(ctx context.Context, env Env, opts LoginOptions) (LoginReport, error)
 		return LoginReport{}, err
 	}
 
-	password, err := resolveLoginPassword(env, opts)
+	password, err := resolveLoginPassword(ctx, env, opts)
 	if err != nil {
 		return LoginReport{}, err
 	}
@@ -113,9 +113,22 @@ func Login(ctx context.Context, env Env, opts LoginOptions) (LoginReport, error)
 // blocking. This is the same bounded-operation shape TestRunNeverReadsStdin
 // (internal/server/server_test.go) already exists to prove for `serve`'s own
 // stdin, applied here to `login`'s.
-func resolveLoginPassword(env Env, opts LoginOptions) (string, error) {
+//
+// The --password-stdin path is additionally bounded against ctx (bounded-
+// review finding, correction pass): a caller passing --password-stdin has
+// promised a pipe is coming, but that promise says nothing about how long
+// the upstream producing it takes — a live pipe that stays open and is
+// simply never written to (a stalled step in a script, not a closed pipe)
+// previously hung this call forever, because the guard above only covers
+// the no-flag path and Login's own ctx never reached bufio.Scanner.Scan()
+// at all. readLineFromStdinBounded fixes that without changing the
+// interactive-prompt path, which stays a plain blocking read: a person
+// typing at a real terminal is exactly the case this project wants to keep
+// waiting for, and isInteractive already refuses to attempt it at all
+// against anything that is not a real terminal.
+func resolveLoginPassword(ctx context.Context, env Env, opts LoginOptions) (string, error) {
 	if opts.PasswordStdin {
-		return readLineFromStdin(env.Stdin, "stdin")
+		return readLineFromStdinBounded(ctx, env.Stdin, "stdin")
 	}
 	if !isInteractive(env.Stdin) {
 		return "", fmt.Errorf(
@@ -144,6 +157,36 @@ func readLineFromStdin(r io.Reader, what string) (string, error) {
 		return "", fmt.Errorf("empty password provided on %s", what)
 	}
 	return line, nil
+}
+
+// readLineFromStdinBounded is readLineFromStdin's --password-stdin variant:
+// bufio.Scanner.Scan() is a synchronous call with no way to interrupt an
+// in-flight read from outside, so the read runs in its own goroutine and
+// this function returns as soon as either it completes or ctx is done,
+// whichever happens first (bounded-review finding, correction pass — WARNING
+// "--password-stdin blocks forever on a live, silent pipe"). If ctx wins,
+// the goroutine may still be blocked on the underlying read after this
+// function returns — Go has no general mechanism to cancel an arbitrary
+// io.Reader from outside — but the caller, and the process, are no longer
+// hostage to it: Login returns promptly with an error naming the timeout
+// instead of hanging past whatever bound the caller's ctx carries.
+func readLineFromStdinBounded(ctx context.Context, r io.Reader, what string) (string, error) {
+	type result struct {
+		line string
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		line, err := readLineFromStdin(r, what)
+		done <- result{line: line, err: err}
+	}()
+
+	select {
+	case res := <-done:
+		return res.line, res.err
+	case <-ctx.Done():
+		return "", fmt.Errorf("reading from %s: %w", what, ctx.Err())
+	}
 }
 
 type loginWireRequest struct {

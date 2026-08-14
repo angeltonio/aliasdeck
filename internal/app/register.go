@@ -55,6 +55,17 @@ type RegisterReport struct {
 // token that failed to save can simply be re-registered with a fresh
 // enrollment token, rather than leaving config.yaml pointed at a server
 // source with no credential behind it.
+//
+// A failed config.yaml write is a different, narrower window (design
+// decision 33, extending decision 27's accepted-partial-write precedent):
+// by the time config.Write runs, the enrollment token has already been
+// consumed and the device token is already safely on disk in
+// credentials.json — there is no fresh enrollment token to retry with, and
+// nothing to compensate by deleting (the device already exists server-side
+// and its token already works). This is accepted, not compensated: the
+// error below names the exact, safe manual recovery — hand-edit config.yaml's
+// source: block — rather than leaving the operator to guess why sync still
+// uses the old source after a "successful" registration.
 func Register(ctx context.Context, env Env, opts RegisterOptions) (RegisterReport, error) {
 	if opts.URL == "" {
 		return RegisterReport{}, fmt.Errorf("--url is required")
@@ -107,10 +118,26 @@ func Register(ctx context.Context, env Env, opts RegisterOptions) (RegisterRepor
 		AllowInsecureHTTP: opts.AllowInsecureHTTP,
 	}
 	if err := config.Write(id.configPath, newCfg); err != nil {
-		return RegisterReport{}, fmt.Errorf("updating config.yaml: %w", err)
+		return RegisterReport{}, fmt.Errorf(
+			"the device was registered and its token was saved locally, but config.yaml could not be updated to "+
+				"use it (the device token is already safe — no new enrollment token is needed; edit %s's source: "+
+				"block by hand instead: set type: server, url: %q%s): %w",
+			id.configPath, opts.URL, allowInsecureConfigNote(opts.AllowInsecureHTTP), err)
 	}
 
 	return RegisterReport{DeviceID: deviceID, ServerURL: opts.URL}, nil
+}
+
+// allowInsecureConfigNote names the extra source.yaml line the manual
+// recovery in Register's config.Write error must mention when
+// --allow-insecure was part of the original request — omitting it would
+// leave a hand-edited config.yaml that ValidateServerURL rejects on the very
+// next sync.
+func allowInsecureConfigNote(allowInsecureHTTP bool) string {
+	if !allowInsecureHTTP {
+		return ""
+	}
+	return ", allowInsecureHTTP: true"
 }
 
 type registerWireRequest struct {

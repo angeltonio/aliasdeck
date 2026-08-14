@@ -184,6 +184,58 @@ func TestLoginNeverPromptsOnATerminalLessStdin(t *testing.T) {
 	}
 }
 
+// TestLoginPasswordStdinDoesNotHangPastContextCancellationOnALivePipe is the
+// bounded-review regression test for the WARNING "--password-stdin blocks
+// forever on a live, silent pipe": TestLoginNeverPromptsOnATerminalLessStdin
+// above proves the no-flag path refuses a terminal-less stdin outright, but
+// --password-stdin's own guard skips that check entirely by design (the
+// flag is the caller's promise that a pipe is coming) and previously called
+// a bare bufio.Scanner.Scan() with no bound whatsoever. This reproduces the
+// dangerous combination neither existing test covers: a pipe that stays
+// open and is never written to (a stalled step in a script, not a closed
+// one) with --password-stdin set. Login must still return once ctx itself
+// is done, rather than hanging past it.
+//
+// Mutation check: reverting resolveLoginPassword to call readLineFromStdin
+// directly (bypassing readLineFromStdinBounded) reproduces the reported
+// hang exactly — this test's own bounded wait (not a real hang) is what
+// turns that into a reported failure instead of an actual stuck test
+// process; see apply-progress for the verbatim before/after mutation
+// output.
+func TestLoginPasswordStdinDoesNotHangPastContextCancellationOnALivePipe(t *testing.T) {
+	blockingRead, writeEnd, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	t.Cleanup(func() { writeEnd.Close() })
+	t.Cleanup(func() { blockingRead.Close() })
+
+	te := newTestEnv(t)
+	te.Env.Stdin = blockingRead
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := Login(ctx, te.Env, LoginOptions{
+			URL:           "https://aliases.example.com",
+			PasswordStdin: true,
+		})
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("Login() succeeded reading a password-stdin pipe that never delivered anything")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Login() blocked past its own ctx's deadline reading a live, silent --password-stdin pipe — " +
+			"this is exactly the hang the bounded-review finding reproduced")
+	}
+}
+
 // TestLoginReadsPasswordFromAPipedStdin proves the other half of the same
 // bounded operation: a real, deliberate --password-stdin invocation (a pipe
 // that is written to and then closed, exactly as `echo $PASS | aliasdeck

@@ -226,8 +226,24 @@ func Load(path string) (DeviceFileConfig, error) {
 	return cfg, nil
 }
 
-// Write serializes cfg back to path as config.yaml, at mode 0600 per the
-// project's file table (design, "Paths, Detection, Exit Codes").
+// Write serializes cfg back to path as config.yaml, atomically and at mode
+// 0600: a temp file in the same directory, chmod'd before any content
+// touches it, then a rename — the same pattern internal/state.Save,
+// internal/config.SaveCredentials, and
+// internal/auth.writeBootstrapPasswordFile already use for exactly this
+// reason (design decision 33). A deferred removal of the temp file cleans
+// up after any failure between its creation and the rename; it is a no-op
+// once the rename has already succeeded.
+//
+// Bounded-review finding, correction pass: this was previously a plain
+// os.WriteFile, which truncates the destination before writing a single
+// byte of the new content — an interrupted write (a full disk, a killed
+// process, a permission change mid-write) left a truncated or empty
+// config.yaml behind, not merely a stale one. `register` (internal/app)
+// is what made that consequential in practice (an interrupted write here
+// runs after a device token has already been obtained and saved), but the
+// gap itself is pre-existing from M2 and applies to every caller of Write,
+// not only register.
 func Write(path string, cfg DeviceFileConfig) error {
 	dto := configFileDTO{
 		Version: cfg.Version,
@@ -256,11 +272,43 @@ func Write(path string, cfg DeviceFileConfig) error {
 		return fmt.Errorf("marshaling config.yaml: %w", err)
 	}
 
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("creating config directory: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		return fmt.Errorf("writing config.yaml: %w", err)
+
+	tmp, err := os.CreateTemp(dir, ".config.*.tmp")
+	if err != nil {
+		return fmt.Errorf("creating temp file in %s: %w", dir, err)
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+
+	if err := writeSyncCloseDeviceConfig(tmp, data); err != nil {
+		return err
+	}
+
+	if err := os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("renaming %s to %s: %w", tmpPath, path, err)
+	}
+	return nil
+}
+
+func writeSyncCloseDeviceConfig(f *os.File, data []byte) error {
+	if err := f.Chmod(0o600); err != nil {
+		f.Close()
+		return fmt.Errorf("setting mode on %s: %w", f.Name(), err)
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return fmt.Errorf("writing %s: %w", f.Name(), err)
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return fmt.Errorf("syncing %s: %w", f.Name(), err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("closing %s: %w", f.Name(), err)
 	}
 	return nil
 }
