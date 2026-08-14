@@ -90,6 +90,12 @@ changelog:
 # solves properly with casks.
 homebrew_casks:
   - name: aliasdeck
+    # `auto` skips publishing to the package manager when the tag looks like a
+    # prerelease (anything with a hyphen, e.g. v0.3.0-rc.1). Without it, an rc
+    # tag would push a release candidate to everyone running `brew upgrade`.
+    # Set explicitly rather than relying on the default, because the cost of
+    # being wrong here is shipping an untested build to every installed user.
+    skip_upload: auto
     ids:
       - aliasdeck
     binaries:
@@ -133,6 +139,12 @@ homebrew_casks:
 # the top of this file.
 scoops:
   - name: aliasdeck
+    # `auto` skips publishing to the package manager when the tag looks like a
+    # prerelease (anything with a hyphen, e.g. v0.3.0-rc.1). Without it, an rc
+    # tag would push a release candidate to everyone running `brew upgrade`.
+    # Set explicitly rather than relying on the default, because the cost of
+    # being wrong here is shipping an untested build to every installed user.
+    skip_upload: auto
     ids:
       - aliasdeck
     repository:
