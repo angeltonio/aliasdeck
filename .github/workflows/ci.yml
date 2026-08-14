@@ -257,3 +257,80 @@ jobs:
         with:
           version: "~> v2"
           args: check
+
+  release-size-gate:
+    name: release size gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      # Builds the real six release artifacts with goreleaser itself — the
+      # same CGO_ENABLED=0 targets and the same `-s -w` ldflags .goreleaser.yaml
+      # ships with — rather than a convenience `go build` that would police a
+      # number no user ever downloads. `--snapshot` skips the git-tag/publish
+      # requirements; nothing is published.
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: build --snapshot --clean
+      # Task 10.2: measure each of the six built binaries and fail, naming
+      # the artifact and its size, if any exceeds the 25 MB budget. As of
+      # this milestone the largest artifact (windows/amd64) measures ~12.4 MB
+      # — comfortably inside budget, so the build-tag contingency (design
+      # decision 1) is not needed.
+      - name: Enforce the 25 MB per-binary release budget
+        shell: bash
+        run: |
+          set -euo pipefail
+          budget=$((25 * 1024 * 1024))
+          over=0
+          while IFS= read -r -d '' f; do
+            size=$(stat -c%s "$f")
+            mb=$(awk -v b="$size" 'BEGIN { printf "%.2f", b / 1048576 }')
+            echo "$f: ${size} bytes (${mb} MB)"
+            if [ "$size" -gt "$budget" ]; then
+              echo "::error file=$f::$f is ${mb} MB, over the 25 MB release budget"
+              over=1
+            fi
+          done < <(find dist -mindepth 2 -maxdepth 2 -type f \( -name 'aliasdeck' -o -name 'aliasdeck.exe' \) -print0)
+          if [ "$over" -ne 0 ]; then
+            echo "One or more release artifacts exceed the 25 MB budget."
+            exit 1
+          fi
+
+  sqlc-drift:
+    name: sqlc generate drift
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      # Task 10.3 / design decision 6: internal/store/sqlitestore's
+      # sqlc-generated files are checked in; regenerating them from
+      # query.sql must produce zero diff, or the checked-in code has drifted
+      # from the queries that describe it.
+      - name: Regenerate and diff internal/store/sqlitestore
+        run: make sqlc-diff
+
+  openapi-coverage:
+    name: openapi route coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      # Task 10.3 / design decision 15: the router's route slice and
+      # docs/openapi.yaml (embedded verbatim at internal/api/openapi.yaml)
+      # must name exactly the same set of routes in both directions, and the
+      # embedded copy must stay byte-identical to the docs copy. Both
+      # properties are already ordinary go tests (5.12, 5.13) exercised by
+      # the main test matrix; naming them as their own job surfaces a drift
+      # here specifically, without waiting on the full OS matrix.
+      - name: Run the OpenAPI coverage and embed-identity tests
+        run: |
+          go test -v ./internal/api/... \
+            -run 'TestOpenAPIDocumentsExactlyTheRegisteredRoutes|TestEmbeddedOpenAPISpecMatchesDocsCopy'

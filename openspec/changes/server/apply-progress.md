@@ -2111,3 +2111,190 @@ server-source gap flagged above (before this correction pass) remains open
 and unaddressed — out of this batch's assigned scope (five specific,
 pre-reproduced findings). Ready for `sdd-verify` on this correction-pass
 slice, or for the next apply batch to start Phase 9.
+
+## Phase 10: Release, CI & Docs — COMPLETE (9/9)
+
+Phase 9 (cross-cutting verification) landed in a prior batch not recorded
+in this file — its own outcomes are summarized in `tasks.md`'s Phase 9
+entries (9.1–9.5), all `[x]`. This section covers Phase 10 only: no Go
+production code was touched (constraint held: `internal/domain`,
+`internal/validate`, `internal/renderers`, `internal/shelltest` untouched).
+
+**10.1/10.2 — real release artifacts, not a convenience build.** Ran
+`goreleaser check` (config valid) and `goreleaser build --snapshot --clean`
+(the actual six targets, `CGO_ENABLED=0`, `ldflags: -s -w`, no tag/publish
+required under `--snapshot`). Measured the real output directly:
+
+| Target | Size (stripped, as shipped) |
+|---|---|
+| darwin/amd64 | 12,847,552 B (12.25 MB) |
+| darwin/arm64 | 12,224,754 B (11.65 MB) |
+| linux/amd64 | 12,611,768 B (12.02 MB) |
+| linux/arm64 | 11,927,736 B (11.37 MB) |
+| windows/amd64 | 12,980,224 B (12.37 MB) |
+| windows/arm64 | 12,079,616 B (11.52 MB) |
+
+Largest is windows/amd64 at 12.37 MB — ~12.6 MB headroom under the 25 MB
+budget, roughly 50% margin. A plain `go build` of the same code (darwin/arm64
+host) is 17,934,930 B (17.10 MB) with no ldflags — confirming the guidance
+that a convenience build overstates the real number goreleaser ships by
+~5.5 MB. **The over-budget contingency (a `serve`-excluding build tag,
+design decision 1) was not built** — the real margin does not warrant it.
+
+Added a new CI job `release-size-gate` (`.github/workflows/ci.yml`) that
+runs `goreleaser build --snapshot --clean` and then a bash step measuring
+every `dist/*/aliasdeck(.exe)` artifact, failing (naming the artifact and
+its size) past 25 MB. `.goreleaser.yaml` itself needed no change — it
+already builds all six targets at `CGO_ENABLED=0` with the embedded server
+and `modernc.org/sqlite` (pure Go, no cgo, never a `CGO_ENABLED=0` risk).
+
+**10.3 — drift checks wired as CI jobs.** Added `make sqlc-generate` /
+`make sqlc-diff` to the `Makefile` (neither existed before — `sqlc.yaml`'s
+own header comment referenced "task 10.3" without the tooling existing
+yet); `sqlc-diff` regenerates `internal/store/sqlitestore` with the
+version-pinned `sqlc v1.29.0` via `go run` (never a `go.mod` tool
+directive, decision 6) and fails on any `git diff`. Ran it locally: zero
+drift. Added two new CI jobs: `sqlc-drift` (runs `make sqlc-diff`) and
+`openapi-coverage` (runs `TestOpenAPIDocumentsExactlyTheRegisteredRoutes`
+and `TestEmbeddedOpenAPISpecMatchesDocsCopy` by name as their own gate —
+both already pass as ordinary Go tests inside the main matrix; naming them
+separately surfaces a drift here specifically, without waiting on the full
+OS matrix to finish).
+
+**10.4 — docs/PROJECT.md, verified against the tree, not the task
+description.** Checked both named errors directly: `git diff main --
+docs/PROJECT.md` was empty *before* this batch touched it, and
+`git show e0edc40 -- docs/PROJECT.md` / `git show 2310e5b -- docs/PROJECT.md`
+show both corrections (`cmd/aliasdeck-server/` removed; root `migrations/`
+moved to `internal/store/migrations/`) already landed in the `docs(spec)`
+proposal/design commits, *before* Milestone 4's implementation began. The
+task's own wording describing these as still-open errors was stale by the
+time Phase 10 started — reported here rather than silently "fixed" a
+second time. What genuinely needed correcting, found by reading the file
+against `fd -t d . internal -d 1` and `go.mod`: §9.3 still framed
+migrations as an open `goose`-or-`golang-migrate` choice (decision 5
+confirmed `goose` back in Phase 1) and named no new dependency; §10's tree
+omitted `internal/{app,archtest,server,shelltest,state,verify}` and
+`internal/store/{sqlitestore,storetest}` outright, and claimed a
+`postgres` implementation and a `chezmoi` apply backend that do not exist
+in the tree (`internal/apply` has only `native.go`; `internal/store` has
+only `sqlitestore`). Corrected both sections; added a short note recording
+the two already-fixed corrections' own history so a future reader does not
+have to repeat this git-archaeology.
+
+**10.5 — docs/API.md**, written from `docs/openapi.yaml` and cross-checked
+directly against `internal/api/router.go`'s route table and the handler
+DTOs' `json:"..."` tags (`internal/api/{auth,sync}.go`), and against
+`internal/auth/token.go`'s actual wire prefixes (`ads_`/`ade_`/`add_`,
+confirmed via `rg -n "\"ad" internal/auth/*.go`). No discrepancy between
+the served spec and the implementation — the bidirectional coverage test
+(5.13) already guarantees that mechanically. One inconsistency noted but
+not corrected (historical record, not a live defect): task 5.11's text
+says "22 declared routes" while its own category breakdown sums to 23
+(1+1+4+5+5+7), matching the real router's 23 routes exactly — a narrative
+arithmetic slip in an already-completed phase.
+
+**10.6 — README.md.** Updated the "Status" callout, the status table, "Two
+ways to use it", and the Roadmap table for v0.3: self-hosted server
+checked off; explicit that there is no web UI yet (v0.4), that TLS is not
+built in (reverse proxy is the operator's job), that the default bind is
+loopback-only, and that no Docker image exists yet — the previous "Docker
+optional" line was aspirational copy with no `Dockerfile` in the tree
+(`fd -i dockerfile .` — none found) to back it.
+
+**10.7 — openspec/config.yaml.** Appended a Milestone 4 paragraph to
+`context` naming the new packages and the four new runtime dependencies
+with versions and why each was chosen. Validated as parseable YAML
+afterward via a throwaway `go.yaml.in/yaml/v3` unmarshal, since no `yaml`
+Python module was available in this environment.
+
+**10.8 — release notes.** No static release-notes file exists — GitHub
+releases are entirely goreleaser-changelog-generated from conventional
+commits (`.github/workflows/release.yml` → `goreleaser release --clean`),
+so the operator warnings this task requires needed a persistent home in
+`.goreleaser.yaml` itself. Added a `footer` under `release:` (appears on
+every future release, not templated per-version — forward-only migrations
+are a permanent property of every server release from here on, not a
+one-time v0.3 note) stating: back up the database file before upgrading
+(no downgrade command exists); the one-time `admin` password prints to a
+real terminal or else to a `0600` file next to the database, never a log;
+the default bind is loopback only; and `GET /api/v1/sync` refuses every
+redirect, so a redirecting reverse proxy in front of it will look
+indistinguishable from the device being offline. Validated with
+`goreleaser check`.
+
+**10.9 — final verification and a real smoke test.**
+
+```
+$ make check
+gofmt -l -w .
+go vet ./...
+go test ./...
+ok  	github.com/angeltonio/aliasdeck/cmd/aliasdeck	(cached)
+ok  	github.com/angeltonio/aliasdeck/internal/api	(cached)
+ok  	github.com/angeltonio/aliasdeck/internal/app	(cached)
+ok  	github.com/angeltonio/aliasdeck/internal/apply	(cached)
+ok  	github.com/angeltonio/aliasdeck/internal/archtest	2.676s
+ok  	github.com/angeltonio/aliasdeck/internal/auth	(cached)
+ok  	github.com/angeltonio/aliasdeck/internal/config	(cached)
+ok  	github.com/angeltonio/aliasdeck/internal/domain	(cached)
+ok  	github.com/angeltonio/aliasdeck/internal/renderers	(cached)
+ok  	github.com/angeltonio/aliasdeck/internal/server	(cached)
+?   	github.com/angeltonio/aliasdeck/internal/shelltest	[no test files]
+ok  	github.com/angeltonio/aliasdeck/internal/source	(cached)
+ok  	github.com/angeltonio/aliasdeck/internal/state	(cached)
+ok  	github.com/angeltonio/aliasdeck/internal/store	(cached)
+ok  	github.com/angeltonio/aliasdeck/internal/store/sqlitestore	(cached)
+?   	github.com/angeltonio/aliasdeck/internal/store/storetest	[no test files]
+ok  	github.com/angeltonio/aliasdeck/internal/sync	(cached)
+ok  	github.com/angeltonio/aliasdeck/internal/validate	(cached)
+ok  	github.com/angeltonio/aliasdeck/internal/verify	(cached)
+```
+
+`gofmt -l .` and `go vet ./...` run standalone: both silent/exit 0.
+`make cover` per-package numbers unchanged from Phase 9's own record
+(`cmd/aliasdeck` 66.0%, `internal/api` 78.2%, `internal/app` 81.5%,
+`internal/apply` 84.9%, `internal/auth` 88.3%, `internal/config` 82.5%,
+`internal/domain` 70.4%, `internal/renderers` 92.0%, `internal/server`
+85.5%, `internal/source` 89.4%, `internal/state` 70.3%, `internal/store`
+82.4%, `internal/store/sqlitestore` 79.8%, `internal/sync` 100.0%,
+`internal/validate` 87.7%; `internal/{archtest,verify}` "no statements";
+`internal/{shelltest,store/storetest}` 0.0% by design, per Phase 9's own
+note on `storetest`).
+
+**Manual smoke test, real output.** Built `go build -o aliasdeck
+./cmd/aliasdeck` (plain, unstripped, for a fast local run). Created a
+fresh empty directory, ran it with stdout redirected to a log file (not a
+terminal — deliberately exercises decision 22's non-terminal path) and
+stdin `/dev/null`:
+
+```
+$ ./aliasdeck serve --addr 127.0.0.1:0 --db <emptydir>/server.db
+Generated operator password for "admin" written to <emptydir>/bootstrap-password.txt (mode 0600) — read it, then secure or remove the file; it will not be written again.
+aliasdeck: listening on 127.0.0.1:65425
+```
+
+`ls -la <emptydir>` confirmed `bootstrap-password.txt` and `server.db` are
+both `-rw-------` (0600). No fixed port was ever named — `--addr
+127.0.0.1:0` let the kernel pick, and the real bound port (65425 this run)
+was parsed from the printed `listening on` line, per decision 35.
+`curl http://127.0.0.1:65425/api/v1/health` → `200 {"status":"ok"}`;
+`curl http://127.0.0.1:65425/api/v1/openapi.yaml` → the real embedded
+spec, first line `openapi: 3.0.3`. No external service, no fixture data —
+the directory was empty before `serve` created `server.db`/`-wal`/`-shm`
+and the password file. The process was stopped with this session's own
+`kill $PID` (the pid captured from `$!` at the moment `serve` was
+launched) and confirmed gone via a follow-up `ps aux | grep aliasdeck`;
+nothing else was touched, and no fixed port was bound at any point in this
+batch's work — the lesson from the earlier `com.docker.backend` incident
+this milestone recorded (design decision 21's own history) was followed
+throughout.
+
+## Status (Phase 10 complete — Milestone 4 apply finished)
+
+All 10 phases of `tasks.md` are now `[x]`. `make check` and `make cover`
+are green; the smoke test above is real, not simulated. Files touched this
+batch: `Makefile`, `.github/workflows/ci.yml`, `.goreleaser.yaml`,
+`docs/PROJECT.md`, `docs/API.md` (new), `README.md`,
+`openspec/config.yaml`, `openspec/changes/server/tasks.md`, this file. No
+`internal/*` Go production code was touched. Ready for `sdd-verify`.

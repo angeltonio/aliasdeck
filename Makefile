@@ -46,6 +46,22 @@ vet: ## Run go vet
 tidy: ## Tidy go.mod
 	go mod tidy
 
+# Version-pinned per design decision 6: sqlc is invoked via `go run`, never
+# tracked as a go.mod tool directive (its own dependency tree forces an
+# automatic `go` directive bump this project does not want).
+SQLC_VERSION := v1.29.0
+
+.PHONY: sqlc-generate
+sqlc-generate: ## Regenerate internal/store/sqlitestore from query.sql (sqlc)
+	cd internal/store/sqlitestore && go run github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION) generate
+
+.PHONY: sqlc-diff
+sqlc-diff: sqlc-generate ## Fail if `sqlc generate` drifts from the checked-in code (task 10.3)
+	@if ! git diff --exit-code -- internal/store/sqlitestore; then \
+		echo "sqlc generate produced a diff above — regenerate and commit internal/store/sqlitestore."; \
+		exit 1; \
+	fi
+
 .PHONY: help
 help: ## List targets
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \

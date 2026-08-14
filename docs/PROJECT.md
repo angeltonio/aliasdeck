@@ -531,12 +531,14 @@ Milestone 1 (the renderer core: `internal/domain`, `internal/renderers`, `intern
 ### 9.3 Server
 
 - Go, current stable release
-- Routing: stdlib `net/http` with method-aware patterns (Go 1.22+); `chi` acceptable if middleware ergonomics justify the dependency
-- Persistence: SQLite by default, PostgreSQL optional behind a repository interface
+- Routing: stdlib `net/http` with method-aware patterns (Go 1.22+); `chi` was evaluated and not adopted — a route slice plus `http.ServeMux` covered every requirement (Milestone 4)
+- Persistence: SQLite, shipped; the repository interface (`internal/store`) allows a second backend, but only SQLite is implemented as of v0.3 — no PostgreSQL implementation exists
 - SQLite driver: **`modernc.org/sqlite` (pure Go, no cgo)** — required so `CGO_ENABLED=0` cross-compilation to darwin/linux/windows on amd64/arm64 stays trivial. A cgo-dependent driver such as `mattn/go-sqlite3` would compromise the release pipeline
-- Queries: `sqlc` for type-safe generated code; no ORM
-- Migrations: `goose` or `golang-migrate`, embedded and applied on startup
-- API: REST under `/api/v1`, documented with OpenAPI
+- Queries: `sqlc` for type-safe generated code (`internal/store/sqlitestore`, invoked version-pinned via `go run`, not a `go.mod` tool directive); no ORM
+- Migrations: **`goose`** (`github.com/pressly/goose/v3`, library mode over `embed.FS`), decided over `golang-migrate` — embedded at `internal/store/migrations/`, forward-only, applied on startup, with a refusal to start when the database schema is newer than the binary
+- API: REST under `/api/v1`, documented with OpenAPI (`docs/openapi.yaml`, embedded and served at `GET /api/v1/openapi.yaml`)
+
+**New runtime dependencies introduced in Milestone 4** (v0.3): `modernc.org/sqlite` (SQLite driver, above), `github.com/pressly/goose/v3` (migrations, above), `golang.org/x/crypto` (`argon2id` for the operator password only — device and session tokens use a random secret plus `sha256`, which gains nothing from a KDF), `github.com/mattn/go-isatty` (detects whether `serve`'s stdout is a real console, to decide whether the one-time bootstrap password prints there or is written to a `0600` file instead).
 
 ### 9.4 Web
 
@@ -559,19 +561,37 @@ Milestone 1 (the renderer core: `internal/domain`, `internal/renderers`, `intern
 aliasdeck/
 ├── cmd/
 │   └── aliasdeck/          # the single binary: CLI and `aliasdeck serve`
+│                           # (no separate cmd/aliasdeck-server/ — one static binary, decided
+│                           # before this section's first draft; see Milestone 4 history below)
 ├── internal/
 │   ├── domain/             # entities, shared by server and CLI
 │   ├── renderers/          # shell renderers (bash, zsh, powershell)
 │   ├── validate/           # alias name and payload validation
 │   ├── source/             # ConfigSource: file, git, server
-│   ├── apply/              # atomic write, bootstrap, native + chezmoi backends
-│   ├── config/             # config.yaml and aliases.yaml parsing
-│   ├── api/                # HTTP handlers, middleware, routing
-│   ├── store/              # repository interfaces + sqlite/postgres impls
-│   │   └── migrations/     # embedded; go:embed cannot reach outside its package
-│   ├── auth/               # sessions, device tokens
-│   └── sync/               # server-side resolution
-├── web/                    # Vite + React app, built into internal/api/static
+│   ├── apply/              # atomic write, shell rc bootstrap, native backend (chezmoi planned, not yet implemented)
+│   ├── config/             # config.yaml, aliases.yaml, credentials.json parsing
+│   ├── state/              # local record of a device's last successful sync
+│   ├── app/                # one CLI use case per command: init, sync, status, list, doctor, edit,
+│   │                       # uninstall, login, register, logout
+│   ├── shelltest/          # the one rule shared by every test that runs a real shell binary
+│   ├── archtest/           # import-graph boundary assertions (design decision 2): no server
+│   │                       # package may depend on internal/renderers; no client package may
+│   │                       # depend on internal/store or modernc.org/sqlite
+│   ├── server/             # `aliasdeck serve` composition root: migrate, bootstrap, Run(ctx)
+│   ├── api/                # HTTP handlers, middleware, routing, embedded OpenAPI spec
+│   ├── auth/               # operator sessions, device tokens, one-time bootstrap credential
+│   ├── store/              # repository interfaces; SQLite is the only implementation shipped
+│   │   │                   # in v0.3 (the interface allows a second backend; none exists yet)
+│   │   ├── migrations/     # embedded; go:embed cannot reach outside its own package directory,
+│   │   │                   # which is why this does not live at the repository root
+│   │   ├── sqlitestore/    # sqlc-generated SQLite implementation
+│   │   └── storetest/      # backend conformance suite, run against sqlitestore
+│   ├── sync/               # server-side resolution: domain.Resolve on the stored alias set,
+│   │                       # no SQL-side filtering
+│   └── verify/             # cross-cutting tests only: byte-identity and full-flow integration,
+│                           # the one package allowed to import both internal/renderers and the
+│                           # full server stack at once
+├── web/                    # Vite + React app, built into internal/api/static (Milestone 5 — not yet built)
 ├── docs/
 │   ├── PROJECT.md
 │   ├── API.md
@@ -581,6 +601,8 @@ aliasdeck/
 ├── README.md
 └── LICENSE
 ```
+
+Two corrections to this section's own history, both settled before Milestone 4's implementation began (recorded in `openspec/changes/server/design.md`, decisions 1 and 5): an earlier draft of this tree showed a second `cmd/aliasdeck-server/` binary, which contradicted §3.2/§16/§17's own "one static binary" framing and was never built; and it showed a repository-root `migrations/` directory, which does not compile — Go's `embed` package cannot reference a path outside the embedding file's own package directory, so the migrations live at `internal/store/migrations/` instead.
 
 ---
 
