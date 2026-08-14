@@ -1,0 +1,39 @@
+{{define "alias_panel"}}
+<div id="alias-panel">
+  {{if .FormError}}
+  <div class="error-banner">{{.FormError}}</div>
+  {{end}}
+  {{if not .Aliases}}
+  <p class="empty-state">No aliases yet — create the first one above.</p>
+  {{else}}
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Command</th>
+        <th>Description</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody id="alias-table-body">
+      {{range .Aliases}}
+      <tr id="alias-row-{{.ID}}">
+        <td><code>{{.Name}}</code></td>
+        <td><code>{{.Command}}</code></td>
+        <td class="muted">{{if .Description}}{{.Description}}{{else}}—{{end}}</td>
+        <td>
+          <button class="danger"
+                  hx-delete="/aliases/{{.ID}}"
+                  hx-target="#alias-row-{{.ID}}"
+                  hx-swap="outerHTML"
+                  hx-confirm="Delete alias &quot;{{.Name}}&quot;?">
+            Delete
+          </button>
+        </td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  {{end}}
+</div>
+{{end}}

@@ -1,0 +1,11 @@
+{{define "device_mint_result"}}
+<div id="mint-result">
+  <h2 style="margin-top:24px">2. Run on the new machine</h2>
+  <p class="muted" style="margin-top:-8px">This token expires at {{.ExpiresAt}}.</p>
+  <div class="copy-row">
+    <button type="button" class="secondary" onclick="navigator.clipboard.writeText(document.getElementById('mint-commands').innerText)">Copy</button>
+  </div>
+  <pre class="commands" id="mint-commands">aliasdeck register --url {{.URL}} --token {{.Token}}
+aliasdeck sync</pre>
+</div>
+{{end}}

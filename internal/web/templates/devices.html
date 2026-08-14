@@ -1,0 +1,43 @@
+{{define "content"}}
+<div class="page-header">
+  <div>
+    <h1>Devices</h1>
+    <p>Machines enrolled against this control plane.</p>
+  </div>
+  <a class="btn" href="/devices/add">+ Add device</a>
+</div>
+
+<div class="card">
+  {{if not .Devices}}
+  <p class="empty-state">No devices enrolled yet. Use "Add device" to mint an enrollment token.</p>
+  {{else}}
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Platform</th>
+        <th>Shell</th>
+        <th>Last sync</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .Devices}}
+      <tr>
+        <td>{{.Name}}</td>
+        <td class="mono muted">{{.Platform}}</td>
+        <td class="mono muted">{{.Shell}}</td>
+        <td>
+          {{if .Synced}}
+          <span class="badge ok">synced</span>
+          {{else}}
+          <span class="badge stale">never synced</span>
+          {{end}}
+          <span class="muted"> {{.LastSyncAt}}</span>
+        </td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  {{end}}
+</div>
+{{end}}

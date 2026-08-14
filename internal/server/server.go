@@ -12,6 +12,7 @@ import (
 
 	"github.com/angeltonio/aliasdeck/internal/api"
 	"github.com/angeltonio/aliasdeck/internal/auth"
+	"github.com/angeltonio/aliasdeck/internal/web"
 )
 
 // Bounded http.Server limits (design's Bounded Operations table, "Accept /
@@ -145,12 +146,29 @@ func Run(ctx context.Context, cfg Config) error {
 	// decision 23 requires that route stay reachable without
 	// authentication, and (*api).routes() (internal/api/router.go)
 	// registers it Public — never re-guarded — for exactly that reason.
-	handler, err := api.NewRouter(st, time.Now)
+	apiHandler, err := api.NewRouter(st, time.Now)
 	if err != nil {
 		return fmt.Errorf("server: building router: %w", err)
 	}
 
-	srv := newHTTPServer(handler)
+	// internal/web is a PROTOTYPE (see internal/web/doc.go), wired here
+	// only so the project owner can evaluate it end to end in a browser.
+	// It is a second, fully separate route table mounted alongside the
+	// API's own mux — never merged into (*api).routes() — which is what
+	// keeps every UI page out of
+	// TestOpenAPIDocumentsExactlyTheRegisteredRoutes's bidirectional
+	// comparison without weakening that test: it only ever inspects
+	// (*api).routes(), and nothing here adds to it.
+	webHandler, err := web.NewHandler(st, time.Now)
+	if err != nil {
+		return fmt.Errorf("server: building web ui: %w", err)
+	}
+
+	mux := http.NewServeMux()
+	mux.Handle("/api/v1/", apiHandler)
+	mux.Handle("/", webHandler)
+
+	srv := newHTTPServer(mux)
 
 	serveErr := make(chan error, 1)
 	go func() {

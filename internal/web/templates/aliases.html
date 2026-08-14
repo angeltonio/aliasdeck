@@ -1,0 +1,36 @@
+{{define "content"}}
+<div class="page-header">
+  <div>
+    <h1>Aliases</h1>
+    <p>Command definitions this server hands to devices on sync.</p>
+  </div>
+</div>
+
+<div class="card">
+  <h2>New alias</h2>
+  <form hx-post="/aliases" hx-target="#alias-panel" hx-swap="outerHTML" hx-on::after-request="if(event.detail.successful) this.reset()">
+    <div class="form-grid">
+      <div class="field">
+        <label for="name">Name</label>
+        <input type="text" id="name" name="name" placeholder="gs" required />
+      </div>
+      <div class="field">
+        <label for="command">Command</label>
+        <input type="text" id="command" name="command" placeholder="git status" required />
+      </div>
+      <div class="field">
+        <label for="description">Description</label>
+        <input type="text" id="description" name="description" placeholder="Show working tree status" />
+      </div>
+      <div class="field">
+        <button type="submit">Create alias</button>
+      </div>
+    </div>
+  </form>
+</div>
+
+<div class="card">
+  <h2>All aliases</h2>
+  {{template "alias_panel" .}}
+</div>
+{{end}}

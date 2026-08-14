@@ -1,0 +1,17 @@
+{{define "content"}}
+<div class="page-header">
+  <div>
+    <h1>Add a device</h1>
+    <p>Mint a single-use enrollment token, then run these two commands on the new machine.</p>
+  </div>
+</div>
+
+<div class="card">
+  <h2>1. Mint a token</h2>
+  <p class="muted" style="margin-top:-8px">The token is single-use and expires in 15 minutes.</p>
+  <button hx-post="/devices/add/token" hx-target="#mint-result" hx-swap="outerHTML">
+    Mint enrollment token
+  </button>
+  <div id="mint-result"></div>
+</div>
+{{end}}
