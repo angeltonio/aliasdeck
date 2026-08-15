@@ -133,10 +133,11 @@ func (a *api) routes() []route {
 		{Method: http.MethodPost, Pattern: deviceRevokePattern, Handler: a.handleDevicesRevoke, RequiredKind: store.TokenKindSession},
 		{Method: http.MethodPost, Pattern: deviceTokenPattern, Handler: a.handleDevicesRotateToken, RequiredKind: store.TokenKindSession},
 
-		// Sync (Phase 6): the only device-gated route. Its own Refuse
-		// (sync.go's writeUnauthorizedDevice) is the first departure from
-		// every other guarded route's generic writeUnauthorized default.
+		// Device reporting: both routes use the same device-token boundary and
+		// actionable refusal. Sync records alias application; heartbeat only
+		// records reachability.
 		{Method: http.MethodGet, Pattern: syncPattern, Handler: a.handleSync, RequiredKind: store.TokenKindDevice, Refuse: writeUnauthorizedDevice},
+		{Method: http.MethodPost, Pattern: heartbeatPattern, Handler: a.handleHeartbeat, RequiredKind: store.TokenKindDevice, Refuse: writeUnauthorizedDevice},
 	}
 }
 

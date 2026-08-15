@@ -431,6 +431,26 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /api/v1/heartbeat:
+    post:
+      summary: Record that this device is reachable without synchronizing aliases
+      description: >
+        Updates only last_seen_at for the authenticated device. It does not
+        resolve aliases or change last_sync_at, platform, or shell.
+      security:
+        - deviceToken: []
+      responses:
+        "204":
+          description: The heartbeat was recorded.
+        "401":
+          description: The device token is missing, invalid, expired, or revoked. The message names re-registration as the recovery action; a session token is refused here too.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
 components:
   securitySchemes:
     sessionToken:
@@ -444,7 +464,7 @@ components:
     deviceToken:
       type: http
       scheme: bearer
-      description: A device token, minted by device registration or rotation. Accepted only by GET /api/v1/sync.
+      description: A device token, minted by device registration or rotation. Accepted only by the device sync and heartbeat endpoints.
 
   parameters:
     Id:

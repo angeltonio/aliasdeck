@@ -12,8 +12,8 @@ import (
 // (design decision reversing the earlier single-binary model,
 // docs/WHAT-WE-ARE-BUILDING.md).
 var wantRootCommands = []string{
-	"init", "sync", "status", "list", "doctor", "edit", "uninstall",
-	"login", "register", "logout",
+	"init", "sync", "heartbeat", "watch", "status", "list", "doctor", "edit", "uninstall",
+	"login", "register", "logout", "agent",
 }
 
 // TestRootCommandRegistersEveryServerCLICommand is task 8.14's own proof,
@@ -75,5 +75,15 @@ func TestRootCommandNeverRegistersServe(t *testing.T) {
 		if c.Name() == "serve" {
 			t.Fatal("root command tree registers \"serve\": cmd/aliasdeck is client-only, serve belongs to cmd/aliasdeck-server")
 		}
+	}
+}
+
+func TestInitCommandRegistersSkipInitialSyncFlag(t *testing.T) {
+	flag := newInitCmd().Flags().Lookup("skip-initial-sync")
+	if flag == nil {
+		t.Fatal("init command does not register --skip-initial-sync")
+	}
+	if flag.DefValue != "false" {
+		t.Fatalf("--skip-initial-sync default = %q, want false", flag.DefValue)
 	}
 }

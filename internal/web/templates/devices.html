@@ -3,6 +3,7 @@
   <div>
     <h1>Devices</h1>
     <p>Machines enrolled against this control plane.</p>
+    <p id="timestamp-timezone" aria-live="polite">Timestamps are shown in UTC.</p>
   </div>
   <a class="btn" href="/devices/add">+ Add device</a>
 </div>
@@ -17,6 +18,8 @@
         <th>Name</th>
         <th>Platform</th>
         <th>Shell</th>
+        <th>Status</th>
+        <th>Last seen</th>
         <th>Last sync</th>
       </tr>
     </thead>
@@ -27,12 +30,28 @@
         <td class="mono muted">{{.Platform}}</td>
         <td class="mono muted">{{.Shell}}</td>
         <td>
+          <span class="badge {{.StatusClass}}" aria-label="{{.Status}}: {{.StatusDetail}}">{{.Status}}</span>
+        </td>
+        <td>
+          {{if .LastSeenAt}}
+          <time class="mono muted" datetime="{{.LastSeenAt.DateTime}}" data-local-time data-utc="{{.LastSeenAt.UTC}}" title="UTC timestamp. Converted to your local browser time when JavaScript is enabled.">{{.LastSeenAt.UTC}}</time>
+          {{else}}
+          <span class="mono muted">never</span>
+          {{end}}
+        </td>
+        <td>
           {{if .Synced}}
           <span class="badge ok">synced</span>
           {{else}}
           <span class="badge stale">never synced</span>
           {{end}}
-          <span class="muted"> {{.LastSyncAt}}</span>
+          <span class="muted">
+            {{if .LastSyncAt}}
+            <time class="mono" datetime="{{.LastSyncAt.DateTime}}" data-local-time data-utc="{{.LastSyncAt.UTC}}" title="UTC timestamp. Converted to your local browser time when JavaScript is enabled.">{{.LastSyncAt.UTC}}</time>
+            {{else}}
+            <span class="mono">never</span>
+            {{end}}
+          </span>
         </td>
       </tr>
       {{end}}

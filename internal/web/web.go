@@ -40,9 +40,10 @@ type page struct {
 // webapp is the composed set of dependencies every handler in this
 // package closes over — mirrors internal/api's own unexported api type.
 type webapp struct {
-	store store.Store
-	now   func() time.Time
-	tmpl  *pageTemplates
+	store       store.Store
+	now         func() time.Time
+	tmpl        *pageTemplates
+	enrollments *enrollmentTracker
 }
 
 // NewHandler builds the complete prototype UI handler: every page in
@@ -55,7 +56,7 @@ func NewHandler(st store.Store, now func() time.Time) (http.Handler, error) {
 	if err != nil {
 		return nil, fmt.Errorf("web: loading templates: %w", err)
 	}
-	a := &webapp{store: st, now: now, tmpl: tmpl}
+	a := &webapp{store: st, now: now, tmpl: tmpl, enrollments: newEnrollmentTracker()}
 	return newMux(a)
 }
 
@@ -117,6 +118,7 @@ func (a *webapp) pages() []page {
 		{Method: http.MethodGet, Pattern: "/devices", Handler: a.handleDevicesPage, Guard: guardSession},
 		{Method: http.MethodGet, Pattern: "/devices/add", Handler: a.handleDevicesAddPage, Guard: guardSession},
 		{Method: http.MethodPost, Pattern: "/devices/add/token", Handler: a.handleDevicesMintToken, Guard: guardSession},
+		{Method: http.MethodGet, Pattern: "/devices/add/status/{id}", Handler: a.handleDeviceEnrollmentStatus, Guard: guardSession},
 	}
 }
 

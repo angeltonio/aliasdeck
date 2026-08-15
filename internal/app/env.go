@@ -8,6 +8,7 @@
 package app
 
 import (
+	"context"
 	"io"
 	"os"
 	"os/exec"
@@ -33,6 +34,15 @@ type Env struct {
 	// invoking exec.Command, so an unresolvable editor fails with a clear
 	// error rather than a raw "file not found" from the OS.
 	LookPath func(file string) (string, error)
+
+	// RunCommand executes a process. Agent lifecycle operations inject this
+	// boundary in tests instead of invoking launchctl.
+	RunCommand func(ctx context.Context, name string, args ...string) ([]byte, error)
+	UserID     func() int
+	MkdirAll   func(path string, perm os.FileMode) error
+	WriteFile  func(path string, data []byte, perm os.FileMode) error
+	Remove     func(path string) error
+	Stat       func(path string) (os.FileInfo, error)
 }
 
 // OSEnv returns an Env backed by the real process: os.Stdin/Stdout/Stderr,
@@ -46,6 +56,14 @@ func OSEnv() Env {
 		HomeDir:  os.UserHomeDir,
 		Now:      time.Now,
 		LookPath: exec.LookPath,
+		RunCommand: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			return exec.CommandContext(ctx, name, args...).CombinedOutput()
+		},
+		UserID:    os.Getuid,
+		MkdirAll:  os.MkdirAll,
+		WriteFile: os.WriteFile,
+		Remove:    os.Remove,
+		Stat:      os.Stat,
 	}
 }
 

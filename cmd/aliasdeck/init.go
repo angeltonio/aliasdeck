@@ -11,6 +11,7 @@ func newInitCmd() *cobra.Command {
 	var source string
 	var noBootstrap bool
 	var assumeYes bool
+	var skipInitialSync bool
 	var rcFile string
 
 	cmd := &cobra.Command{
@@ -22,11 +23,12 @@ func newInitCmd() *cobra.Command {
 
 			env := app.OSEnv()
 			report, err := app.Init(cmd.Context(), env, app.InitOptions{
-				Source:      source,
-				NoBootstrap: noBootstrap,
-				AssumeYes:   assumeYes,
-				Shell:       shellFlag(cmd),
-				RCFile:      rcFile,
+				Source:          source,
+				NoBootstrap:     noBootstrap,
+				AssumeYes:       assumeYes,
+				SkipInitialSync: skipInitialSync,
+				Shell:           shellFlag(cmd),
+				RCFile:          rcFile,
 			})
 			if err != nil {
 				return err
@@ -42,6 +44,8 @@ func newInitCmd() *cobra.Command {
 		"create configuration files without editing any shell rc file")
 	cmd.Flags().BoolVarP(&assumeYes, "yes", "f", false,
 		"add the shell rc bootstrap line without asking (for non-interactive installs)")
+	cmd.Flags().BoolVar(&skipInitialSync, "skip-initial-sync", false,
+		"create local configuration without running the initial sync")
 	cmd.Flags().StringVar(&rcFile, "rc-file", "", "override the shell rc file path used for bootstrapping")
 	return cmd
 }

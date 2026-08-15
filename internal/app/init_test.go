@@ -78,6 +78,26 @@ func TestInitNoBootstrapSkipsPromptAndRCFile(t *testing.T) {
 	}
 }
 
+func TestInitCanSkipInitialSync(t *testing.T) {
+	te := newTestEnv(t)
+	te.setenv("ALIASDECK_PLATFORM", "macos")
+	te.setenv("ALIASDECK_SHELL", "zsh")
+
+	report, err := Init(context.Background(), te.Env, InitOptions{
+		NoBootstrap:     true,
+		SkipInitialSync: true,
+	})
+	if err != nil {
+		t.Fatalf("Init() returned an error: %v", err)
+	}
+	if report.Sync.AliasCount != 0 || report.Sync.Revision != "" {
+		t.Fatalf("skipped sync report = %+v, want no sync result", report.Sync)
+	}
+	if _, err := os.Stat(report.Sync.OutputPath); !os.IsNotExist(err) {
+		t.Fatalf("generated file exists after skipped initial sync, stat error = %v", err)
+	}
+}
+
 func TestInitPromptsBeforeBootstrapAndAddsOnConsent(t *testing.T) {
 	te := newTestEnv(t)
 	te.setenv("ALIASDECK_PLATFORM", "macos")

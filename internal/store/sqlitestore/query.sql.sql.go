@@ -382,6 +382,24 @@ func (q *Queries) GetTokenByLookup(ctx context.Context, lookup string) (Token, e
 	return i, err
 }
 
+const heartbeatDevice = `-- name: HeartbeatDevice :execrows
+UPDATE devices SET last_seen_at = ?, updated_at = ? WHERE id = ?
+`
+
+type HeartbeatDeviceParams struct {
+	LastSeenAt *string
+	UpdatedAt  string
+	ID         string
+}
+
+func (q *Queries) HeartbeatDevice(ctx context.Context, arg HeartbeatDeviceParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, heartbeatDevice, arg.LastSeenAt, arg.UpdatedAt, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const insertAliasDevice = `-- name: InsertAliasDevice :exec
 INSERT INTO alias_devices (alias_id, device_id) VALUES (?, ?)
 `

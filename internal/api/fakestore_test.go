@@ -335,6 +335,20 @@ func (r fakeDeviceRepo) Touch(_ context.Context, id string, platform domain.Plat
 	return nil
 }
 
+func (r fakeDeviceRepo) Heartbeat(_ context.Context, id string, at time.Time) error {
+	s := r.s
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	d, ok := s.devices[id]
+	if !ok {
+		return store.ErrNotFound
+	}
+	seenAt := at
+	d.LastSeenAt = &seenAt
+	s.devices[id] = d
+	return nil
+}
+
 func (r fakeDeviceRepo) Revoke(_ context.Context, id string, _ time.Time) error {
 	s := r.s
 	s.mu.Lock()

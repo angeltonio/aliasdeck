@@ -112,6 +112,24 @@ func (r deviceRepo) Touch(ctx context.Context, id string, platform domain.Platfo
 	return nil
 }
 
+// Heartbeat records device reachability without changing sync-specific
+// bookkeeping or the platform/shell last reported by a sync.
+func (r deviceRepo) Heartbeat(ctx context.Context, id string, at time.Time) error {
+	stamp := formatTime(at)
+	rows, err := r.q.HeartbeatDevice(ctx, HeartbeatDeviceParams{
+		LastSeenAt: &stamp,
+		UpdatedAt:  formatTime(time.Now()),
+		ID:         id,
+	})
+	if err != nil {
+		return fmt.Errorf("store: recording device heartbeat: %w", err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("recording device heartbeat: %w", store.ErrNotFound)
+	}
+	return nil
+}
+
 func (r deviceRepo) Revoke(ctx context.Context, id string, at time.Time) error {
 	revokedAt := formatTime(at)
 	rows, err := r.q.RevokeDevice(ctx, RevokeDeviceParams{

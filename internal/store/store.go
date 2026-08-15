@@ -84,6 +84,11 @@ type DeviceRepo interface {
 	// ErrNotFound if no device with that ID exists.
 	Touch(ctx context.Context, id string, platform domain.Platform, shell domain.Shell, at time.Time) error
 
+	// Heartbeat records that a device reached the control plane without
+	// changing its last successful alias synchronization. It returns
+	// ErrNotFound if no device with that ID exists.
+	Heartbeat(ctx context.Context, id string, at time.Time) error
+
 	// Revoke marks the device revoked at the given time, invalidating any
 	// device token minted for it. It returns ErrNotFound if no device
 	// with that ID exists.

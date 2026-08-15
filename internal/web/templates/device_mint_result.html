@@ -6,5 +6,24 @@
     <button type="button" class="secondary" onclick="navigator.clipboard.writeText(document.getElementById('mint-commands').innerText)">Copy</button>
   </div>
   <pre class="commands" id="mint-commands">{{.Command}}</pre>
+  {{template "device_enrollment_pending" .}}
+</div>
+{{end}}
+
+{{define "device_enrollment_pending"}}
+<div id="enrollment-status" hx-get="/devices/add/status/{{.StatusID}}" hx-trigger="every 2s" hx-swap="outerHTML">
+  <p class="muted">{{.Message}}</p>
+</div>
+{{end}}
+
+{{define "device_enrollment_complete"}}
+<div id="enrollment-status">
+  <p class="muted">{{.Message}}</p>
+</div>
+{{end}}
+
+{{define "device_enrollment_expired"}}
+<div id="enrollment-status">
+  <p class="muted">{{.Message}}</p>
 </div>
 {{end}}

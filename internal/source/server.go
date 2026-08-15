@@ -14,7 +14,7 @@ import (
 	"github.com/angeltonio/aliasdeck/internal/validate"
 )
 
-// serverRequestTimeout bounds a single GET /api/v1/sync request end-to-end
+// serverRequestTimeout bounds a single request to the AliasDeck server end-to-end
 // (design's Bounded Operations table, "ServerSource request"). There are no
 // retries: a retry is a second unbounded thing, and this project has fixed
 // that shape of failure enough times (internal/source/gitrun.go's
@@ -47,6 +47,12 @@ const ServerResponseLimit = 1 << 20
 // (M3 decision 14).
 type UnfilteredResolver interface {
 	ResolveUnfiltered(ctx context.Context, dev domain.Device) (domain.ResolvedConfig, error)
+}
+
+// Heartbeater is implemented by a source that can report device reachability
+// independently from resolving and applying aliases.
+type Heartbeater interface {
+	Heartbeat(ctx context.Context) error
 }
 
 // ServerSource resolves a device's aliases from a self-hosted AliasDeck
@@ -130,6 +136,46 @@ func (s *ServerSource) Resolve(ctx context.Context, dev domain.Device) (domain.R
 // top of it.
 func (s *ServerSource) ResolveUnfiltered(ctx context.Context, dev domain.Device) (domain.ResolvedConfig, error) {
 	return s.resolveUnfiltered(ctx, dev)
+}
+
+// Heartbeat reports that this device reached the server without performing an
+// alias sync or modifying local rendered output/state.
+func (s *ServerSource) Heartbeat(ctx context.Context) error {
+	if err := ValidateServerURL(s.URL, s.AllowHTTP); err != nil {
+		return fmt.Errorf("server source: %w", err)
+	}
+
+	reqURL, err := s.heartbeatURL()
+	if err != nil {
+		return fmt.Errorf("server source %s: %w", s.URL, err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, nil)
+	if err != nil {
+		return fmt.Errorf("server source %s: building request: %w", s.URL, err)
+	}
+	req.Header.Set("Authorization", "Bearer "+s.Token)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := s.httpClient().Do(req)
+	if err != nil {
+		if errors.Is(err, errRedirectRefused) {
+			return fmt.Errorf("server source %s: %w", s.URL, err)
+		}
+		return fmt.Errorf("server source %s: unreachable: %w", s.URL, err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, ServerResponseLimit+1))
+	if err != nil {
+		return fmt.Errorf("server source %s: reading response: %w", s.URL, err)
+	}
+	if len(body) > ServerResponseLimit {
+		return fmt.Errorf("server source %s: response exceeds the %d byte limit", s.URL, ServerResponseLimit)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("server source %s: %s: %s", s.URL, resp.Status, serverErrorMessage(body))
+	}
+	return nil
 }
 
 // resolveUnfiltered is Resolve and ResolveUnfiltered's shared implementation.
@@ -221,6 +267,14 @@ func (s *ServerSource) syncURL(dev domain.Device) (string, error) {
 	u.RawQuery = q.Encode()
 
 	return u.String(), nil
+}
+
+func (s *ServerSource) heartbeatURL() (string, error) {
+	u, err := url.Parse(s.URL)
+	if err != nil {
+		return "", fmt.Errorf("parsing server url: %w", err)
+	}
+	return u.JoinPath("api", "v1", "heartbeat").String(), nil
 }
 
 // errRedirectRefused is checked with errors.Is in fetchSync so a refused

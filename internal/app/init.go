@@ -45,6 +45,11 @@ type InitOptions struct {
 	// exactly where automation needs it.
 	AssumeYes bool
 
+	// SkipInitialSync creates the local configuration without contacting the
+	// configured source. This is useful when registration must happen before
+	// the first authenticated sync.
+	SkipInitialSync bool
+
 	// Shell overrides shell detection for this run (--shell).
 	Shell string
 
@@ -116,11 +121,20 @@ func Init(ctx context.Context, env Env, opts InitOptions) (InitReport, error) {
 	}
 	report.Device = dc.Device
 
-	syncReport, err := syncWithContext(ctx, env, dc)
-	if err != nil {
-		return report, fmt.Errorf("initial sync: %w", err)
+	if opts.SkipInitialSync {
+		outputPath, err := dc.Backend.OutputPath(dc.Device)
+		if err != nil {
+			return report, fmt.Errorf("resolving generated output path: %w", err)
+		}
+		report.Sync = SyncReport{Device: dc.Device, Source: dc.SourceDesc, Backend: dc.Backend.Name(), OutputPath: outputPath}
+	} else {
+		syncReport, err := syncWithContext(ctx, env, dc)
+		if err != nil {
+			return report, fmt.Errorf("initial sync: %w", err)
+		}
+		report.Sync = syncReport
 	}
-	report.Sync = syncReport
+	syncReport := report.Sync
 
 	home, err := env.HomeDir()
 	if err != nil {

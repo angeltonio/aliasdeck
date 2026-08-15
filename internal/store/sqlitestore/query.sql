@@ -79,6 +79,9 @@ UPDATE devices SET name = ?, updated_at = ? WHERE id = ?;
 -- name: TouchDevice :execrows
 UPDATE devices SET platform = ?, shell = ?, last_seen_at = ?, last_sync_at = ?, updated_at = ? WHERE id = ?;
 
+-- name: HeartbeatDevice :execrows
+UPDATE devices SET last_seen_at = ?, updated_at = ? WHERE id = ?;
+
 -- name: RevokeDevice :execrows
 UPDATE devices SET revoked_at = ?, updated_at = ? WHERE id = ?;
 

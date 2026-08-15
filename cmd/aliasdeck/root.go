@@ -23,6 +23,9 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(
 		newInitCmd(),
 		newSyncCmd(),
+		newHeartbeatCmd(),
+		newWatchCmd(),
+		newAgentCmd(),
 		newStatusCmd(),
 		newListCmd(),
 		newDoctorCmd(),
