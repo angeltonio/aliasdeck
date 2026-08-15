@@ -119,6 +119,29 @@ func Bootstrap(ctx context.Context, st store.Store, getenv func(string) string, 
 	return nil
 }
 
+// BootstrapWithSetup keeps the non-interactive environment override while
+// replacing the generated fixed admin account with a credentialed web setup
+// flow for fresh interactive deployments.
+func BootstrapWithSetup(ctx context.Context, st store.Store, getenv func(string) string, out io.Writer, setupCredentialPath string) error {
+	// A blank path is retained for embedded/test callers that use the legacy
+	// Bootstrap contract. Production wiring always supplies the server data
+	// directory path, so interactive deployments cannot silently fall back.
+	if setupCredentialPath == "" {
+		return Bootstrap(ctx, st, getenv, out, "")
+	}
+	if getenv(AdminPasswordEnv) != "" {
+		return Bootstrap(ctx, st, getenv, out, "")
+	}
+	count, err := st.Operators().Count(ctx)
+	if err != nil {
+		return fmt.Errorf("auth: counting operators: %w", err)
+	}
+	if count > 0 {
+		return nil
+	}
+	return EnsureSetupCredential(setupCredentialPath, out)
+}
+
 // deliverGeneratedPassword is Bootstrap's routing decision (design decision
 // 22): print directly to out when passwordFilePath is empty (out is a real
 // console), or write the password to passwordFilePath and print only its

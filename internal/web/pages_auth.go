@@ -9,8 +9,9 @@ import (
 
 // loginPageData is login.html's own data shape.
 type loginPageData struct {
-	Error    string
-	Username string
+	Error          string
+	Username       string
+	SetupAvailable bool
 }
 
 // handleLoginPage serves the login form. An already-authenticated browser
@@ -21,7 +22,7 @@ func (a *webapp) handleLoginPage(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/aliases", http.StatusSeeOther)
 		return
 	}
-	a.renderLogin(w, http.StatusOK, loginPageData{})
+	a.renderLogin(w, http.StatusOK, loginPageData{SetupAvailable: auth.SetupEnabled(a.setupCredentialPath)})
 }
 
 func (a *webapp) renderLogin(w http.ResponseWriter, status int, data loginPageData) {

@@ -48,6 +48,10 @@ type Config struct {
 	// leaves it unset keeps the original console-printing behavior.
 	BootstrapPasswordFile string
 
+	// SetupCredentialFile is the 0600 one-time credential file for interactive
+	// first-run operator setup.
+	SetupCredentialFile string
+
 	// ShutdownTimeout bounds the graceful drain Run gives in-flight
 	// requests once shutdown starts (design's Bounded Operations table:
 	// "Shutdown ... srv.Shutdown(ctx) with a 10s drain"). Defaults to

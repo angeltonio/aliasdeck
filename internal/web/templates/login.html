@@ -14,6 +14,7 @@
     <div class="login-card">
       <h1>AliasDeck</h1>
       <p class="sub">Sign in with the operator account to manage aliases and devices.</p>
+      {{if .SetupAvailable}}<p class="sub">First-run setup is available. Use the one-time credential from the server data directory to open the setup link.</p>{{end}}
       {{if .Error}}
       <div class="error-banner">{{.Error}}</div>
       {{end}}

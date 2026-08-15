@@ -81,6 +81,8 @@ const serverDBFileName = "server.db"
 // decision 22), resolved as a sibling of the database file.
 const bootstrapPasswordFileName = "bootstrap-password.txt"
 
+const setupCredentialFileName = "setup-credential.txt"
+
 // newRootCmd builds the aliasdeck-server command tree: flags and
 // environment resolve to a server.Config, and server.Run owns everything
 // from there (migration, bootstrap, the bounded http.Server, and bounded
@@ -109,6 +111,7 @@ func newRootCmd() *cobra.Command {
 				Getenv:                os.Getenv,
 				Stdout:                stdout,
 				BootstrapPasswordFile: bootstrapPasswordFilePath(isTerminalWriter(stdout), resolvedDB),
+				SetupCredentialFile:   filepath.Join(filepath.Dir(resolvedDB), setupCredentialFileName),
 			})
 		},
 	}

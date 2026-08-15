@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Set up AliasDeck</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="login-shell"><div class="login-card">
+    <h1>Set up AliasDeck</h1>
+    <p class="sub">Create the operator account for this server.</p>
+    {{if .Error}}<div class="error-banner">{{.Error}}</div>{{end}}
+    <form method="post" action="/setup">
+      <input type="hidden" name="credential" value="{{.Credential}}" />
+      <div class="field"><label for="username">Username</label><input type="text" id="username" name="username" value="{{.Username}}" autocomplete="username" required /></div>
+      <div class="field"><label for="password">Password</label><input type="password" id="password" name="password" autocomplete="new-password" required /></div>
+      <div class="field"><label for="confirmation">Confirm password</label><input type="password" id="confirmation" name="confirmation" autocomplete="new-password" required /></div>
+      <button type="submit">Create operator account</button>
+    </form>
+  </div></div>
+</body>
+</html>

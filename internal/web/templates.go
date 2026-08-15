@@ -23,6 +23,7 @@ var staticFS embed.FS
 // for instance) colliding in the same *template.Template.
 type pageTemplates struct {
 	login      *template.Template
+	setup      *template.Template
 	aliases    *template.Template
 	aliasPanel *template.Template
 	devices    *template.Template
@@ -36,6 +37,10 @@ func loadTemplates() (*pageTemplates, error) {
 	}
 
 	login, err := parse("templates/login.html")
+	if err != nil {
+		return nil, err
+	}
+	setup, err := parse("templates/setup.html")
 	if err != nil {
 		return nil, err
 	}
@@ -62,6 +67,7 @@ func loadTemplates() (*pageTemplates, error) {
 
 	return &pageTemplates{
 		login:      login,
+		setup:      setup,
 		aliases:    aliases,
 		aliasPanel: aliasPanel,
 		devices:    devices,

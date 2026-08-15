@@ -112,7 +112,7 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	defer st.Close()
 
-	if err := auth.Bootstrap(ctx, st, cfg.Getenv, cfg.Stdout, cfg.BootstrapPasswordFile); err != nil {
+	if err := auth.BootstrapWithSetup(ctx, st, cfg.Getenv, cfg.Stdout, cfg.SetupCredentialFile); err != nil {
 		if ctx.Err() != nil {
 			return nil
 		}
@@ -159,7 +159,7 @@ func Run(ctx context.Context, cfg Config) error {
 	// TestOpenAPIDocumentsExactlyTheRegisteredRoutes's bidirectional
 	// comparison without weakening that test: it only ever inspects
 	// (*api).routes(), and nothing here adds to it.
-	webHandler, err := web.NewHandler(st, time.Now)
+	webHandler, err := web.NewHandler(st, time.Now, cfg.SetupCredentialFile)
 	if err != nil {
 		return fmt.Errorf("server: building web ui: %w", err)
 	}

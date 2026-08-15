@@ -40,10 +40,11 @@ type page struct {
 // webapp is the composed set of dependencies every handler in this
 // package closes over — mirrors internal/api's own unexported api type.
 type webapp struct {
-	store       store.Store
-	now         func() time.Time
-	tmpl        *pageTemplates
-	enrollments *enrollmentTracker
+	store               store.Store
+	now                 func() time.Time
+	tmpl                *pageTemplates
+	enrollments         *enrollmentTracker
+	setupCredentialPath string
 }
 
 // NewHandler builds the complete prototype UI handler: every page in
@@ -51,12 +52,16 @@ type webapp struct {
 // from the embedded tree. It returns a non-nil error if any page
 // declares guardUndeclared, exactly like internal/api.NewRouter refuses
 // an unguarded API route.
-func NewHandler(st store.Store, now func() time.Time) (http.Handler, error) {
+func NewHandler(st store.Store, now func() time.Time, setupPath ...string) (http.Handler, error) {
 	tmpl, err := loadTemplates()
 	if err != nil {
 		return nil, fmt.Errorf("web: loading templates: %w", err)
 	}
-	a := &webapp{store: st, now: now, tmpl: tmpl, enrollments: newEnrollmentTracker()}
+	path := ""
+	if len(setupPath) > 0 {
+		path = setupPath[0]
+	}
+	a := &webapp{store: st, now: now, tmpl: tmpl, enrollments: newEnrollmentTracker(), setupCredentialPath: path}
 	return newMux(a)
 }
 
@@ -109,6 +114,8 @@ func (a *webapp) pages() []page {
 		{Method: http.MethodGet, Pattern: "/{$}", Handler: a.handleRoot, Guard: guardPublic},
 		{Method: http.MethodGet, Pattern: "/login", Handler: a.handleLoginPage, Guard: guardPublic},
 		{Method: http.MethodPost, Pattern: "/login", Handler: a.handleLoginSubmit, Guard: guardPublic},
+		{Method: http.MethodGet, Pattern: "/setup", Handler: a.handleSetupPage, Guard: guardPublic},
+		{Method: http.MethodPost, Pattern: "/setup", Handler: a.handleSetupSubmit, Guard: guardPublic},
 		{Method: http.MethodPost, Pattern: "/logout", Handler: a.handleLogout, Guard: guardSession},
 
 		{Method: http.MethodGet, Pattern: "/aliases", Handler: a.handleAliasesPage, Guard: guardSession},
