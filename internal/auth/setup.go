@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -43,7 +44,8 @@ func EnsureSetupCredential(path string, out io.Writer) error {
 	if _, err := rand.Read(token); err != nil {
 		return fmt.Errorf("auth: generating setup credential: %w", err)
 	}
-	if err := writeSecretFile(path, string(token)); err != nil {
+	credential := base64.RawURLEncoding.EncodeToString(token)
+	if err := writeSecretFile(path, credential); err != nil {
 		return err
 	}
 	if out != nil {
