@@ -13,6 +13,7 @@
     {{if .Error}}<div class="error-banner">{{.Error}}</div>{{end}}
     <form method="post" action="/setup">
       <input type="hidden" name="credential" value="{{.Credential}}" />
+      {{if .LocalToken}}<input type="hidden" name="local_token" value="{{.LocalToken}}" />{{end}}
       <div class="field"><label for="username">Username</label><input type="text" id="username" name="username" value="{{.Username}}" autocomplete="username" required /></div>
       <div class="field"><label for="password">Password</label><input type="password" id="password" name="password" autocomplete="new-password" required /></div>
       <div class="field"><label for="confirmation">Confirm password</label><input type="password" id="confirmation" name="confirmation" autocomplete="new-password" required /></div>

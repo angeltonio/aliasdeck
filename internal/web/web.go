@@ -44,6 +44,7 @@ type webapp struct {
 	now                 func() time.Time
 	tmpl                *pageTemplates
 	enrollments         *enrollmentTracker
+	setupTokens         *setupTokenTracker
 	setupCredentialPath string
 }
 
@@ -61,7 +62,7 @@ func NewHandler(st store.Store, now func() time.Time, setupPath ...string) (http
 	if len(setupPath) > 0 {
 		path = setupPath[0]
 	}
-	a := &webapp{store: st, now: now, tmpl: tmpl, enrollments: newEnrollmentTracker(), setupCredentialPath: path}
+	a := &webapp{store: st, now: now, tmpl: tmpl, enrollments: newEnrollmentTracker(), setupTokens: newSetupTokenTracker(), setupCredentialPath: path}
 	return newMux(a)
 }
 

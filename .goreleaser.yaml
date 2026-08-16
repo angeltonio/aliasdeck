@@ -224,13 +224,14 @@ release:
     is too late — restoring the database file you backed up *before*
     upgrading is the only way back down; there is no downgrade command.
 
-    **The one-time operator password.** On a brand-new database, `aliasdeck
-    serve` creates exactly one operator account (`admin`) and prints a
-    generated password once. On a real terminal it prints there; otherwise
-    (for example under systemd, where stdout is the journal) it is instead
-    written once, atomically, to a `0600` file next to the database, and
-    only that file's path is printed. It is never written to a log either
-    way.
+    **First-run operator setup.** On a brand-new database, open `/setup`
+    directly from the server host to create the operator username and
+    password without reading a separate setup credential. This shortcut is
+    accepted only from a direct loopback HTTP connection; remote and proxied
+    requests must use the one-time credential written to
+    `setup-credential.txt` beside the database. For non-interactive or
+    headless deployments, set `ALIASDECK_ADMIN_PASSWORD` before the first
+    start to create the `admin` operator without using the browser setup.
 
     **The default bind is loopback only.** `aliasdeck-server` with no
     `--addr` binds `127.0.0.1:8080` and nothing else. Reaching it from

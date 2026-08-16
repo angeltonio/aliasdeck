@@ -49,7 +49,7 @@ func EnsureSetupCredential(path string, out io.Writer) error {
 		return err
 	}
 	if out != nil {
-		_, _ = out.Write([]byte(fmt.Sprintf("AliasDeck first-run setup credential written to %s (mode 0600). Open /setup?credential=<value from this file> once to create the operator account.\n", path)))
+		_, _ = out.Write([]byte(fmt.Sprintf("AliasDeck first-run setup is ready. Open /setup directly from the server host. Remote setup requires the one-time credential in %s (mode 0600): /setup?credential=<value from this file>.\n", path)))
 	}
 	return nil
 }
@@ -64,6 +64,19 @@ func SetupEnabled(path string) bool {
 // makes replay safe even if a process exits between the database commit and
 // the rename.
 func CompleteSetup(ctx context.Context, st store.Store, credentialPath, credential, username, password, confirmation string) error {
+	return completeSetup(ctx, st, credentialPath, credential, username, password, confirmation, true)
+}
+
+// CompleteLocalSetup creates the first operator without requiring callers to
+// handle the setup credential. The HTTP layer must only call this after proving
+// that the request came directly from a loopback connection. The credential
+// file remains the one-time setup switch and is consumed exactly as it is for
+// credentialed remote setup.
+func CompleteLocalSetup(ctx context.Context, st store.Store, credentialPath, username, password, confirmation string) error {
+	return completeSetup(ctx, st, credentialPath, "", username, password, confirmation, false)
+}
+
+func completeSetup(ctx context.Context, st store.Store, credentialPath, credential, username, password, confirmation string, requireCredential bool) error {
 	if credentialPath == "" || !SetupEnabled(credentialPath) {
 		return ErrSetupDisabled
 	}
@@ -73,13 +86,15 @@ func CompleteSetup(ctx context.Context, st store.Store, credentialPath, credenti
 	}
 	_ = lock.Close()
 	defer os.Remove(credentialPath + ".lock")
-	want, err := os.ReadFile(credentialPath)
-	if err != nil {
-		return ErrSetupDisabled
-	}
-	gotHash, wantHash := sha256.Sum256([]byte(strings.TrimSpace(credential))), sha256.Sum256([]byte(strings.TrimSpace(string(want))))
-	if subtle.ConstantTimeCompare(gotHash[:], wantHash[:]) != 1 {
-		return ErrInvalidSetupCredential
+	if requireCredential {
+		want, err := os.ReadFile(credentialPath)
+		if err != nil {
+			return ErrSetupDisabled
+		}
+		gotHash, wantHash := sha256.Sum256([]byte(strings.TrimSpace(credential))), sha256.Sum256([]byte(strings.TrimSpace(string(want))))
+		if subtle.ConstantTimeCompare(gotHash[:], wantHash[:]) != 1 {
+			return ErrInvalidSetupCredential
+		}
 	}
 	username = strings.TrimSpace(username)
 	if len(username) < minSetupUsernameLength {
