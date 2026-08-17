@@ -1,23 +1,19 @@
 <!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Set up AliasDeck</title>
-  <link rel="stylesheet" href="/static/style.css" />
-</head>
+<html lang="{{.Lang}}">
+<head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" /><title>{{tr .Lang "setup.title"}}</title><link rel="stylesheet" href="/static/style.css" /></head>
 <body>
+  <div class="auth-language">{{template "language_selector" .}}</div>
   <div class="login-shell"><div class="login-card">
-    <h1>Set up AliasDeck</h1>
-    <p class="sub">Create the operator account for this server.</p>
+    <h1>{{tr .Lang "setup.title"}}</h1>
+    <p class="sub">{{tr .Lang "setup.subtitle"}}</p>
     {{if .Error}}<div class="error-banner">{{.Error}}</div>{{end}}
     <form method="post" action="/setup">
       <input type="hidden" name="credential" value="{{.Credential}}" />
       {{if .LocalToken}}<input type="hidden" name="local_token" value="{{.LocalToken}}" />{{end}}
-      <div class="field"><label for="username">Username</label><input type="text" id="username" name="username" value="{{.Username}}" autocomplete="username" required /></div>
-      <div class="field"><label for="password">Password</label><input type="password" id="password" name="password" autocomplete="new-password" required /></div>
-      <div class="field"><label for="confirmation">Confirm password</label><input type="password" id="confirmation" name="confirmation" autocomplete="new-password" required /></div>
-      <button type="submit">Create operator account</button>
+      <div class="field"><label for="username">{{tr .Lang "field.username"}}</label><input type="text" id="username" name="username" value="{{.Username}}" autocomplete="username" required /></div>
+      <div class="field"><label for="password">{{tr .Lang "field.password"}}</label><input type="password" id="password" name="password" autocomplete="new-password" required /></div>
+      <div class="field"><label for="confirmation">{{tr .Lang "field.confirm_password"}}</label><input type="password" id="confirmation" name="confirmation" autocomplete="new-password" required /></div>
+      <button type="submit">{{tr .Lang "setup.submit"}}</button>
     </form>
   </div></div>
 </body>

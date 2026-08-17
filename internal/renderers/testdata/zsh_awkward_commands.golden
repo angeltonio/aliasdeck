@@ -7,6 +7,14 @@
 # Changes made to this file are lost on the next `aliasdeck sync`.
 # Edit your aliases.yaml, or use the AliasDeck web UI.
 
+if [ -n "${ALIASDECK_MANAGED_ALIAS_NAMES-}" ]; then
+  for aliasdeck_managed_name in $ALIASDECK_MANAGED_ALIAS_NAMES; do
+    unalias -- "$aliasdeck_managed_name" 2>/dev/null || true
+  done
+fi
+ALIASDECK_MANAGED_ALIAS_NAMES='gwip ports reload'
+unset aliasdeck_managed_name
+
 # Nested and unbalanced quotes
 alias gwip='git commit -m '\''wip: don'\''t ask'\'''
 
@@ -14,3 +22,11 @@ alias ports='lsof -nP -iTCP -sTCP:LISTEN | awk '\''{print $1, $9}'\'''
 
 # Expansion must stay literal in the file
 alias reload='source "$HOME/.zshrc" && echo $(date)'
+
+typeset -g ALIASDECK_GENERATED_ALIAS_FILE=${${(%):-%N}:A}
+_aliasdeck_reload_generated_aliases() {
+  [ -r "$ALIASDECK_GENERATED_ALIAS_FILE" ] && . "$ALIASDECK_GENERATED_ALIAS_FILE"
+}
+autoload -Uz add-zsh-hook
+add-zsh-hook -d precmd _aliasdeck_reload_generated_aliases 2>/dev/null || true
+add-zsh-hook precmd _aliasdeck_reload_generated_aliases

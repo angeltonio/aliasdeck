@@ -7,6 +7,14 @@
 # Changes made to this file are lost on the next `aliasdeck sync`.
 # Edit your aliases.yaml, or use the AliasDeck web UI.
 
+if [ -n "${ALIASDECK_MANAGED_ALIAS_NAMES-}" ]; then
+  for aliasdeck_managed_name in $ALIASDECK_MANAGED_ALIAS_NAMES; do
+    unalias -- "$aliasdeck_managed_name" 2>/dev/null || true
+  done
+fi
+ALIASDECK_MANAGED_ALIAS_NAMES='dcu dps gwip'
+unset aliasdeck_managed_name
+
 # Start the Compose stack
 alias dcu='docker compose up -d'
 

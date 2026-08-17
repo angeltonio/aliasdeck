@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/angeltonio/aliasdeck/internal/auth"
 	"github.com/angeltonio/aliasdeck/internal/store"
 )
 
@@ -185,7 +186,7 @@ func TestNewRouterRefusesAHealthRouteMissingItsPublicDeclaration(t *testing.T) {
 // subtest here would fail on Content-Type, and most would fail to decode
 // as this package's own errorBody shape at all.
 func TestGuardedRoutesReturn401InTheStandardErrorShape(t *testing.T) {
-	a := &api{store: newFakeStore(), now: time.Now, loginSem: make(chan struct{}, loginConcurrency)}
+	a := &api{store: newFakeStore(), now: time.Now, loginLimiter: auth.NewPasswordLimiter()}
 	h, err := newRouter(a.routes(), a.store.Tokens(), a.now)
 	if err != nil {
 		t.Fatalf("newRouter(a.routes(), ...) = %v, want nil", err)

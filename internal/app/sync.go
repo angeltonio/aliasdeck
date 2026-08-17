@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/angeltonio/aliasdeck/internal/config"
@@ -73,11 +74,25 @@ func syncWithContext(ctx context.Context, env Env, dc deviceContext) (SyncReport
 	if err != nil {
 		return SyncReport{}, err
 	}
-
 	statePath := config.StateFile(dc.Base)
 	prevState, err := state.Load(statePath)
 	if err != nil {
 		return SyncReport{}, err
+	}
+	if cfg.Device.Shell == domain.ShellBash || cfg.Device.Shell == domain.ShellZsh {
+		previous, readErr := os.ReadFile(outputPath)
+		switch {
+		case readErr == nil:
+			migrated := renderers.MigrateLegacyPOSIXOutput(rendered, previous, cfg.Device.Shell)
+			if migrated == rendered && prevState.OutputHash != "" && hashBytes(previous) == prevState.OutputHash {
+				migrated = renderers.CarryForwardLegacyPOSIXMigration(rendered, previous, cfg.Device.Shell)
+			}
+			rendered = migrated
+		case os.IsNotExist(readErr):
+			// First apply: there is no legacy output to migrate.
+		default:
+			return SyncReport{}, fmt.Errorf("reading previous generated output %s: %w", outputPath, readErr)
+		}
 	}
 
 	report := SyncReport{
@@ -117,13 +132,17 @@ func syncWithContext(ctx context.Context, env Env, dc deviceContext) (SyncReport
 	report.SourceFetchedAt = sourceFetchedAt
 
 	// No-op skip (design decision 5): the resolved revision alone is not
-	// enough — the on-disk file must still match too, or a hand-edited or
-	// deleted generated file would be silently reported as "up to date".
+	// enough — both the on-disk file and the bytes the current renderer wants
+	// must match the recorded output. The latter makes renderer migrations
+	// (including the v0.5.3 POSIX managed-alias upgrade) happen even when the
+	// user's alias configuration itself has not changed.
 	//
 	// Nothing is written here, state included: the guarantee is that a
 	// repeated sync touches no file at all. Staleness reaches the user
 	// through the report instead.
-	if prevState.Revision == cfg.Revision && diskHashMatches(outputPath, prevState.OutputHash) {
+	if prevState.Revision == cfg.Revision &&
+		prevState.OutputHash == outputHash &&
+		diskHashMatches(outputPath, prevState.OutputHash) {
 		report.Skipped = true
 		return report, nil
 	}

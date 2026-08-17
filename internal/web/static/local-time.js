@@ -27,28 +27,32 @@
     ].join(" ");
   }
 
-  function localTimeZone() {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone || "your local time zone";
+  function replaceTokens(template, values) {
+    return Object.keys(values).reduce(function (text, key) {
+      return text.split("{" + key + "}").join(values[key]);
+    }, template);
   }
 
   function renderLocalTimestamps(document) {
-    var timeZone = localTimeZone();
+    var label = document.getElementById("timestamp-timezone");
+    var fallbackZone = label === null ? "" : label.dataset.zoneFallback;
+    var timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || fallbackZone;
+    var locales = document.documentElement ? document.documentElement.lang : undefined;
     var timestamps = document.querySelectorAll("time[data-local-time]");
 
     timestamps.forEach(function (timestamp) {
-      var local = formatLocalTimestamp(timestamp.dateTime);
+      var local = formatLocalTimestamp(timestamp.dateTime, locales);
       if (local === null) {
         return;
       }
 
       timestamp.textContent = local;
-      timestamp.title = "Local time (" + timeZone + "). UTC: " + timestamp.dataset.utc;
+	  timestamp.title = replaceTokens(timestamp.dataset.localTitle, { zone: timeZone, utc: timestamp.dataset.utc });
       timestamp.setAttribute("aria-label", timestamp.title);
     });
 
-    var label = document.getElementById("timestamp-timezone");
     if (label !== null) {
-      label.textContent = "Timestamps are shown in your local browser time (" + timeZone + ").";
+      label.textContent = replaceTokens(label.dataset.localLabel, { zone: timeZone });
     }
   }
 

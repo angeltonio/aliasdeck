@@ -1,0 +1,11 @@
+.git
+.codegraph
+.tmp
+build
+dist
+node_modules
+coverage
+*.log
+.DS_Store
+.env
+.env.*

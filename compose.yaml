@@ -1,8 +1,8 @@
 # Try AliasDeck's server and web UI locally:
 #
-#   ALIASDECK_ADMIN_PASSWORD=pick-a-real-one docker compose up --build
+#   ALIASDECK_LOCAL_SETUP=true docker compose up --build
 #
-# Then open http://127.0.0.1:8088 and log in as `admin`.
+# Then open http://127.0.0.1:8088/setup and create the first operator.
 #
 # The host port defaults to 8088 rather than 8080 because 8080 is one of the
 # most contended ports on a developer machine — anything already bound there
@@ -18,11 +18,15 @@ services:
     ports:
       - "127.0.0.1:${ALIASDECK_PORT:-8088}:8080"
     environment:
-      # Without this, the server generates a password and — because a
-      # container's stdout is not a terminal — writes it to a 0600 file
-      # *inside* the container, where reaching it means `docker exec`.
-      # Setting it here is the container-shaped answer to design decision 22.
-      ALIASDECK_ADMIN_PASSWORD: ${ALIASDECK_ADMIN_PASSWORD:?set it, minimum 12 characters}
+      # Docker bridge traffic is not loopback inside the container. This
+      # explicit trust assertion is safe only while the published host port
+      # above remains bound to 127.0.0.1. Do not pair it with 0.0.0.0 or a
+      # LAN-facing publish.
+      ALIASDECK_LOCAL_SETUP: ${ALIASDECK_LOCAL_SETUP:-false}
+      # Behind TLS termination, set this to the exact external origin (for
+      # example https://aliases.example). It controls Secure cookies and the
+      # URL rendered into enrollment commands; proxy headers are not trusted.
+      ALIASDECK_PUBLIC_URL: ${ALIASDECK_PUBLIC_URL:-}
     volumes:
       # Named volume, so `docker compose down` does not wipe the database.
       # `down -v` still will, which is what you want to start clean.

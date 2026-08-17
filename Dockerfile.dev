@@ -1,0 +1,13 @@
+FROM golang:1.25-alpine
+
+ARG AIR_VERSION=v1.67.0
+RUN go install github.com/air-verse/air@${AIR_VERSION}
+
+WORKDIR /workspace
+
+# Prime the module cache before the source bind mount is attached. The source
+# remains on the host; Air builds the development binary under /tmp.
+COPY go.mod go.sum ./
+RUN go mod download
+
+CMD ["air", "-c", ".air.toml"]

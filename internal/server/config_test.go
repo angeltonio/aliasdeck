@@ -66,3 +66,68 @@ func TestConfigWithDefaultsNeverMutatesReceiver(t *testing.T) {
 		t.Error("original Config.Getenv is non-nil after withDefaults(), want it left at the zero value")
 	}
 }
+
+func TestLocalSetupEnabledParsesStrictBooleanConfiguration(t *testing.T) {
+	for _, tt := range []struct {
+		value   string
+		want    bool
+		wantErr bool
+	}{
+		{value: "", want: false},
+		{value: "false", want: false},
+		{value: "true", want: true},
+		{value: "TRUE", wantErr: true},
+		{value: "1", wantErr: true},
+		{value: "yes", wantErr: true},
+	} {
+		t.Run(tt.value, func(t *testing.T) {
+			got, err := localSetupEnabled(func(name string) string {
+				if name != localSetupEnv {
+					t.Fatalf("environment lookup = %q, want %q", name, localSetupEnv)
+				}
+				return tt.value
+			})
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("localSetupEnabled(%q) error = %v, wantErr %v", tt.value, err, tt.wantErr)
+			}
+			if got != tt.want {
+				t.Fatalf("localSetupEnabled(%q) = %v, want %v", tt.value, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestResolveEnrollmentWatchInterval(t *testing.T) {
+	tests := []struct {
+		name      string
+		env       string
+		explicit  time.Duration
+		want      time.Duration
+		wantError bool
+	}{
+		{name: "production default", want: 30 * time.Second},
+		{name: "dev environment", env: "5s", want: 5 * time.Second},
+		{name: "explicit config", env: "5s", explicit: time.Minute, want: time.Minute},
+		{name: "malformed environment", env: "fast", wantError: true},
+		{name: "too fast environment", env: "500ms", wantError: true},
+		{name: "valid CLI duration but not UI preset", env: "10s", wantError: true},
+		{name: "too slow explicit", explicit: 25 * time.Hour, wantError: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Config{EnrollmentWatchInterval: tt.explicit, Getenv: func(name string) string {
+				if name != enrollmentWatchIntervalEnv {
+					t.Fatalf("environment lookup = %q, want %q", name, enrollmentWatchIntervalEnv)
+				}
+				return tt.env
+			}}
+			got, err := resolveEnrollmentWatchInterval(cfg)
+			if (err != nil) != tt.wantError {
+				t.Fatalf("resolveEnrollmentWatchInterval() error = %v, wantError %t", err, tt.wantError)
+			}
+			if !tt.wantError && got != tt.want {
+				t.Fatalf("resolveEnrollmentWatchInterval() = %s, want %s", got, tt.want)
+			}
+		})
+	}
+}

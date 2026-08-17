@@ -23,6 +23,17 @@ type aliasRepo struct {
 }
 
 func (r aliasRepo) Create(ctx context.Context, a domain.Alias) (domain.Alias, error) {
+	return r.create(ctx, a, 0)
+}
+
+func (r aliasRepo) CreateWithinLimit(ctx context.Context, a domain.Alias, limit int) (domain.Alias, error) {
+	if limit <= 0 {
+		return domain.Alias{}, fmt.Errorf("store: creating alias: invalid capacity %d", limit)
+	}
+	return r.create(ctx, a, limit)
+}
+
+func (r aliasRepo) create(ctx context.Context, a domain.Alias, limit int) (domain.Alias, error) {
 	if a.ID == "" {
 		a.ID = uuid.NewString()
 	}
@@ -48,11 +59,27 @@ func (r aliasRepo) Create(ctx context.Context, a domain.Alias) (domain.Alias, er
 	defer tx.Rollback()
 	q := r.q.WithTx(tx)
 
-	row, err := q.CreateAlias(ctx, CreateAliasParams{
+	params := CreateAliasParams{
 		ID: a.ID, Name: a.Name, Command: a.Command, Description: a.Description,
 		Enabled: boolToInt64(a.Enabled), Platforms: platforms, Shells: shells, Tags: tags,
 		CreatedAt: now, UpdatedAt: now,
-	})
+	}
+	var row Alias
+	if limit > 0 {
+		const boundedInsert = `INSERT INTO aliases (id, name, command, description, enabled, platforms, shells, tags, created_at, updated_at)
+SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE (SELECT COUNT(*) FROM aliases) < ?
+RETURNING id, name, command, description, enabled, platforms, shells, tags, created_at, updated_at`
+		err = tx.QueryRowContext(ctx, boundedInsert,
+			params.ID, params.Name, params.Command, params.Description, params.Enabled,
+			params.Platforms, params.Shells, params.Tags, params.CreatedAt, params.UpdatedAt, limit,
+		).Scan(&row.ID, &row.Name, &row.Command, &row.Description, &row.Enabled,
+			&row.Platforms, &row.Shells, &row.Tags, &row.CreatedAt, &row.UpdatedAt)
+		if errors.Is(err, sql.ErrNoRows) {
+			return domain.Alias{}, fmt.Errorf("store: creating alias: %w", store.ErrCapacity)
+		}
+	} else {
+		row, err = q.CreateAlias(ctx, params)
+	}
 	if err != nil {
 		return domain.Alias{}, mapWriteError("creating alias", err)
 	}

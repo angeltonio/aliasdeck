@@ -1,0 +1,9 @@
+{{define "language_selector"}}
+<form class="language-selector" method="post" action="/language" aria-label="{{tr .Lang "language.label"}}">
+  <input type="hidden" name="return" value="{{.CurrentPath}}" />
+  <span class="sr-only">{{tr .Lang "language.label"}}</span>
+  <button type="submit" name="language" value="en" class="{{if eq .Lang "en"}}active{{end}}" lang="en" aria-pressed="{{if eq .Lang "en"}}true{{else}}false{{end}}">{{tr .Lang "language.en"}}</button>
+  <span aria-hidden="true">/</span>
+  <button type="submit" name="language" value="es" class="{{if eq .Lang "es"}}active{{end}}" lang="es" aria-pressed="{{if eq .Lang "es"}}true{{else}}false{{end}}">{{tr .Lang "language.es"}}</button>
+</form>
+{{end}}

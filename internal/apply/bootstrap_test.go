@@ -22,6 +22,11 @@ func posixBootstrapWant(path string) string {
 }`, path, path)
 }
 
+func zshBootstrapWant(path string) string {
+	return posixBootstrapWant(path) + fmt.Sprintf(`
+[ ! -f %q ] || . %q`, path, path)
+}
+
 const (
 	testGeneratedPath = "/home/user/.config/aliasdeck/aliases.zsh"
 	testHome          = "/home/user"
@@ -40,21 +45,21 @@ func TestBootstrapLine(t *testing.T) {
 			shell:         domain.ShellZsh,
 			generatedPath: testGeneratedPath,
 			home:          testHome,
-			want:          posixBootstrapWant(`$HOME/.config/aliasdeck/aliases.zsh`),
+			want:          zshBootstrapWant(`$HOME/.config/aliasdeck/aliases.zsh`),
 		},
 		{
 			name:          "zsh: path outside home is used verbatim",
 			shell:         domain.ShellZsh,
 			generatedPath: "/etc/aliasdeck/aliases.zsh",
 			home:          testHome,
-			want:          posixBootstrapWant(`/etc/aliasdeck/aliases.zsh`),
+			want:          zshBootstrapWant(`/etc/aliasdeck/aliases.zsh`),
 		},
 		{
 			name:          "zsh: prefix collision is not mistaken for a home-relative path",
 			shell:         domain.ShellZsh,
 			generatedPath: "/home/user2/aliases.zsh",
 			home:          "/home/user",
-			want:          posixBootstrapWant(`/home/user2/aliases.zsh`),
+			want:          zshBootstrapWant(`/home/user2/aliases.zsh`),
 		},
 		{
 			// bash shares the POSIX branch byte-for-byte with zsh (design
@@ -71,7 +76,7 @@ func TestBootstrapLine(t *testing.T) {
 			shell:         domain.ShellZsh,
 			generatedPath: testGeneratedPath,
 			home:          "",
-			want:          posixBootstrapWant(`/home/user/.config/aliasdeck/aliases.zsh`),
+			want:          zshBootstrapWant(`/home/user/.config/aliasdeck/aliases.zsh`),
 		},
 		{
 			// Windows-shaped path (design decision 4, Defect A). generatedPath

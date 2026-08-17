@@ -60,6 +60,34 @@ func TestUninstallRestoresRCFileByteIdentically(t *testing.T) {
 	}
 }
 
+func TestDevResetOrderRestoresRCBeforeDeletingIsolatedClientState(t *testing.T) {
+	te := newTestEnv(t)
+	prior := "# unrelated user setup\nalias personal='echo mine'\n"
+	rcPath := seedBootstrappedDevice(t, te, prior)
+	if filepath.Dir(rcPath) == te.Base {
+		t.Fatal("fixture must keep the shell rc outside isolated ALIASDECK_HOME")
+	}
+
+	report, err := Uninstall(context.Background(), te.Env, UninstallOptions{Yes: true})
+	if err != nil {
+		t.Fatalf("scoped dev uninstall failed: %v", err)
+	}
+	if !report.BootstrapRemoved || !report.BootstrapExact {
+		t.Fatalf("bootstrap cleanup = removed:%t exact:%t, want true/true", report.BootstrapRemoved, report.BootstrapExact)
+	}
+	if err := os.RemoveAll(te.Base); err != nil {
+		t.Fatalf("deleting isolated client state after uninstall: %v", err)
+	}
+
+	got, err := os.ReadFile(rcPath)
+	if err != nil {
+		t.Fatalf("reading rc file after dev reset order: %v", err)
+	}
+	if string(got) != prior {
+		t.Fatalf("dev reset left or damaged the bootstrap block: got %q, want %q", got, prior)
+	}
+}
+
 func TestUninstallYesSkipsPrompt(t *testing.T) {
 	te := newTestEnv(t)
 	seedBootstrappedDevice(t, te, "")

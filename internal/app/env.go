@@ -41,6 +41,7 @@ type Env struct {
 	UserID     func() int
 	MkdirAll   func(path string, perm os.FileMode) error
 	WriteFile  func(path string, data []byte, perm os.FileMode) error
+	ReadFile   func(path string) ([]byte, error)
 	Remove     func(path string) error
 	Stat       func(path string) (os.FileInfo, error)
 }
@@ -62,6 +63,7 @@ func OSEnv() Env {
 		UserID:    os.Getuid,
 		MkdirAll:  os.MkdirAll,
 		WriteFile: os.WriteFile,
+		ReadFile:  os.ReadFile,
 		Remove:    os.Remove,
 		Stat:      os.Stat,
 	}

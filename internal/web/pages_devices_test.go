@@ -3,6 +3,7 @@ package web
 import (
 	"bytes"
 	"context"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -17,10 +18,19 @@ import (
 )
 
 func TestMintCommandIsSingleSafeFlow(t *testing.T) {
-	got := mintCommand("https://aliasdeck.test", "TOKEN_VALUE")
-	want := `aliasdeck init --yes --skip-initial-sync && aliasdeck register --url 'https://aliasdeck.test' --token 'TOKEN_VALUE' && aliasdeck sync && . "${ALIASDECK_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}/aliasdeck}/aliases.${SHELL##*/}"`
-	if got != want {
-		t.Fatalf("mintCommand() = %q, want %q", got, want)
+	manual := mintCommand("https://aliasdeck.test", "TOKEN_VALUE", false, 5*time.Second)
+	wantManual := `aliasdeck init --yes --skip-initial-sync && aliasdeck register --url 'https://aliasdeck.test' --token 'TOKEN_VALUE' && aliasdeck sync && . "${ALIASDECK_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}/aliasdeck}/aliases.${SHELL##*/}"`
+	if manual != wantManual {
+		t.Fatalf("mintCommand(manual) = %q, want %q", manual, wantManual)
+	}
+	automatic := mintCommand("https://aliasdeck.test", "TOKEN_VALUE", true, 5*time.Second)
+	for _, want := range []string{"aliasdeck agent install --interval '5s'", `if [ "$(uname -s)" = Darwin ]`, "supported only on macOS", `&& . "${ALIASDECK_HOME`} {
+		if !strings.Contains(automatic, want) {
+			t.Errorf("mintCommand(auto) missing %q: %q", want, automatic)
+		}
+	}
+	if strings.Contains(manual, "agent install") {
+		t.Fatalf("manual command unexpectedly enables the watcher: %q", manual)
 	}
 
 	quoted := shellQuote("value'with-quote")
@@ -28,7 +38,7 @@ func TestMintCommandIsSingleSafeFlow(t *testing.T) {
 		t.Fatalf("shellQuote() = %q, want a safely escaped single-quoted value", quoted)
 	}
 
-	if got := mintCommand("https://aliasdeck.test/$(touch pwned)", "TOKEN_VALUE"); !strings.Contains(got, "--url 'https://aliasdeck.test/$(touch pwned)'") {
+	if got := mintCommand("https://aliasdeck.test/$(touch pwned)", "TOKEN_VALUE", false, 30*time.Second); !strings.Contains(got, "--url 'https://aliasdeck.test/$(touch pwned)'") {
 		t.Fatalf("mintCommand() did not quote URL shell syntax: %q", got)
 	}
 }
@@ -41,19 +51,30 @@ func TestMintResultRendersCopyableCommand(t *testing.T) {
 
 	var rendered bytes.Buffer
 	err = templates.mintResult.ExecuteTemplate(&rendered, "device_mint_result", mintResultData{
-		Command:   mintCommand("https://aliasdeck.test", "TOKEN_VALUE"),
-		ExpiresAt: "2030-01-01 00:00:00 UTC",
-		StatusID:  "opaque-status-id",
-		Message:   "Waiting for the new machine to enroll and complete its first sync…",
+		Command:           mintCommand("https://aliasdeck.test", "TOKEN_VALUE", true, 5*time.Second),
+		ManualCommand:     mintCommand("https://aliasdeck.test", "TOKEN_VALUE", false, 5*time.Second),
+		FrequencyCommands: testFrequencyCommands("https://aliasdeck.test", "TOKEN_VALUE"),
+		ExpiresAt:         "2030-01-01 00:00:00 UTC",
+		StatusID:          "opaque-status-id",
+		Message:           "Waiting for the new machine to enroll and complete its first sync…",
 	})
 	if err != nil {
 		t.Fatalf("ExecuteTemplate() returned an error: %v", err)
 	}
 
 	output := rendered.String()
-	command := `aliasdeck init --yes --skip-initial-sync &amp;&amp; aliasdeck register --url &#39;https://aliasdeck.test&#39; --token &#39;TOKEN_VALUE&#39; &amp;&amp; aliasdeck sync &amp;&amp; . &#34;${ALIASDECK_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}/aliasdeck}/aliases.${SHELL##*/}&#34;`
-	if !strings.Contains(output, command) {
-		t.Fatalf("rendered mint result does not contain the safe command: %q", output)
+	for _, command := range []string{"aliasdeck agent install", "data-enrollment-frequency=", "data-manual-command="} {
+		if !strings.Contains(output, command) {
+			t.Fatalf("rendered mint result does not contain %q: %q", command, output)
+		}
+	}
+	for _, interval := range []string{"5s", "30s", "1m", "5m"} {
+		if !strings.Contains(output, "--interval &#39;"+interval+"&#39;") {
+			t.Errorf("rendered mint result is missing the %s command variant", interval)
+		}
+	}
+	if got := strings.Count(output, "data-enrollment-frequency="); got != 4 {
+		t.Fatalf("frequency command variant count = %d, want 4", got)
 	}
 	if strings.Contains(output, "aliasdeck register --url") && strings.Contains(output, "\naliasdeck sync") {
 		t.Fatal("rendered mint result still presents registration and sync as separate commands")
@@ -66,9 +87,97 @@ func TestMintResultRendersCopyableCommand(t *testing.T) {
 	}
 }
 
+func TestDevicesAddPageShowsRequiredChecklistAndOneRealChoice(t *testing.T) {
+	a, _, _ := newDeviceStatusTestApp(t)
+	rec := httptest.NewRecorder()
+	a.handleDevicesAddPage(rec, httptest.NewRequest(http.MethodGet, "/devices/add", nil))
+	body := rec.Body.String()
+	for _, step := range []string{"Initialize AliasDeck", "Register the device", "Run the first alias sync", "Load the synced aliases"} {
+		if !strings.Contains(body, step) {
+			t.Errorf("required checklist missing %q", step)
+		}
+	}
+	if got := strings.Count(body, `type="checkbox"`); got != 1 {
+		t.Fatalf("checkbox count = %d, want exactly 1", got)
+	}
+	if !strings.Contains(body, `name="autoSync" value="true" checked`) {
+		t.Fatal("automatic synchronization choice is not checked by default")
+	}
+	if got := strings.Count(body, "<select "); got != 1 {
+		t.Fatalf("select count = %d, want exactly 1", got)
+	}
+	if !strings.Contains(body, `<label for="sync-frequency">Alias sync frequency</label>`) || !strings.Contains(body, `aria-describedby="sync-frequency-help"`) {
+		t.Fatal("sync frequency select is not accessibly labelled and described")
+	}
+	for _, copy := range []string{
+		"Sync aliases automatically",
+		"Downloads alias changes in the background and keeps the device connection status up to date on macOS. Other platforms still complete setup without background startup.",
+	} {
+		if !strings.Contains(body, copy) {
+			t.Errorf("automatic alias sync copy missing %q", copy)
+		}
+	}
+	wantOptions := []string{
+		`<option value="5s">5 seconds</option>`,
+		`<option value="30s" selected>30 seconds</option>`,
+		`<option value="1m">1 minute</option>`,
+		`<option value="5m">5 minutes</option>`,
+	}
+	last := -1
+	for _, option := range wantOptions {
+		index := strings.Index(body, option)
+		if index <= last {
+			t.Fatalf("frequency option %q is missing or out of order: %q", option, body)
+		}
+		last = index
+	}
+	if !strings.Contains(body, "Shorter intervals use more requests and may use more battery.") {
+		t.Fatal("frequency helper does not disclose the activity tradeoff")
+	}
+	if !strings.Contains(body, `<script defer src="/static/device-enrollment.js"></script>`) {
+		t.Fatal("Add device page does not load enrollment interaction behavior")
+	}
+	if strings.Contains(body, "run these two commands") {
+		t.Fatal("page retains misleading two-command copy")
+	}
+}
+
+func TestDevicesAddPageUsesExplicitDevFrequencyDefault(t *testing.T) {
+	a, _, _ := newDeviceStatusTestApp(t)
+	a.enrollmentWatchInterval = 5 * time.Second
+	rec := httptest.NewRecorder()
+	a.handleDevicesAddPage(rec, httptest.NewRequest(http.MethodGet, "/devices/add", nil))
+	if !strings.Contains(rec.Body.String(), `<option value="5s" selected>5 seconds</option>`) {
+		t.Fatalf("dev Add device default is not 5s: %q", rec.Body.String())
+	}
+}
+
+func TestResolveEnrollmentFrequencyAllowsOnlyUIPresets(t *testing.T) {
+	tests := []struct {
+		raw      string
+		fallback time.Duration
+		want     time.Duration
+	}{
+		{raw: "5s", fallback: 30 * time.Second, want: 5 * time.Second},
+		{raw: "30s", fallback: 5 * time.Second, want: 30 * time.Second},
+		{raw: "1m", fallback: 5 * time.Second, want: time.Minute},
+		{raw: "5m", fallback: 5 * time.Second, want: 5 * time.Minute},
+		{raw: "10s", fallback: 5 * time.Second, want: 5 * time.Second},
+		{raw: "garbage", fallback: 30 * time.Second, want: 30 * time.Second},
+		{raw: "", fallback: 10 * time.Second, want: 30 * time.Second},
+	}
+	for _, tt := range tests {
+		if got := resolveEnrollmentFrequency(tt.raw, tt.fallback); got != tt.want {
+			t.Errorf("resolveEnrollmentFrequency(%q, %s) = %s, want %s", tt.raw, tt.fallback, got, tt.want)
+		}
+	}
+}
+
 func TestDeviceEnrollmentMintRetainsCommandAndBindsOpaqueStatusToBrowserSession(t *testing.T) {
 	a, st, _ := newDeviceStatusTestApp(t)
-	req := httptest.NewRequest(http.MethodPost, "/devices/add/token", nil)
+	a.enrollmentWatchInterval = 5 * time.Second
+	req := httptest.NewRequest(http.MethodPost, "/devices/add/token", strings.NewReader("autoSync=true"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Host = "aliasdeck.test"
 	req = req.WithContext(withSubject(req.Context(), webSubject{TokenID: "browser-session-a", OperatorID: "operator-a"}))
 	rec := httptest.NewRecorder()
@@ -79,6 +188,12 @@ func TestDeviceEnrollmentMintRetainsCommandAndBindsOpaqueStatusToBrowserSession(
 	}
 	if !strings.Contains(rec.Body.String(), "aliasdeck register --url") {
 		t.Fatalf("mint response does not retain a copyable enrollment command: %q", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "aliasdeck agent install") {
+		t.Fatalf("checked auto-sync choice did not enable the watcher: %q", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "--interval &#39;5s&#39;") {
+		t.Fatalf("dev enrollment command did not persist the configured 5s interval: %q", rec.Body.String())
 	}
 
 	statusID := onlyEnrollmentStatusID(t, a)
@@ -91,6 +206,51 @@ func TestDeviceEnrollmentMintRetainsCommandAndBindsOpaqueStatusToBrowserSession(
 	}
 	if _, ok := a.enrollments.get(statusID, "browser-session-b"); ok {
 		t.Fatal("a different browser session can access the minted enrollment status")
+	}
+}
+
+func TestDeviceEnrollmentMintTamperedFrequencyFallsBackWithoutExtraToken(t *testing.T) {
+	a, _, _ := newDeviceStatusTestApp(t)
+	a.enrollmentWatchInterval = 5 * time.Second
+	req := httptest.NewRequest(http.MethodPost, "/devices/add/token", strings.NewReader("autoSync=true&syncFrequency=10s"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Host = "aliasdeck.test"
+	req = req.WithContext(withSubject(req.Context(), webSubject{TokenID: "browser-session-a", OperatorID: "operator-a"}))
+	rec := httptest.NewRecorder()
+
+	a.handleDevicesMintToken(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("mint status = %d, want %d, body=%q", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `id="mint-commands"`) || !strings.Contains(rec.Body.String(), `--interval &#39;5s&#39;`) {
+		t.Fatalf("tampered enrollment frequency did not fall back to configured 5s: %q", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), `--interval &#39;10s&#39;`) {
+		t.Fatalf("tampered 10s enrollment frequency reached a generated command: %q", rec.Body.String())
+	}
+	onlyEnrollmentStatusID(t, a)
+}
+
+func TestEnrollmentScriptSwitchesVisibleCommandWithoutReminting(t *testing.T) {
+	script, err := fs.ReadFile(staticFS, "static/device-enrollment.js")
+	if err != nil {
+		t.Fatalf("read enrollment script: %v", err)
+	}
+	body := string(script)
+	for _, want := range []string{
+		`document.addEventListener("change"`,
+		`document.addEventListener("htmx:afterSwap"`,
+		`command.textContent =`,
+		`navigator.clipboard.writeText(command.innerText)`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("enrollment script missing %q", want)
+		}
+	}
+	for _, forbidden := range []string{"fetch(", "XMLHttpRequest", "hx-post"} {
+		if strings.Contains(body, forbidden) {
+			t.Errorf("enrollment script can unexpectedly mint or request a token via %q", forbidden)
+		}
 	}
 }
 
@@ -157,7 +317,7 @@ func TestDeviceEnrollmentStatusIsBoundToMintingBrowserSession(t *testing.T) {
 	}
 }
 
-func TestClassifyDeviceFreshnessUsesPrototypeThresholds(t *testing.T) {
+func TestClassifyDeviceFreshnessUsesProductThresholds(t *testing.T) {
 	now := time.Date(2030, time.January, 1, 12, 0, 0, 0, time.UTC)
 	at := func(age time.Duration) *time.Time {
 		t := now.Add(-age)
@@ -171,10 +331,10 @@ func TestClassifyDeviceFreshnessUsesPrototypeThresholds(t *testing.T) {
 	}{
 		{name: "not synced", wantLabel: "Not synced", wantClass: "stale"},
 		{name: "not seen", lastSyncAt: at(0), wantLabel: "Not seen", wantClass: "stale"},
-		{name: "recent at freshness boundary", lastSeenAt: at(prototypeDeviceFreshWithin), lastSyncAt: at(prototypeDeviceFreshWithin), wantLabel: "Recent", wantClass: "ok"},
-		{name: "delayed after freshness boundary", lastSeenAt: at(prototypeDeviceFreshWithin + time.Nanosecond), lastSyncAt: at(0), wantLabel: "Delayed", wantClass: "stale"},
-		{name: "stale after stale boundary", lastSeenAt: at(prototypeDeviceStaleAfter + time.Nanosecond), lastSyncAt: at(0), wantLabel: "Stale", wantClass: "stale"},
-		{name: "sync overdue after stale boundary", lastSeenAt: at(0), lastSyncAt: at(prototypeDeviceStaleAfter + time.Nanosecond), wantLabel: "Sync overdue", wantClass: "stale"},
+		{name: "recent at freshness boundary", lastSeenAt: at(deviceFreshWithin), lastSyncAt: at(deviceFreshWithin), wantLabel: "Recent", wantClass: "ok"},
+		{name: "delayed after freshness boundary", lastSeenAt: at(deviceFreshWithin + time.Nanosecond), lastSyncAt: at(0), wantLabel: "Delayed", wantClass: "stale"},
+		{name: "stale after stale boundary", lastSeenAt: at(deviceStaleAfter + time.Nanosecond), lastSyncAt: at(0), wantLabel: "Stale", wantClass: "stale"},
+		{name: "sync overdue after stale boundary", lastSeenAt: at(0), lastSyncAt: at(deviceStaleAfter + time.Nanosecond), wantLabel: "Sync overdue", wantClass: "stale"},
 	}
 
 	for _, tt := range tests {
@@ -196,7 +356,7 @@ func TestDevicesPageDisplaysAccessibleFreshnessStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ConsumeEnrollment() returned an error: %v", err)
 	}
-	if err := st.Devices().Touch(context.Background(), device.ID, domain.PlatformMacOS, domain.ShellZsh, now.Add(-prototypeDeviceFreshWithin)); err != nil {
+	if err := st.Devices().Touch(context.Background(), device.ID, domain.PlatformMacOS, domain.ShellZsh, now.Add(-deviceFreshWithin)); err != nil {
 		t.Fatalf("Touch() returned an error: %v", err)
 	}
 
@@ -278,7 +438,7 @@ func TestDevicesPageRendersUTCFallbackTimestamps(t *testing.T) {
 			if !strings.Contains(body, `<script defer src="/static/local-time.js"></script>`) {
 				t.Fatalf("devices page does not load the local time formatter: %q", body)
 			}
-			if !strings.Contains(body, `<p id="timestamp-timezone" aria-live="polite">Timestamps are shown in UTC.</p>`) {
+			if !strings.Contains(body, `<p id="timestamp-timezone" aria-live="polite"`) || !strings.Contains(body, `>Timestamps are shown in UTC.</p>`) {
 				t.Fatalf("devices page does not provide a visible UTC fallback label: %q", body)
 			}
 			if tt.wantLastSeen == "" {
@@ -368,4 +528,16 @@ func onlyEnrollmentStatusID(t *testing.T, a *webapp) string {
 		return id
 	}
 	panic("unreachable")
+}
+
+func testFrequencyCommands(url, token string) []enrollmentFrequencyCommand {
+	presets := enrollmentFrequencyPresets(5 * time.Second)
+	commands := make([]enrollmentFrequencyCommand, 0, len(presets))
+	for _, preset := range presets {
+		commands = append(commands, enrollmentFrequencyCommand{
+			Value:   preset.Value,
+			Command: mintCommand(url, token, true, preset.Interval),
+		})
+	}
+	return commands
 }

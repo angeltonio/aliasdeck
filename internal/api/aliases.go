@@ -1,10 +1,12 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 
 	"github.com/angeltonio/aliasdeck/internal/domain"
+	"github.com/angeltonio/aliasdeck/internal/store"
 	"github.com/angeltonio/aliasdeck/internal/validate"
 )
 
@@ -98,42 +100,19 @@ func (a *api) handleAliasesCreate(w http.ResponseWriter, r *http.Request) {
 	if !validateAliasWrite(w, in) {
 		return
 	}
-	if !a.checkAliasCapacity(w, r) {
-		return
-	}
 	warnings := nameWarnings(in.Name)
 
-	out, err := a.store.Aliases().Create(r.Context(), in)
+	out, err := store.CreateAliasWithinLimit(r.Context(), a.store.Aliases(), in, validate.MaxAliases)
 	if err != nil {
+		if errors.Is(err, store.ErrCapacity) {
+			writeError(w, http.StatusBadRequest, codeTooManyAliases,
+				fmt.Sprintf("this server already holds %d aliases, the maximum this control plane accepts", validate.MaxAliases), nil)
+			return
+		}
 		writeStoreError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, aliasResponse{Alias: out, NameWarnings: warnings})
-}
-
-// checkAliasCapacity enforces validate.MaxAliases (bounded-review finding,
-// WARNING 5) from the one write path that can actually grow the alias set.
-// Design decision 4's own rationale already assumed this bound existed
-// ("validate.MaxAliases already bounds the set size") to justify never
-// SQL-filtering the resolved set — but nothing before this correction ever
-// enforced it from here; validate.MaxAliases was previously checked only
-// against a client's local config.yaml parsing (internal/validate.go),
-// which a server-created alias never passes through at all. This closes
-// that specific, named assumption gap; it deliberately does not attempt to
-// bound GET list endpoints in general (see design.md's note on WARNING 5
-// for what remains accepted, not fixed, and why).
-func (a *api) checkAliasCapacity(w http.ResponseWriter, r *http.Request) bool {
-	existing, err := a.store.Aliases().List(r.Context())
-	if err != nil {
-		writeStoreError(w, err)
-		return false
-	}
-	if len(existing) >= validate.MaxAliases {
-		writeError(w, http.StatusBadRequest, codeTooManyAliases,
-			fmt.Sprintf("this server already holds %d aliases, the maximum this control plane accepts", validate.MaxAliases), nil)
-		return false
-	}
-	return true
 }
 
 func (a *api) handleAliasesGet(w http.ResponseWriter, r *http.Request) {

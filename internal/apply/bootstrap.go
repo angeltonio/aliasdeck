@@ -38,6 +38,17 @@ func BootstrapLine(sh domain.Shell, generatedPath, home string) string {
 		return bootstrapLinePowerShell(generatedPath, home)
 	}
 	display := homeRelativeDisplay(generatedPath, home)
+	if sh == domain.ShellZsh {
+		return fmt.Sprintf(`aliasdeck() {
+  local aliasdeck_status=0
+  command aliasdeck "$@" || aliasdeck_status=$?
+  if [ "$aliasdeck_status" -eq 0 ] && [ "$#" -gt 0 ] && [ "$1" = sync ] && [ -f %q ]; then
+    . %q
+  fi
+  return "$aliasdeck_status"
+}
+[ ! -f %q ] || . %q`, display, display, display, display)
+	}
 	return fmt.Sprintf(`aliasdeck() {
   local aliasdeck_status=0
   command aliasdeck "$@" || aliasdeck_status=$?

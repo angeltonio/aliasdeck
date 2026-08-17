@@ -1,17 +1,18 @@
 {{define "content"}}
-<div class="page-header">
-  <div>
-    <h1>Add a device</h1>
-    <p>Mint a single-use enrollment token, then run these two commands on the new machine.</p>
-  </div>
-</div>
-
+<div class="page-header"><div><h1>{{tr .Lang "add.title"}}</h1><p>{{tr .Lang "add.subtitle"}}</p></div></div>
 <div class="card">
-  <h2>1. Mint a token</h2>
-  <p class="muted" style="margin-top:-8px">The token is single-use and expires in 15 minutes.</p>
-  <button hx-post="/devices/add/token" hx-target="#mint-result" hx-swap="outerHTML">
-    Mint enrollment token
-  </button>
-  <div id="mint-result"></div>
+  <h2>{{tr .Lang "add.checklist_title"}}</h2>
+  <ol class="setup-checklist"><li>{{tr .Lang "add.step.init"}}</li><li>{{tr .Lang "add.step.register"}}</li><li>{{tr .Lang "add.step.sync"}}</li><li>{{tr .Lang "add.step.load"}}</li></ol>
+  <h2>{{tr .Lang "add.mint_title"}}</h2><p class="muted" style="margin-top:-8px">{{tr .Lang "add.token_help"}}</p>
+  <form hx-post="/devices/add/token" hx-target="#mint-result" hx-swap="outerHTML">
+    <input type="hidden" name="_csrf" value="{{.CSRFToken}}" />
+    <label class="sync-choice"><input id="auto-sync" type="checkbox" name="autoSync" value="true" checked aria-controls="sync-frequency-field"><span><strong>{{tr .Lang "add.auto"}}</strong><small>{{tr .Lang "add.auto_help"}}</small></span></label>
+    <div class="field sync-frequency" id="sync-frequency-field"><label for="sync-frequency">{{tr .Lang "add.frequency"}}</label>
+      <select id="sync-frequency" name="syncFrequency" aria-describedby="sync-frequency-help">{{range .Frequencies}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select>
+      <small class="muted" id="sync-frequency-help">{{tr .Lang "add.frequency_help"}}</small>
+    </div>
+    <button type="submit">{{tr .Lang "add.mint"}}</button>
+  </form><div id="mint-result"></div>
 </div>
+<script defer src="/static/device-enrollment.js"></script>
 {{end}}

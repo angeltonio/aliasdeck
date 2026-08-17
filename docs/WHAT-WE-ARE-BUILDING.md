@@ -135,15 +135,12 @@ runs the code is the machine that wrote it.
 
 ## Where this is going
 
-Shipping now: the client, and the server with its API.
+Shipping now: the client, and the server with its bilingual web UI and API.
+Operator onboarding, device enrollment, and configurable automatic
+synchronization on macOS are part of the current product.
 
-Next: the web UI — the reason the split happened now rather than later, since
-the web is what makes the server something a person interacts with rather than
-something they curl.
-
-Later, in rough order: automatic sync so a new terminal picks up changes
-without a command; teams, which is why alias ownership is being recorded in
-the database before anyone can use it; and history, so a change can be seen
+Later, in rough order: teams, which is why alias ownership is being recorded
+in the database before anyone can use it; and history, so a change can be seen
 and undone.
 
 Not planned: a hosted service. AliasDeck is something you run.

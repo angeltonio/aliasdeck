@@ -75,14 +75,14 @@ var validKinds = map[store.TokenKind]bool{
 // api is the composed set of dependencies every handler added in this
 // package's second half (aliases, profiles, devices, auth) closes over: the
 // store, an injectable clock (auth.RequireKind's own now, and every
-// timestamp a handler writes), and the login concurrency semaphore (design
+// timestamp a handler writes), and the shared password-verification limiter (design
 // decision 24). It is deliberately unexported: internal/server is the only
 // caller outside this package, and it reaches these handlers only through
 // NewRouter, never by constructing an api value itself.
 type api struct {
-	store    store.Store
-	now      func() time.Time
-	loginSem chan struct{}
+	store        store.Store
+	now          func() time.Time
+	loginLimiter auth.PasswordLimiter
 }
 
 // routes is the complete, explicit route table this server exposes.
@@ -169,7 +169,16 @@ func handleHealth(w http.ResponseWriter, _ *http.Request) {
 // tests wire a fixed instant so expiry and token timestamps stay
 // deterministic without sleeping.
 func NewRouter(st store.Store, now func() time.Time) (http.Handler, error) {
-	a := &api{store: st, now: now, loginSem: make(chan struct{}, loginConcurrency)}
+	return NewRouterWithPasswordLimiter(st, now, auth.NewPasswordLimiter())
+}
+
+// NewRouterWithPasswordLimiter builds the API with the same process-wide
+// expensive-password-work bound used by the browser UI.
+func NewRouterWithPasswordLimiter(st store.Store, now func() time.Time, limiter auth.PasswordLimiter) (http.Handler, error) {
+	if limiter == nil {
+		return nil, fmt.Errorf("api: password limiter is required")
+	}
+	a := &api{store: st, now: now, loginLimiter: limiter}
 	return newRouter(a.routes(), st.Tokens(), now)
 }
 

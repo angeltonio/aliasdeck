@@ -226,17 +226,26 @@ release:
 
     **First-run operator setup.** On a brand-new database, open `/setup`
     directly from the server host to create the operator username and
-    password without reading a separate setup credential. This shortcut is
-    accepted only from a direct loopback HTTP connection; remote and proxied
-    requests must use the one-time credential written to
-    `setup-credential.txt` beside the database. For non-interactive or
-    headless deployments, set `ALIASDECK_ADMIN_PASSWORD` before the first
-    start to create the `admin` operator without using the browser setup.
+    password without reading a separate setup credential. Native deployments
+    accept this shortcut only from a direct loopback HTTP connection. Docker
+    bridge traffic requires the explicit `ALIASDECK_LOCAL_SETUP=true` trust
+    assertion. Pair it with a host-loopback publish such as
+    `-p 127.0.0.1:8080:8080`. Without that opt-in, remote requests require the
+    one-time credential written to `setup-credential.txt` beside the database;
+    proxied requests always require it. For non-interactive or headless
+    deployments, set `ALIASDECK_ADMIN_PASSWORD` before the first start to
+    create the `admin` operator without using the browser setup.
 
     **The default bind is loopback only.** `aliasdeck-server` with no
     `--addr` binds `127.0.0.1:8080` and nothing else. Reaching it from
     another machine requires an explicit, wider `--addr` — a deliberate
     operator choice, not a default to work around.
+
+    **Reverse proxies need an explicit public origin.** Set
+    `ALIASDECK_PUBLIC_URL=https://aliases.example` to the exact external
+    origin. AliasDeck does not trust forwarding headers to decide setup
+    eligibility, Secure cookies, or enrollment URLs. The value must contain
+    only scheme and authority; remote HTTP origins are rejected.
 
     **Do not front the sync endpoint with a redirecting proxy.** `GET
     /api/v1/sync` refuses every HTTP redirect outright, on purpose — a

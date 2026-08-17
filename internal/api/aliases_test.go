@@ -193,7 +193,7 @@ func TestAliasesCreateAcceptsNameWarningAndStoresIt(t *testing.T) {
 // more create through the real handler, is what proves the enforcement
 // lives in handleAliasesCreate itself, not merely in the fake store's own
 // bookkeeping. Mutation this test detects: removing the
-// checkAliasCapacity call (or its List/len comparison) from
+// CreateAliasWithinLimit call from
 // handleAliasesCreate — a 5001st alias would then be accepted (201)
 // instead of rejected (400).
 func TestAliasesCreateRejectsOnceAtMaxAliases(t *testing.T) {

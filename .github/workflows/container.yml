@@ -26,6 +26,19 @@ jobs:
         with:
           ref: ${{ inputs.source_ref || github.ref }}
 
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Verify image version and source tag
+        env:
+          RELEASE_VERSION: ${{ inputs.version || github.ref_name }}
+          RELEASE_SOURCE_REF: ${{ inputs.source_ref || github.ref_name }}
+        run: >-
+          go run ./internal/releasecheck/cmd
+          --version "$RELEASE_VERSION"
+          --source-ref "$RELEASE_SOURCE_REF"
+
       - name: Remove leading v from image version
         run: echo "VERSION_NO_V=${VERSION#v}" >> "$GITHUB_ENV"
         env:

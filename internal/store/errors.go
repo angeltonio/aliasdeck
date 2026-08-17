@@ -14,6 +14,10 @@ var ErrNotFound = errors.New("store: not found")
 // or an enrollment token already consumed).
 var ErrConflict = errors.New("store: conflict")
 
+// ErrCapacity reports that an atomic bounded create refused to grow a
+// collection beyond its configured product limit.
+var ErrCapacity = errors.New("store: capacity reached")
+
 // ErrInvalidReference is returned when a write names another record that
 // does not exist — e.g. an alias or device whose ProfileIDs/DeviceIDs
 // includes an ID with no matching row (design decision 18). This is

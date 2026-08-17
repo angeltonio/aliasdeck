@@ -19,6 +19,15 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Verify tag and embedded client version
+        env:
+          RELEASE_VERSION: ${{ github.ref_name }}
+          RELEASE_SOURCE_REF: ${{ github.ref_name }}
+        run: >-
+          go run ./internal/releasecheck/cmd
+          --version "$RELEASE_VERSION"
+          --source-ref "$RELEASE_SOURCE_REF"
+
       - name: Install zsh
         run: sudo apt-get update && sudo apt-get install -y zsh
 

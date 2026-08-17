@@ -2,7 +2,6 @@ package api
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -12,8 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/angeltonio/aliasdeck/internal/auth"
 	"github.com/angeltonio/aliasdeck/internal/domain"
-	"github.com/angeltonio/aliasdeck/internal/store"
 )
 
 // TestAuthEndpointsRejectMissingCredentials covers the auth surface's own
@@ -76,7 +75,7 @@ func TestLoginSucceedsAndMintsASessionToken(t *testing.T) {
 // operator record, hashed with the real auth.HashPassword) is refused, and
 // an unknown username is refused with the identical response body and
 // status — but NOT identical timing: an unknown username returns before
-// ever reaching verifyPassword/the login semaphore (handleLogin's
+// ever reaching verifyPassword/the login limiter (handleLogin's
 // ByUsername lookup fails first), while a wrong password against a real
 // operator pays the full argon2id cost, ~12.8 ms on this project's
 // reference hardware (design's Bounded Operations table, "Concurrent
@@ -86,10 +85,10 @@ func TestLoginSucceedsAndMintsASessionToken(t *testing.T) {
 //
 // It is accepted, not fixed, and deliberately not equalized by routing
 // every username through verifyPassword regardless of whether it exists:
-// doing so would let an attacker exhaust the login semaphore's
+// doing so would let an attacker exhaust the login limiter's
 // loginConcurrency slots with garbage usernames alone, trading a timing
 // oracle that leaks nothing today for a real availability problem
-// (design decision 24's own semaphore existing precisely because
+// (design decision 24's own limiter existing precisely because
 // unbounded/uncontrolled concurrent verifyPassword calls are themselves a
 // resource-exhaustion lever). It leaks nothing today specifically because
 // design decision 20 fixes the only operator account at username "admin"
@@ -201,7 +200,7 @@ func TestEnrollmentTokensCreateRequiresSessionAndDeviceRegisterConsumesIt(t *tes
 }
 
 // TestLoginConcurrencySemaphoreBoundsConcurrentVerifyPasswordCalls is task
-// 5.14's own RED test: it proves the login semaphore, not luck, is what
+// 5.14's own RED test: it proves the login limiter, not luck, is what
 // bounds concurrent auth.VerifyPassword calls to loginConcurrency, and that
 // requests beyond that bound genuinely queue rather than all executing at
 // once. It overrides the package-level verifyPassword seam with an
@@ -214,7 +213,7 @@ func TestEnrollmentTokensCreateRequiresSessionAndDeviceRegisterConsumesIt(t *tes
 // verifyPassword and block there; a bounded wait (200ms, not a sleep used
 // to assume timing — a "nothing more arrived" negative check) proves a
 // (loginConcurrency+1)th call never reaches verifyPassword while the first
-// loginConcurrency are still held open. Removing the semaphore around
+// loginConcurrency are still held open. Removing the limiter around
 // verifyPassword in handleLogin makes all totalRequests calls enter
 // verifyPassword together, so this test's negative check fails immediately.
 func TestLoginConcurrencySemaphoreBoundsConcurrentVerifyPasswordCalls(t *testing.T) {
@@ -273,7 +272,7 @@ func TestLoginConcurrencySemaphoreBoundsConcurrentVerifyPasswordCalls(t *testing
 
 	select {
 	case <-entered:
-		t.Fatalf("a %dth call entered verifyPassword while %d were already held open — the login semaphore did not bound concurrency to %d", loginConcurrency+1, loginConcurrency, loginConcurrency)
+		t.Fatalf("a %dth call entered verifyPassword while %d were already held open — the login limiter did not bound concurrency to %d", loginConcurrency+1, loginConcurrency, loginConcurrency)
 	case <-time.After(200 * time.Millisecond):
 		// Expected: no further entrant while loginConcurrency calls are
 		// still blocked inside verifyPassword and totalRequests-loginConcurrency
@@ -288,135 +287,37 @@ func TestLoginConcurrencySemaphoreBoundsConcurrentVerifyPasswordCalls(t *testing
 	}
 }
 
-// TestLoginSemaphoreAcquireObservesContextCancellationAfterUsernameLookup
-// is CRITICAL 1's own RED test: a bare `a.loginSem <- struct{}{}` send does
-// not observe context cancellation at all, so a request whose client
-// disconnects while queued for a slot stays parked until it eventually wins
-// one — long after there is anyone left to answer.
-//
-// The failure window is deliberately narrower than "any disconnected
-// client": auth.Operators().ByUsername runs before the semaphore acquire
-// and already fails fast on a dead context on its own, so a request
-// cancelled before that call reaches the acquire never demonstrates
-// anything about the semaphore — it never gets there. The only window that
-// says anything about the acquire itself is a client that disconnects
-// *after* ByUsername has already succeeded and *while* queued on the send.
-// This test builds exactly that window: it fills the semaphore with
-// loginConcurrency held "filler" logins, then drives one more login for a
-// distinct "target" operator whose ByUsername lookup arms s.byUsernameHook
-// — signalling this goroutine at the precise instant handleLogin is about
-// to reach the acquire — and only then cancels that request's own context.
-//
-// This calls (*api).handleLogin directly rather than going through
-// NewRouter/http.TimeoutHandler over a real listener. That is a deliberate
-// choice, not a shortcut: a real client-side context cancellation only
-// reaches the server by the OS actually tearing down a TCP connection and
-// the server's own background reader noticing it — an inherently
-// asynchronous, best-effort race with no bound this test could assert
-// against deterministically. Calling handleLogin with a request already
-// carrying our own cancellable context makes r.Context().Done() the exact
-// same channel this test's own cancel() closes — synchronous, in-process,
-// and unambiguous about what it proves. http.TimeoutHandler's own
-// independent ctx.Done() race (it derives its own child context and reacts
-// to the same cancellation on its own timeline) would otherwise make the
-// outer ServeHTTP call return regardless of whether this package's own
-// semaphore acquire ever observed anything — exactly the kind of "passes
-// for an unrelated reason" result this correction was warned against.
-//
-// Distinguishing GREEN from RED: after cancel(), a fixed acquire makes
-// handleLogin return immediately (this goroutine closes targetDone) with
-// StatusServiceUnavailable, never having called verifyPassword. A bare
-// send never returns at all while every slot is held — targetDone would
-// not close within this test's own bound, failing loudly rather than
-// silently passing.
-func TestLoginSemaphoreAcquireObservesContextCancellationAfterUsernameLookup(t *testing.T) {
-	release := make(chan struct{})
-	entered := make(chan struct{}, loginConcurrency+1)
+func TestLoginLimiterRejectsSaturationAndRecovers(t *testing.T) {
+	var calls atomic.Int32
 	original := verifyPassword
 	verifyPassword = func(_, _ string) (bool, error) {
-		entered <- struct{}{}
-		<-release
+		calls.Add(1)
 		return true, nil
 	}
 	t.Cleanup(func() { verifyPassword = original })
 
-	s, _ := newFakeStoreWithOperator("filler", "irrelevant-under-the-stub")
-	if _, err := s.Operators().Create(t.Context(), store.Operator{
-		Username:     "target",
-		PasswordHash: []byte("irrelevant-never-reached-if-the-fix-works"),
-	}); err != nil {
-		t.Fatalf("seeding the target operator: %v", err)
-	}
-
-	a := &api{store: s, now: time.Now, loginSem: make(chan struct{}, loginConcurrency)}
-
-	fillerBody := []byte(`{"username":"filler","password":"whatever"}`)
-	var wg sync.WaitGroup
+	s, _ := newFakeStoreWithOperator("target", "irrelevant-under-the-stub")
+	a := &api{store: s, now: time.Now, loginLimiter: auth.NewPasswordLimiter()}
 	for i := 0; i < loginConcurrency; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			rec := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodPost, loginPattern, bytes.NewReader(fillerBody))
-			a.handleLogin(rec, req)
-		}()
-	}
-	for i := 0; i < loginConcurrency; i++ {
-		select {
-		case <-entered:
-		case <-time.After(5 * time.Second):
-			t.Fatal("the filler logins never filled the semaphore")
+		if !a.loginLimiter.TryAcquire() {
+			t.Fatal("could not saturate limiter")
 		}
 	}
 
-	armed := make(chan struct{})
-	var armOnce sync.Once
-	s.byUsernameHook = func(username string) {
-		if username != "target" {
-			return
-		}
-		armOnce.Do(func() { close(armed) })
+	body := []byte(`{"username":"target","password":"whatever"}`)
+	rec := httptest.NewRecorder()
+	a.handleLogin(rec, httptest.NewRequest(http.MethodPost, loginPattern, bytes.NewReader(body)))
+	if rec.Code != http.StatusServiceUnavailable || calls.Load() != 0 {
+		t.Fatalf("saturated login status=%d verify calls=%d, want 503/0", rec.Code, calls.Load())
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	targetReq := httptest.NewRequest(http.MethodPost, loginPattern, bytes.NewReader([]byte(`{"username":"target","password":"whatever"}`))).WithContext(ctx)
-	targetRec := httptest.NewRecorder()
-	targetDone := make(chan struct{})
-	go func() {
-		a.handleLogin(targetRec, targetReq)
-		close(targetDone)
-	}()
-
-	select {
-	case <-armed:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the target request never reached its ByUsername lookup")
+	a.loginLimiter.Release()
+	recovered := httptest.NewRecorder()
+	a.handleLogin(recovered, httptest.NewRequest(http.MethodPost, loginPattern, bytes.NewReader(body)))
+	if recovered.Code != http.StatusOK || calls.Load() != 1 {
+		t.Fatalf("recovered login status=%d verify calls=%d, want 200/1", recovered.Code, calls.Load())
 	}
-	cancel()
-
-	select {
-	case <-targetDone:
-	case <-time.After(5 * time.Second):
-		t.Fatal("handleLogin never returned after its own context was cancelled while queued on the semaphore — it stayed parked on a bare send")
-	}
-	if targetRec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("handleLogin status after cancellation while queued = %d, want %d", targetRec.Code, http.StatusServiceUnavailable)
-	}
-
-	// Free the filler slots. If the acquire is a bare send, the (by now
-	// impossible, since we already asserted targetDone above) still-parked
-	// target request would grab one of these and call verifyPassword; this
-	// is the belt-and-suspenders confirmation that a fixed handleLogin
-	// truly never reaches verifyPassword at all, not merely that it
-	// returned quickly for some other reason.
-	close(release)
-	wg.Wait()
-
-	select {
-	case <-entered:
-		t.Fatal("the target request entered verifyPassword despite its context already being cancelled and its handler having already returned on cancellation — the semaphore acquire did not observe context cancellation")
-	case <-time.After(200 * time.Millisecond):
-		// Expected: the target request returned when its context was
-		// cancelled and never reached verifyPassword at all.
+	for i := 1; i < loginConcurrency; i++ {
+		a.loginLimiter.Release()
 	}
 }

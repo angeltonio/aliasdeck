@@ -1,36 +1,16 @@
 {{define "content"}}
-<div class="page-header">
-  <div>
-    <h1>Aliases</h1>
-    <p>Command definitions this server hands to devices on sync.</p>
-  </div>
-</div>
-
+<div class="page-header"><div><h1>{{tr .Lang "aliases.title"}}</h1><p>{{tr .Lang "aliases.subtitle"}}</p></div></div>
 <div class="card">
-  <h2>New alias</h2>
+  <h2>{{tr .Lang "aliases.new"}}</h2>
   <form hx-post="/aliases" hx-target="#alias-panel" hx-swap="outerHTML" hx-on::after-request="if(event.detail.successful) this.reset()">
+    <input type="hidden" name="_csrf" value="{{.CSRFToken}}" />
     <div class="form-grid">
-      <div class="field">
-        <label for="name">Name</label>
-        <input type="text" id="name" name="name" placeholder="gs" required />
-      </div>
-      <div class="field">
-        <label for="command">Command</label>
-        <input type="text" id="command" name="command" placeholder="git status" required />
-      </div>
-      <div class="field">
-        <label for="description">Description</label>
-        <input type="text" id="description" name="description" placeholder="Show working tree status" />
-      </div>
-      <div class="field">
-        <button type="submit">Create alias</button>
-      </div>
+      <div class="field"><label for="name">{{tr .Lang "aliases.name"}}</label><input type="text" id="name" name="name" placeholder="gs" required /></div>
+      <div class="field"><label for="command">{{tr .Lang "aliases.command"}}</label><input type="text" id="command" name="command" placeholder="git status" required /></div>
+      <div class="field"><label for="description">{{tr .Lang "aliases.description"}}</label><input type="text" id="description" name="description" placeholder="{{tr .Lang "aliases.description_placeholder"}}" /></div>
+      <div class="field"><button type="submit">{{tr .Lang "aliases.create"}}</button></div>
     </div>
   </form>
 </div>
-
-<div class="card">
-  <h2>All aliases</h2>
-  {{template "alias_panel" .}}
-</div>
+<div class="card"><h2>{{tr .Lang "aliases.all"}}</h2>{{template "alias_panel" .}}</div>
 {{end}}

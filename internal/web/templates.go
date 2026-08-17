@@ -5,7 +5,7 @@ import (
 	"html/template"
 )
 
-// templateFS and staticFS are the two embedded trees this prototype ships:
+// templateFS and staticFS are the two embedded trees the web UI ships:
 // every HTML template and the vendored htmx + hand-written stylesheet,
 // baked into the binary via go:embed — no Node, no bundler, nothing read
 // from disk at runtime.
@@ -33,18 +33,25 @@ type pageTemplates struct {
 
 func loadTemplates() (*pageTemplates, error) {
 	parse := func(files ...string) (*template.Template, error) {
-		return template.ParseFS(templateFS, files...)
+		return template.New("pages").Funcs(template.FuncMap{
+			"tr": func(lang language, key string, values ...any) string {
+				if len(values) == 0 {
+					return translate(lang, key)
+				}
+				return formatted(lang, key, values...)
+			},
+		}).ParseFS(templateFS, files...)
 	}
 
-	login, err := parse("templates/login.html")
+	login, err := parse("templates/language_selector.html", "templates/login.html")
 	if err != nil {
 		return nil, err
 	}
-	setup, err := parse("templates/setup.html")
+	setup, err := parse("templates/language_selector.html", "templates/setup.html")
 	if err != nil {
 		return nil, err
 	}
-	aliases, err := parse("templates/base.html", "templates/alias_panel.html", "templates/aliases.html")
+	aliases, err := parse("templates/language_selector.html", "templates/base.html", "templates/alias_panel.html", "templates/aliases.html")
 	if err != nil {
 		return nil, err
 	}
@@ -52,11 +59,11 @@ func loadTemplates() (*pageTemplates, error) {
 	if err != nil {
 		return nil, err
 	}
-	devices, err := parse("templates/base.html", "templates/devices.html")
+	devices, err := parse("templates/language_selector.html", "templates/base.html", "templates/devices.html")
 	if err != nil {
 		return nil, err
 	}
-	devicesAdd, err := parse("templates/base.html", "templates/devices_add.html")
+	devicesAdd, err := parse("templates/language_selector.html", "templates/base.html", "templates/devices_add.html")
 	if err != nil {
 		return nil, err
 	}

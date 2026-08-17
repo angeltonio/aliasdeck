@@ -36,20 +36,11 @@ const defaultEnrollmentTTL = 15 * time.Minute
 // time and 64 MiB resident per call, so unbounded concurrency on this
 // unauthenticated route is itself a lever — 10 concurrent login attempts
 // alone already hold ~640 MiB before any single call is a problem on its
-// own. Sized in the low single digits: comfortably more than one operator's
-// login is ever queued behind in practice, small enough that the worst case
-// (loginConcurrency stacked argon2id blocks) stays a bounded, known cost.
-// Excess attempts queue on a.loginSem — but a bare, unconditional channel
-// send does not observe context cancellation on its own, so handleLogin's
-// acquire below selects on r.Context().Done() as well. That is what
-// actually makes the wait bounded by the same deadline http.TimeoutHandler
-// (router.go) already attaches to the request context, for both an
-// ordinary 20s timeout and an earlier client disconnect; a bare send would
-// stay parked past both, blocked on a client that is already gone, until it
-// eventually won a slot. (A four-lens correction pass found this package's
-// own comment previously asserting that bound already existed, when the
-// code did not implement it — corrected here and in design.md decision 24.)
-const loginConcurrency = 4
+// own. The shared process-wide limiter is sized in the low single digits;
+// excess unauthenticated work is rejected immediately instead of building a
+// second queue. The browser and JSON login paths receive the same limiter
+// instance from internal/server, so their combined worst case stays bounded.
+const loginConcurrency = auth.PasswordVerificationConcurrency
 
 // verifyPassword is auth.VerifyPassword through a package-level seam so
 // this package's own concurrency test (auth_test.go) can observe — and
@@ -73,23 +64,9 @@ type loginResponse struct {
 // Public at the router level — the credential arrives in the body, not as
 // a bearer token RequireKind could check — and authenticates itself here.
 //
-// The loginSem acquire/release brackets only the verifyPassword call
+// The limiter acquire/release brackets only the verifyPassword call
 // (design decision 24): an unknown username is refused before ever
-// touching the semaphore or the KDF.
-//
-// The acquire is a select on r.Context().Done(), not a bare channel send.
-// The narrow, real failure window this closes: a client disconnects after
-// ByUsername has already succeeded (a dead context fails ByUsername on its
-// own, before the acquire is ever reached, so an already-cancelled request
-// never demonstrates this at all) while every loginSem slot is held by
-// other in-flight logins. A bare send would leave that goroutine parked
-// until it eventually won a slot — long after its own client was gone —
-// which is exactly the "sixth unbounded operation" this correction exists
-// to close. On cancellation this returns before ever calling
-// verifyPassword; the write below is a best-effort courtesy to a caller
-// that is typically already gone (http.TimeoutHandler's own wrapped
-// ResponseWriter silently discards a write arriving after its own timeout
-// fired, so this is never a double-response panic either way).
+// touching the limiter or KDF.
 func (a *api) handleLogin(w http.ResponseWriter, r *http.Request) {
 	var in loginRequest
 	if !decodeJSON(w, r, &in) {
@@ -102,14 +79,12 @@ func (a *api) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	select {
-	case a.loginSem <- struct{}{}:
-	case <-r.Context().Done():
-		writeError(w, http.StatusServiceUnavailable, codeTimeout, "the request was cancelled while waiting to verify credentials", nil)
+	if !a.loginLimiter.TryAcquire() {
+		writeError(w, http.StatusServiceUnavailable, codeTimeout, "password verification capacity is temporarily exhausted", nil)
 		return
 	}
 	ok, verr := verifyPassword(in.Password, string(op.PasswordHash))
-	<-a.loginSem
+	a.loginLimiter.Release()
 
 	if verr != nil || !ok {
 		writeInvalidCredentials(w)

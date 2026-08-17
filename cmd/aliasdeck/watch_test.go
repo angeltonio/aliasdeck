@@ -135,9 +135,12 @@ func TestNewWatchCmdDefaultsAndRejectsNonPositiveInterval(t *testing.T) {
 	if interval != defaultWatchInterval {
 		t.Errorf("default interval = %s, want %s", interval, defaultWatchInterval)
 	}
+	if interval != 30*time.Second {
+		t.Errorf("default interval = %s, want release policy 30s", interval)
+	}
 
 	cmd.SetArgs([]string{"--interval=0"})
-	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "greater than zero") {
+	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "between 1s and 24h0m0s") {
 		t.Errorf("zero interval error = %v, want validation error", err)
 	}
 }

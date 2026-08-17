@@ -51,6 +51,36 @@ tidy: ## Tidy go.mod
 # automatic `go` directive bump this project does not want).
 SQLC_VERSION := v1.29.0
 
+DEV_COMPOSE := docker compose -p aliasdeck-dev -f compose.dev.yaml
+DEV_ROOT := $(CURDIR)/build/aliasdeck-dev
+DEV_BINARY := $(DEV_ROOT)/bin/aliasdeck
+DEV_CLIENT_HOME := $(DEV_ROOT)/client
+DEV_WATCH_INTERVAL := 5s
+
+.PHONY: dev-up
+dev-up: ## Run the hot-reloading development server in the foreground
+	$(DEV_COMPOSE) up --build
+
+.PHONY: dev-down
+dev-down: ## Stop the development server while preserving its state
+	$(DEV_COMPOSE) down
+
+.PHONY: dev-logs
+dev-logs: ## Follow development server and hot-reload logs
+	$(DEV_COMPOSE) logs --follow server
+
+.PHONY: dev-reset
+dev-reset: ## Remove only the dedicated development server and client state
+	$(DEV_COMPOSE) down --volumes --remove-orphans
+	@if [ "$$(uname -s)" = Darwin ]; then \
+		go run ./cmd/aliasdeck agent uninstall --if-executable "$(DEV_BINARY)" --if-home "$(DEV_CLIENT_HOME)" --if-interval "$(DEV_WATCH_INTERVAL)"; \
+	fi
+	@if [ -x "$(DEV_BINARY)" ] && [ -f "$(DEV_CLIENT_HOME)/config.yaml" ] && [ -f "$(DEV_CLIENT_HOME)/state.json" ]; then \
+		ALIASDECK_HOME="$(DEV_CLIENT_HOME)" "$(DEV_BINARY)" uninstall --yes; \
+	fi
+	@test "$(DEV_ROOT)" = "$(CURDIR)/build/aliasdeck-dev"
+	@if [ -d "$(DEV_ROOT)" ]; then find "$(DEV_ROOT)" -depth -delete; fi
+
 .PHONY: sqlc-generate
 sqlc-generate: ## Regenerate internal/store/sqlitestore from query.sql (sqlc)
 	cd internal/store/sqlitestore && go run github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION) generate

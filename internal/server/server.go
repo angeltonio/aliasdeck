@@ -99,6 +99,18 @@ func newHTTPServer(handler http.Handler) *http.Server {
 // project wants to report identically to a stop that lands after Listen.
 func Run(ctx context.Context, cfg Config) error {
 	cfg = cfg.withDefaults()
+	trustLocalSetup, err := localSetupEnabled(cfg.Getenv)
+	if err != nil {
+		return err
+	}
+	enrollmentWatchInterval, err := resolveEnrollmentWatchInterval(cfg)
+	if err != nil {
+		return err
+	}
+	publicURL, err := resolvePublicURL(cfg)
+	if err != nil {
+		return err
+	}
 
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -117,6 +129,9 @@ func Run(ctx context.Context, cfg Config) error {
 			return nil
 		}
 		return fmt.Errorf("server: bootstrapping operator: %w", err)
+	}
+	if trustLocalSetup {
+		fmt.Fprintf(cfg.Stdout, "aliasdeck: %s=true trusts the external network boundary for credentialless setup; publish the container port to host loopback only (for example, -p 127.0.0.1:18082:8080)\n", localSetupEnv)
 	}
 
 	ln, err := cfg.Listen()
@@ -146,20 +161,19 @@ func Run(ctx context.Context, cfg Config) error {
 	// decision 23 requires that route stay reachable without
 	// authentication, and (*api).routes() (internal/api/router.go)
 	// registers it Public — never re-guarded — for exactly that reason.
-	apiHandler, err := api.NewRouter(st, time.Now)
+	passwordLimiter := auth.NewPasswordLimiter()
+	apiHandler, err := api.NewRouterWithPasswordLimiter(st, time.Now, passwordLimiter)
 	if err != nil {
 		return fmt.Errorf("server: building router: %w", err)
 	}
 
-	// internal/web is a PROTOTYPE (see internal/web/doc.go), wired here
-	// only so the project owner can evaluate it end to end in a browser.
-	// It is a second, fully separate route table mounted alongside the
+	// internal/web is a second, fully separate route table mounted alongside the
 	// API's own mux — never merged into (*api).routes() — which is what
 	// keeps every UI page out of
 	// TestOpenAPIDocumentsExactlyTheRegisteredRoutes's bidirectional
 	// comparison without weakening that test: it only ever inspects
 	// (*api).routes(), and nothing here adds to it.
-	webHandler, err := web.NewHandler(st, time.Now, cfg.SetupCredentialFile)
+	webHandler, err := web.NewHandler(st, time.Now, cfg.SetupCredentialFile, trustLocalSetup, enrollmentWatchInterval, publicURL, passwordLimiter)
 	if err != nil {
 		return fmt.Errorf("server: building web ui: %w", err)
 	}

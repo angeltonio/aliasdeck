@@ -11,7 +11,7 @@ AliasDeck ships **two programs**, for two different audiences. Full reasoning in
 | | `aliasdeck` | `aliasdeck-server` |
 | --- | --- | --- |
 | Who runs it | Everybody — installed on every machine you use | Almost nobody, once, somewhere that stays on |
-| What it does | Renders your aliases into shell syntax | Holds aliases for many machines, serves a REST API (and, later, a web UI) |
+| What it does | Renders your aliases into shell syntax | Holds aliases for many machines and serves the web UI and REST API |
 | Install with | `brew`/`scoop`/install script | Docker (primary), or a plain binary for systemd |
 | Listens on a port | Never | Yes |
 
@@ -55,13 +55,37 @@ aliasdeck list      # aliases that apply to this device, and why others are skip
 
 Reload your shell and your aliases are live. `aliasdeck uninstall` reverses all of it, leaving your rc file byte-identical to how it was found.
 
+On macOS, automatic synchronization can run as a per-user LaunchAgent:
+
+```bash
+aliasdeck agent install --interval 30s
+```
+
+The **Devices → Add device** page includes this automatically by default and
+lets the operator choose a safe synchronization interval. Zsh reloads a
+watcher-written aliases file at the next prompt; other shells pick it up in a
+new shell or when the generated file is sourced again.
+
 ## Deploy the server
 
 Deployed once, somewhere that stays on — a VPS, a homelab box, a Raspberry Pi. Docker is the primary way to run it:
 
 ```bash
-docker run -v aliasdeck:/data ghcr.io/angeltonio/aliasdeck-server
+docker run --name aliasdeck-server \
+  -p 127.0.0.1:8080:8080 \
+  -e ALIASDECK_LOCAL_SETUP=true \
+  -v aliasdeck:/data \
+  ghcr.io/angeltonio/aliasdeck-server
 ```
+
+Then open `http://127.0.0.1:8080/setup` to create the first operator.
+`ALIASDECK_LOCAL_SETUP=true` is an explicit trust assertion: Docker bridge
+traffic is not loopback inside the container, so use it only with a host
+loopback publish such as `-p 127.0.0.1:8080:8080`. Without the opt-in,
+non-loopback requests still require the one-time credential in
+`/data/setup-credential.txt`; proxied requests always require that credential.
+For headless deployments, set `ALIASDECK_ADMIN_PASSWORD` before the first
+start instead of using the browser flow.
 
 A plain binary is published too, for people who prefer systemd:
 
@@ -69,14 +93,25 @@ A plain binary is published too, for people who prefer systemd:
 ./aliasdeck-server
 ```
 
-**v0.3** — `aliasdeck-server` runs a single static binary with an embedded
-SQLite database, exposing a REST API under `/api/v1` for aliases, profiles
-and devices, guarded by operator sessions and per-device tokens (`login`,
-`register`, `logout` on the client side). It is API-only: there is no web UI
-yet (that is v0.4). TLS is not built in — put a reverse proxy in front for
-anything reachable beyond loopback. The default bind (`--addr`) is
-`127.0.0.1:8080`, loopback only; widening it to another interface is a
-deliberate, explicit operator choice.
+`aliasdeck-server` runs a single static binary with an embedded SQLite
+database, exposing the web UI and a REST API under `/api/v1`. TLS is not built
+in — put a reverse proxy in front for anything reachable beyond loopback. The
+default native bind (`--addr`) is `127.0.0.1:8080`; widening it to another
+interface is a deliberate operator choice.
+
+Behind a TLS-terminating reverse proxy, set the browser-facing origin
+explicitly:
+
+```bash
+ALIASDECK_PUBLIC_URL=https://aliases.example
+```
+
+This value must be an origin only: no credentials, path, query, or fragment.
+Remote origins require HTTPS; loopback HTTP remains available for local
+development. AliasDeck deliberately ignores `Forwarded` and
+`X-Forwarded-*` for trust, setup eligibility, cookie security, and enrollment
+URLs. The explicit origin sets Secure browser cookies and is embedded in the
+device enrollment command.
 
 Then, on each device:
 
@@ -96,7 +131,8 @@ aliasdeck sync
 | Standalone CLI (`init`, `sync`, `status`, `list`, `doctor`, `edit`, `uninstall`) | ✅ |
 | Homebrew, Scoop and install script (client only) | ✅ |
 | Self-hosted server (`aliasdeck-server`, REST API, SQLite, device enrollment) | ✅ |
-| Web UI | ⬜ Later |
+| Web UI with English and Spanish localization | ✅ |
+| Configurable automatic alias synchronization on macOS | ✅ |
 
 ---
 
@@ -174,10 +210,15 @@ aliasdeck edit
 aliasdeck sync
 ```
 
-**Control plane** — a self-hosted server for managing many machines centrally: a REST API under `/api/v1`, guarded by operator sessions and per-device tokens. A single static binary with an embedded SQLite database — no separate database server to run. There is no web UI yet (v0.4); TLS is not built in, so put a reverse proxy in front for anything reachable beyond loopback.
+**Control plane** — a self-hosted server for managing many machines centrally:
+a web UI and REST API under `/api/v1`, guarded by operator sessions and
+per-device tokens. A single static binary with an embedded SQLite database —
+no separate database server to run. TLS is not built in, so put a reverse
+proxy in front for anything reachable beyond loopback.
 
 ```bash
-docker run -v aliasdeck:/data ghcr.io/angeltonio/aliasdeck-server
+docker run -p 127.0.0.1:8080:8080 -e ALIASDECK_LOCAL_SETUP=true \
+  -v aliasdeck:/data ghcr.io/angeltonio/aliasdeck-server
 ```
 
 `aliasdeck-server` is a separate binary from the client, published separately — not a hidden mode of `aliasdeck` you opt into with a flag. Same renderers, same validation, same module. The server is an upgrade, never a prerequisite.
@@ -207,8 +248,9 @@ These are the choices that shape everything else. The reasoning lives in [`docs/
 | **v0.1** | Standalone CLI · zsh + bash · macOS + Linux ✅ |
 | **v0.2** | PowerShell + Windows · Git-hosted config ✅ |
 | **v0.3** | Self-hosted server · devices, profiles, REST API ✅ |
-| v0.4 | Web UI with live rendered preview |
-| later | Auto-sync, import/export, version history, Chezmoi backend, MCP server |
+| **v0.4** | Web UI with live rendered preview ✅ |
+| **v0.5** | Operator onboarding, device enrollment and automatic synchronization ✅ |
+| later | Import/export, version history, Chezmoi backend, MCP server |
 
 ---
 

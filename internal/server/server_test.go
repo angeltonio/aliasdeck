@@ -286,6 +286,74 @@ func TestRunAnnouncesTheRealBoundListenerAddress(t *testing.T) {
 	}
 }
 
+func TestRunLogsTrustedLocalSetupBoundaryWarning(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var stdout bytes.Buffer
+	lnReady := make(chan net.Listener, 1)
+	cfg := Config{
+		Getenv: func(name string) string {
+			if name == localSetupEnv {
+				return "true"
+			}
+			return ""
+		},
+		Stdout:    &stdout,
+		OpenStore: func(context.Context) (store.Store, error) { return &fakeStore{}, nil },
+		Listen: func() (net.Listener, error) {
+			ln, err := net.Listen("tcp", "127.0.0.1:0")
+			if err == nil {
+				lnReady <- ln
+			}
+			return ln, err
+		},
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- Run(ctx, cfg) }()
+	var ln net.Listener
+	select {
+	case ln = <-lnReady:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run() never called Listen")
+	}
+	waitForHealthy(t, ln)
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Run() = %v, want nil", err)
+	}
+
+	got := stdout.String()
+	for _, fragment := range []string{localSetupEnv + "=true", "trusts the external network boundary", "-p 127.0.0.1:18082:8080"} {
+		if !strings.Contains(got, fragment) {
+			t.Errorf("stdout = %q, want warning fragment %q", got, fragment)
+		}
+	}
+}
+
+func TestRunRejectsMalformedLocalSetupConfigurationBeforeStoreOpen(t *testing.T) {
+	openCalled := false
+	err := Run(context.Background(), Config{
+		Getenv: func(name string) string {
+			if name == localSetupEnv {
+				return "yes"
+			}
+			return ""
+		},
+		OpenStore: func(context.Context) (store.Store, error) {
+			openCalled = true
+			return &fakeStore{}, nil
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), localSetupEnv+" must be exactly true or false") {
+		t.Fatalf("Run() = %v, want malformed %s error", err, localSetupEnv)
+	}
+	if openCalled {
+		t.Fatal("Run() opened the store despite malformed local setup configuration")
+	}
+}
+
 // waitForHealthy polls GET /api/v1/health until it answers or the bound
 // elapses, giving Run's own goroutine time to reach Serve without a real
 // sleep in the test itself.

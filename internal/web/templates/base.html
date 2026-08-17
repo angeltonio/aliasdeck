@@ -1,32 +1,28 @@
 {{define "base"}}
 <!doctype html>
-<html lang="en">
+<html lang="{{.Lang}}">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="csrf-token" content="{{.CSRFToken}}" />
   <title>{{.Title}} · AliasDeck</title>
   <link rel="stylesheet" href="/static/style.css" />
   <script src="/static/htmx.min.js"></script>
+  <script src="/static/csrf.js"></script>
   <script defer src="/static/local-time.js"></script>
 </head>
 <body>
-  <div class="proto-banner">
-    PROTOTYPE build — Go templates + htmx, unauthenticated for CSRF beyond SameSite=Strict, not for production use.
-  </div>
   <div class="topbar">
-    <div class="brand">AliasDeck <span>control plane</span></div>
+    <div class="brand">AliasDeck <span>{{tr .Lang "brand.control_plane"}}</span></div>
     <nav>
-      <a href="/aliases" class="{{if eq .Active "aliases"}}active{{end}}">Aliases</a>
-      <a href="/devices" class="{{if eq .Active "devices"}}active{{end}}">Devices</a>
-      <form method="post" action="/logout">
-        <button type="submit" class="secondary">Log out</button>
-      </form>
+      <a href="/aliases" class="{{if eq .Active "aliases"}}active{{end}}">{{tr .Lang "nav.aliases"}}</a>
+      <a href="/devices" class="{{if eq .Active "devices"}}active{{end}}">{{tr .Lang "nav.devices"}}</a>
+      {{template "language_selector" .}}
+      <form method="post" action="/logout"><input type="hidden" name="_csrf" value="{{.CSRFToken}}" /><button type="submit" class="secondary">{{tr .Lang "nav.logout"}}</button></form>
     </nav>
   </div>
-  <main>
-    {{template "content" .}}
-  </main>
-  <footer class="hint">AliasDeck web UI prototype — evaluating Go templates + htmx against the Vite + React plan in docs/PROJECT.md.</footer>
+  <main>{{template "content" .}}</main>
+  <footer class="hint">{{tr .Lang "footer"}}</footer>
 </body>
 </html>
 {{end}}

@@ -1,5 +1,5 @@
 // Command aliasdeck-server is the AliasDeck control plane: it migrates its
-// SQLite database and serves the REST API (and, later, the embedded web UI)
+// SQLite database and serves the REST API and embedded web UI
 // that registered devices and operators talk to
 // (docs/WHAT-WE-ARE-BUILDING.md, "aliasdeck-server — the control plane").
 //

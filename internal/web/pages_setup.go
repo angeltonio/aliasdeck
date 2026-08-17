@@ -17,6 +17,7 @@ import (
 )
 
 type setupPageData struct {
+	pageData
 	Error, Credential, Username, LocalToken string
 }
 
@@ -38,7 +39,7 @@ func newSetupTokenTracker() *setupTokenTracker {
 
 func (a *webapp) handleSetupPage(w http.ResponseWriter, r *http.Request) {
 	credential := r.URL.Query().Get("credential")
-	local := isDirectLoopbackRequest(r)
+	local := a.isCredentiallessSetupRequest(r)
 	if (!local && credential == "") || !auth.SetupEnabled(a.setupCredentialPath) {
 		http.NotFound(w, r)
 		return
@@ -48,30 +49,31 @@ func (a *webapp) handleSetupPage(w http.ResponseWriter, r *http.Request) {
 		var err error
 		data.LocalToken, err = a.issueLocalSetupToken(w, r)
 		if err != nil {
-			http.Error(w, "could not start local setup", http.StatusInternalServerError)
+			http.Error(w, translate(requestLanguage(r), "error.setup_start"), http.StatusInternalServerError)
 			return
 		}
 	}
-	a.renderSetup(w, http.StatusOK, data)
+	a.renderSetup(w, r, http.StatusOK, data)
 }
 
-func (a *webapp) renderSetup(w http.ResponseWriter, status int, data setupPageData) {
+func (a *webapp) renderSetup(w http.ResponseWriter, r *http.Request, status int, data setupPageData) {
+	data.pageData = pageDataFor(r)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
-	_ = a.tmpl.setup.Execute(w, data)
+	_ = a.tmpl.setup.ExecuteTemplate(w, "setup.html", data)
 }
 
 func (a *webapp) handleSetupSubmit(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
-		a.renderSetup(w, http.StatusBadRequest, setupPageData{Error: "the setup form could not be read"})
+		a.renderSetup(w, r, http.StatusBadRequest, setupPageData{Error: translate(requestLanguage(r), "error.setup_form")})
 		return
 	}
 	data := setupPageData{Credential: r.FormValue("credential"), Username: r.FormValue("username"), LocalToken: r.FormValue("local_token")}
-	localCredentialless := isDirectLoopbackRequest(r) && data.Credential == ""
+	localCredentialless := a.isCredentiallessSetupRequest(r) && data.Credential == ""
 	var err error
 	if localCredentialless {
 		if !a.consumeLocalSetupToken(r, data.LocalToken) {
-			a.renderSetup(w, http.StatusNotFound, setupPageData{Error: "this setup link is invalid or has already been used"})
+			a.renderSetup(w, r, http.StatusNotFound, setupPageData{Error: translate(requestLanguage(r), "error.setup_link")})
 			return
 		}
 		err = auth.CompleteLocalSetup(r.Context(), a.store, a.setupCredentialPath, data.Username, r.FormValue("password"), r.FormValue("confirmation"))
@@ -91,22 +93,22 @@ func (a *webapp) handleSetupSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 	switch {
 	case errors.Is(err, auth.ErrMismatchedSetupPassword):
-		data.Error = "passwords do not match"
+		data.Error = translate(requestLanguage(r), "error.password_mismatch")
 	case errors.Is(err, auth.ErrWeakSetupPassword):
-		data.Error = "password must be at least 12 characters"
+		data.Error = translate(requestLanguage(r), "error.password_weak")
 	case status == http.StatusNotFound:
-		data.Error = "this setup link is invalid or has already been used"
+		data.Error = translate(requestLanguage(r), "error.setup_link")
 	default:
-		data.Error = "could not create the operator account"
+		data.Error = translate(requestLanguage(r), "error.operator_create")
 	}
 	if status != http.StatusNotFound && localCredentialless && auth.SetupEnabled(a.setupCredentialPath) {
 		data.LocalToken, err = a.issueLocalSetupToken(w, r)
 		if err != nil {
-			http.Error(w, "could not continue local setup", http.StatusInternalServerError)
+			http.Error(w, translate(requestLanguage(r), "error.setup_continue"), http.StatusInternalServerError)
 			return
 		}
 	}
-	a.renderSetup(w, status, data)
+	a.renderSetup(w, r, status, data)
 }
 
 func (a *webapp) issueLocalSetupToken(w http.ResponseWriter, r *http.Request) (string, error) {
@@ -200,16 +202,20 @@ func clearLocalSetupCookie(w http.ResponseWriter) {
 	})
 }
 
-// isDirectLoopbackRequest grants the credentialless setup path only when the
-// HTTP peer itself is loopback. Application-level headers are never proof of
-// locality. Proxy metadata makes even a loopback peer ineligible so a local
-// reverse proxy cannot accidentally turn remote traffic into local setup.
-func isDirectLoopbackRequest(r *http.Request) bool {
+// isCredentiallessSetupRequest grants the credentialless setup path to a
+// direct loopback peer, or when the operator has explicitly asserted that the
+// server's external network boundary is local-only. Proxy metadata always
+// makes the request ineligible: application-level headers are never proof of
+// locality, and a reverse proxy must use the one-time setup credential.
+func (a *webapp) isCredentiallessSetupRequest(r *http.Request) bool {
 	for name := range r.Header {
 		lower := strings.ToLower(name)
 		if lower == "forwarded" || lower == "via" || lower == "x-real-ip" || strings.HasPrefix(lower, "x-forwarded-") {
 			return false
 		}
+	}
+	if a.trustLocalSetup {
+		return true
 	}
 	peer, err := netip.ParseAddrPort(r.RemoteAddr)
 	return err == nil && peer.Addr().IsLoopback()

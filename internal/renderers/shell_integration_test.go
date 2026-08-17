@@ -107,3 +107,137 @@ func TestGeneratedFileIsInertInRealShells(t *testing.T) {
 		})
 	}
 }
+
+func TestGeneratedPOSIXFileRemovesOnlyStaleManagedAliases(t *testing.T) {
+	for _, sh := range []struct {
+		bin   string
+		shell domain.Shell
+	}{
+		{bin: "bash", shell: domain.ShellBash},
+		{bin: "zsh", shell: domain.ShellZsh},
+	} {
+		t.Run(sh.bin, func(t *testing.T) {
+			bin := shelltest.LookPath(t, sh.bin)
+			dir := t.TempDir()
+			render := func(name string, aliases []domain.Alias) string {
+				t.Helper()
+				cfg := domain.ResolvedConfig{Device: domain.Device{Name: "test", Platform: domain.PlatformMacOS, Shell: sh.shell}, Aliases: aliases}
+				cfg.Revision = cfg.ComputeRevision()
+				got, err := Render(cfg)
+				if err != nil {
+					t.Fatal(err)
+				}
+				path := filepath.Join(dir, name)
+				if err := os.WriteFile(path, []byte(got), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				return path
+			}
+			first := render("first", []domain.Alias{{Name: "removed", Command: "echo old", Enabled: true}, {Name: "kept", Command: "echo kept", Enabled: true}})
+			second := render("second", []domain.Alias{{Name: "kept", Command: "echo updated", Enabled: true}})
+			script := "source " + first + "\nalias unrelated='echo user'\nsource " + second + "\n" +
+				"alias kept >/dev/null\n! alias removed >/dev/null 2>&1\nalias unrelated >/dev/null\n"
+			if out, err := exec.Command(bin, "-c", script).CombinedOutput(); err != nil {
+				t.Fatalf("stale-alias cleanup failed: %v\n%s", err, out)
+			}
+		})
+	}
+}
+
+func TestGeneratedPOSIXFileMigratesV053AliasesInRealShells(t *testing.T) {
+	for _, sh := range []struct {
+		bin   string
+		shell domain.Shell
+	}{
+		{bin: "bash", shell: domain.ShellBash},
+		{bin: "zsh", shell: domain.ShellZsh},
+	} {
+		t.Run(sh.bin, func(t *testing.T) {
+			bin := shelltest.LookPath(t, sh.bin)
+			dir := t.TempDir()
+			legacy := readLegacyFixture(t, sh.shell)
+			current := MigrateLegacyPOSIXOutput(renderTestPOSIX(t, sh.shell, nil), []byte(legacy), sh.shell)
+			legacyPath := filepath.Join(dir, "aliases.v053."+sh.bin)
+			currentPath := filepath.Join(dir, "aliases.current."+sh.bin)
+			if err := os.WriteFile(legacyPath, []byte(legacy), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(currentPath, []byte(current), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			script := "source " + legacyPath + "\n" +
+				"alias unrelated='printf user'\n" +
+				"source " + currentPath + "\n" +
+				"! alias _under >/dev/null 2>&1\n" +
+				"! alias dot.name >/dev/null 2>&1\n" +
+				"! alias foo-bar >/dev/null 2>&1\n" +
+				"alias unrelated >/dev/null\n" +
+				"source " + currentPath + "\n" +
+				"alias unrelated >/dev/null\n"
+			if out, err := exec.Command(bin, "-c", script).CombinedOutput(); err != nil {
+				t.Fatalf("v0.5.3 migration failed: %v\n%s\ncurrent output:\n%s", err, out, current)
+			}
+		})
+	}
+}
+
+func TestGeneratedPOSIXFileCarriesMigrationUntilTheShellConsumesIt(t *testing.T) {
+	for _, sh := range []struct {
+		bin   string
+		shell domain.Shell
+	}{
+		{bin: "bash", shell: domain.ShellBash},
+		{bin: "zsh", shell: domain.ShellZsh},
+	} {
+		t.Run(sh.bin, func(t *testing.T) {
+			bin := shelltest.LookPath(t, sh.bin)
+			dir := t.TempDir()
+			legacy := readLegacyFixture(t, sh.shell)
+			first := MigrateLegacyPOSIXOutput(renderTestPOSIX(t, sh.shell, nil), []byte(legacy), sh.shell)
+			second := CarryForwardLegacyPOSIXMigration(
+				renderTestPOSIX(t, sh.shell, []domain.Alias{{Name: "new-name", Command: "printf new", Enabled: true}}),
+				[]byte(first), sh.shell,
+			)
+			legacyPath := filepath.Join(dir, "aliases.v053."+sh.bin)
+			secondPath := filepath.Join(dir, "aliases.second."+sh.bin)
+			if err := os.WriteFile(legacyPath, []byte(legacy), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(secondPath, []byte(second), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			// The shell intentionally never sources the first migrated revision.
+			script := "source " + legacyPath + "\nsource " + secondPath + "\n" +
+				"! alias _under >/dev/null 2>&1\n! alias dot.name >/dev/null 2>&1\n! alias foo-bar >/dev/null 2>&1\nalias new-name >/dev/null\n"
+			if out, err := exec.Command(bin, "-c", script).CombinedOutput(); err != nil {
+				t.Fatalf("carried migration failed: %v\n%s", err, out)
+			}
+		})
+	}
+}
+
+func TestGeneratedZshPromptHookReloadsChangedFile(t *testing.T) {
+	bin := shelltest.LookPath(t, "zsh")
+	dir := t.TempDir()
+	render := func(path string, aliases []domain.Alias) {
+		t.Helper()
+		cfg := domain.ResolvedConfig{Device: domain.Device{Name: "test", Platform: domain.PlatformMacOS, Shell: domain.ShellZsh}, Aliases: aliases}
+		cfg.Revision = cfg.ComputeRevision()
+		got, err := Render(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(got), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	active := filepath.Join(dir, "aliases.zsh")
+	next := filepath.Join(dir, "aliases.next.zsh")
+	render(active, []domain.Alias{{Name: "removed", Command: "echo old", Enabled: true}})
+	render(next, []domain.Alias{{Name: "added", Command: "echo new", Enabled: true}})
+	script := "source " + active + "\nalias unrelated='echo user'\ncp " + next + " " + active + "\n" +
+		"_aliasdeck_reload_generated_aliases\n! alias removed >/dev/null 2>&1\nalias added >/dev/null\nalias unrelated >/dev/null\n"
+	if out, err := exec.Command(bin, "-c", script).CombinedOutput(); err != nil {
+		t.Fatalf("zsh prompt reload failed: %v\n%s", err, out)
+	}
+}

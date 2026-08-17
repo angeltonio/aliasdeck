@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/angeltonio/aliasdeck/internal/store"
 	"github.com/angeltonio/aliasdeck/internal/store/sqlitestore"
+	"github.com/angeltonio/aliasdeck/internal/watchconfig"
 )
 
 // Config configures Run. Every field that would otherwise touch the real
@@ -61,6 +63,15 @@ type Config struct {
 	// cmd/aliasdeck-server/main.go leaving this field zero.
 	ShutdownTimeout time.Duration
 
+	// EnrollmentWatchInterval is embedded in Add device commands. Zero reads
+	// ALIASDECK_ENROLLMENT_WATCH_INTERVAL, whose empty production default is
+	// 30s. Tests and embedded callers may set the duration directly.
+	EnrollmentWatchInterval time.Duration
+
+	// PublicURL is the explicit browser-facing origin used behind a reverse
+	// proxy. Empty reads ALIASDECK_PUBLIC_URL; proxy headers are never trusted.
+	PublicURL string
+
 	// OpenStore opens the store Run migrates and serves. Defaults to
 	// sqlitestore.Open against DBPath — the only backend this milestone
 	// ships (design decision 3). Tests substitute a fake to observe
@@ -74,6 +85,38 @@ type Config struct {
 	// suite never breaks on a developer machine with something already
 	// bound to a fixed port.
 	Listen func() (net.Listener, error)
+}
+
+const localSetupEnv = "ALIASDECK_LOCAL_SETUP"
+
+const enrollmentWatchIntervalEnv = "ALIASDECK_ENROLLMENT_WATCH_INTERVAL"
+
+func localSetupEnabled(getenv func(string) string) (bool, error) {
+	switch getenv(localSetupEnv) {
+	case "", "false":
+		return false, nil
+	case "true":
+		return true, nil
+	default:
+		return false, fmt.Errorf("server: %s must be exactly true or false", localSetupEnv)
+	}
+}
+
+func resolveEnrollmentWatchInterval(cfg Config) (time.Duration, error) {
+	if cfg.EnrollmentWatchInterval != 0 {
+		if err := watchconfig.ValidateEnrollment(cfg.EnrollmentWatchInterval); err != nil {
+			return 0, fmt.Errorf("server: enrollment watch %w", err)
+		}
+		return cfg.EnrollmentWatchInterval, nil
+	}
+	d, err := watchconfig.Parse(cfg.Getenv(enrollmentWatchIntervalEnv))
+	if err != nil {
+		return 0, fmt.Errorf("server: %s: %w", enrollmentWatchIntervalEnv, err)
+	}
+	if err := watchconfig.ValidateEnrollment(d); err != nil {
+		return 0, fmt.Errorf("server: %s: %w", enrollmentWatchIntervalEnv, err)
+	}
+	return d, nil
 }
 
 // defaultShutdownTimeout is the production drain bound (design's Bounded

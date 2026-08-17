@@ -34,7 +34,7 @@ type fakeStore struct {
 	// before returning. It exists only for
 	// TestLoginSemaphoreAcquireObservesContextCancellationAfterUsernameLookup
 	// (auth_test.go) to signal a test goroutine at the exact instant
-	// handleLogin is about to reach its semaphore acquire, so that test can
+	// handleLogin is about to reach its limiter acquire, so that test can
 	// cancel the calling request's own context from precisely that window —
 	// after ByUsername succeeded, before the acquire — and nowhere else.
 	byUsernameHook func(username string)

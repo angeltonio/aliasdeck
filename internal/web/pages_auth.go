@@ -9,6 +9,7 @@ import (
 
 // loginPageData is login.html's own data shape.
 type loginPageData struct {
+	pageData
 	Error          string
 	Username       string
 	SetupAvailable bool
@@ -22,33 +23,31 @@ func (a *webapp) handleLoginPage(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/aliases", http.StatusSeeOther)
 		return
 	}
-	a.renderLogin(w, http.StatusOK, loginPageData{SetupAvailable: auth.SetupEnabled(a.setupCredentialPath)})
+	a.renderLogin(w, r, http.StatusOK, loginPageData{SetupAvailable: auth.SetupEnabled(a.setupCredentialPath)})
 }
 
-func (a *webapp) renderLogin(w http.ResponseWriter, status int, data loginPageData) {
+func (a *webapp) renderLogin(w http.ResponseWriter, r *http.Request, status int, data loginPageData) {
+	data.pageData = pageDataFor(r)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
-	_ = a.tmpl.login.Execute(w, data)
+	_ = a.tmpl.login.ExecuteTemplate(w, "login.html", data)
 }
 
 // handleLoginSubmit exchanges the operator's username/password for a
 // session token, exactly the credential check internal/api.handleLogin
 // performs (store.Operators().ByUsername + auth.VerifyPassword), and
 // hands the resulting store.TokenKindSession token back as a cookie
-// instead of a JSON body. This prototype does not reuse handleLogin
+// instead of a JSON body. The web UI does not reuse handleLogin
 // itself — it is an unexported method on a different package's type —
 // but performs the identical two checks against the identical store seam,
 // per the Milestone 5 proposal's own approach ("renders against the same
 // internal/store seam the API uses; does not call /api/v1 over HTTP from
 // inside its own process").
-//
-// PROTOTYPE GAP: unlike internal/api.handleLogin, this handler does not
-// bound concurrent password verification (design decision 24's
-// loginSem). A single-operator prototype accepts that; production wiring
-// of this flow must not.
+// Password verification is protected by the exact limiter instance shared
+// with the JSON API, so the two transports cannot multiply Argon2 work.
 func (a *webapp) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
-		a.renderLogin(w, http.StatusBadRequest, loginPageData{Error: "the login form could not be read"})
+		a.renderLogin(w, r, http.StatusBadRequest, loginPageData{Error: translate(requestLanguage(r), "error.login_form")})
 		return
 	}
 	username := r.FormValue("username")
@@ -56,19 +55,24 @@ func (a *webapp) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 
 	op, err := a.store.Operators().ByUsername(r.Context(), username)
 	if err != nil {
-		a.renderLogin(w, http.StatusUnauthorized, loginPageData{Error: "invalid username or password", Username: username})
+		a.renderLogin(w, r, http.StatusUnauthorized, loginPageData{Error: translate(requestLanguage(r), "error.login_invalid"), Username: username})
 		return
 	}
 
+	if !a.loginLimiter.TryAcquire() {
+		a.renderLogin(w, r, http.StatusServiceUnavailable, loginPageData{Error: translate(requestLanguage(r), "error.login_busy"), Username: username})
+		return
+	}
 	ok, verr := auth.VerifyPassword(password, string(op.PasswordHash))
+	a.loginLimiter.Release()
 	if verr != nil || !ok {
-		a.renderLogin(w, http.StatusUnauthorized, loginPageData{Error: "invalid username or password", Username: username})
+		a.renderLogin(w, r, http.StatusUnauthorized, loginPageData{Error: translate(requestLanguage(r), "error.login_invalid"), Username: username})
 		return
 	}
 
 	minted, err := auth.Mint(store.TokenKindSession)
 	if err != nil {
-		a.renderLogin(w, http.StatusInternalServerError, loginPageData{Error: "could not start a session, try again", Username: username})
+		a.renderLogin(w, r, http.StatusInternalServerError, loginPageData{Error: translate(requestLanguage(r), "error.session"), Username: username})
 		return
 	}
 
@@ -82,11 +86,11 @@ func (a *webapp) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 		CreatedAt:  now,
 		ExpiresAt:  expiresAt,
 	}); err != nil {
-		a.renderLogin(w, http.StatusInternalServerError, loginPageData{Error: "could not start a session, try again", Username: username})
+		a.renderLogin(w, r, http.StatusInternalServerError, loginPageData{Error: translate(requestLanguage(r), "error.session"), Username: username})
 		return
 	}
 
-	setSessionCookie(w, r, minted.Wire, expiresAt)
+	a.setSessionCookie(w, r, minted.Wire, expiresAt)
 	http.Redirect(w, r, "/aliases", http.StatusSeeOther)
 }
 
@@ -99,6 +103,6 @@ func (a *webapp) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if ok {
 		_ = a.store.Tokens().Revoke(r.Context(), subj.TokenID, a.now())
 	}
-	clearSessionCookie(w, r)
+	a.clearSessionCookie(w, r)
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }

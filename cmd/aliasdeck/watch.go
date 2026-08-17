@@ -7,10 +7,11 @@ import (
 	"time"
 
 	"github.com/angeltonio/aliasdeck/internal/app"
+	"github.com/angeltonio/aliasdeck/internal/watchconfig"
 	"github.com/spf13/cobra"
 )
 
-const defaultWatchInterval = 5 * time.Minute
+const defaultWatchInterval = watchconfig.DefaultInterval
 
 type watchTimer interface {
 	Chan() <-chan time.Time
@@ -35,15 +36,10 @@ func newWatchCmd() *cobra.Command {
 	var interval time.Duration
 
 	cmd := &cobra.Command{
-		Use:   "watch",
-		Short: "Report reachability and synchronize aliases periodically.",
-		Args:  cobra.NoArgs,
-		PreRunE: func(_ *cobra.Command, _ []string) error {
-			if interval <= 0 {
-				return fmt.Errorf("interval must be greater than zero")
-			}
-			return nil
-		},
+		Use:     "watch",
+		Short:   "Report reachability and synchronize aliases periodically.",
+		Args:    cobra.NoArgs,
+		PreRunE: func(_ *cobra.Command, _ []string) error { return watchconfig.Validate(interval) },
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cmd.SilenceUsage = true
 			env := app.OSEnv()

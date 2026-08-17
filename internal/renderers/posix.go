@@ -30,6 +30,23 @@ func (r posixRenderer) Render(cfg domain.ResolvedConfig) (string, error) {
 	var b strings.Builder
 	writeHeader(&b, "#", cfg, len(aliases))
 
+	// A shell keeps aliases in memory after their defining file changes.
+	// Remove only names recorded by the previously sourced AliasDeck file;
+	// unrelated user aliases remain untouched.
+	b.WriteString("\nif [ -n \"${ALIASDECK_MANAGED_ALIAS_NAMES-}\" ]; then\n")
+	b.WriteString("  for aliasdeck_managed_name in $ALIASDECK_MANAGED_ALIAS_NAMES; do\n")
+	b.WriteString("    unalias -- \"$aliasdeck_managed_name\" 2>/dev/null || true\n")
+	b.WriteString("  done\n")
+	b.WriteString("fi\n")
+	names := make([]string, 0, len(aliases))
+	for _, a := range aliases {
+		names = append(names, a.Name)
+	}
+	b.WriteString("ALIASDECK_MANAGED_ALIAS_NAMES=")
+	b.WriteString(quotePOSIX(strings.Join(names, " ")))
+	b.WriteString("\n")
+	b.WriteString("unset aliasdeck_managed_name\n")
+
 	for _, a := range aliases {
 		b.WriteString("\n")
 		if desc := sanitizeComment(a.Description); desc != "" {
@@ -42,6 +59,21 @@ func (r posixRenderer) Render(cfg domain.ResolvedConfig) (string, error) {
 		b.WriteString("=")
 		b.WriteString(quotePOSIX(a.Command))
 		b.WriteString("\n")
+	}
+
+	if r.shell == domain.ShellZsh {
+		// The setup command sources this file into the current zsh. Registering
+		// a prompt hook here means future watcher-written revisions are picked up
+		// without restarting the shell; re-sourcing is idempotent.
+		b.WriteString(`
+typeset -g ALIASDECK_GENERATED_ALIAS_FILE=${${(%):-%N}:A}
+_aliasdeck_reload_generated_aliases() {
+  [ -r "$ALIASDECK_GENERATED_ALIAS_FILE" ] && . "$ALIASDECK_GENERATED_ALIAS_FILE"
+}
+autoload -Uz add-zsh-hook
+add-zsh-hook -d precmd _aliasdeck_reload_generated_aliases 2>/dev/null || true
+add-zsh-hook precmd _aliasdeck_reload_generated_aliases
+`)
 	}
 
 	return b.String(), nil

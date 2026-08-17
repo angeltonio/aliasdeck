@@ -56,6 +56,12 @@ type AliasRepo interface {
 	Delete(ctx context.Context, id string) error
 }
 
+// BoundedAliasCreator is the production store extension used by HTTP create
+// paths to make the capacity check and insertion one atomic store operation.
+type BoundedAliasCreator interface {
+	CreateWithinLimit(ctx context.Context, a domain.Alias, limit int) (domain.Alias, error)
+}
+
 // DeviceRepo persists domain.Device.
 //
 // There is no Create: a device is born only through

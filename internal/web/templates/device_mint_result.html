@@ -1,29 +1,12 @@
 {{define "device_mint_result"}}
 <div id="mint-result">
-  <h2 style="margin-top:24px">2. Run on the new machine</h2>
-  <p class="muted" style="margin-top:-8px">This token expires at {{.ExpiresAt}}.</p>
-  <div class="copy-row">
-    <button type="button" class="secondary" onclick="navigator.clipboard.writeText(document.getElementById('mint-commands').innerText)">Copy</button>
-  </div>
-  <pre class="commands" id="mint-commands">{{.Command}}</pre>
+  <h2 style="margin-top:24px">{{tr .Lang "enroll.run"}}</h2><p class="muted" style="margin-top:-8px">{{tr .Lang "enroll.expires" .ExpiresAt}}</p>
+  <div class="copy-row"><button type="button" class="secondary" data-copy-enrollment-command aria-controls="mint-commands">{{tr .Lang "enroll.copy"}}</button></div>
+  <pre class="commands" id="mint-commands" data-manual-command="{{.ManualCommand}}">{{.Command}}</pre>
+  <div id="mint-frequency-commands" hidden>{{range .FrequencyCommands}}<span data-enrollment-frequency="{{.Value}}" data-command="{{.Command}}"></span>{{end}}</div>
   {{template "device_enrollment_pending" .}}
 </div>
 {{end}}
-
-{{define "device_enrollment_pending"}}
-<div id="enrollment-status" hx-get="/devices/add/status/{{.StatusID}}" hx-trigger="every 2s" hx-swap="outerHTML">
-  <p class="muted">{{.Message}}</p>
-</div>
-{{end}}
-
-{{define "device_enrollment_complete"}}
-<div id="enrollment-status">
-  <p class="muted">{{.Message}}</p>
-</div>
-{{end}}
-
-{{define "device_enrollment_expired"}}
-<div id="enrollment-status">
-  <p class="muted">{{.Message}}</p>
-</div>
-{{end}}
+{{define "device_enrollment_pending"}}<div id="enrollment-status" hx-get="/devices/add/status/{{.StatusID}}" hx-trigger="every 2s" hx-swap="outerHTML"><p class="muted">{{.Message}}</p></div>{{end}}
+{{define "device_enrollment_complete"}}<div id="enrollment-status"><p class="muted">{{.Message}}</p></div>{{end}}
+{{define "device_enrollment_expired"}}<div id="enrollment-status"><p class="muted">{{.Message}}</p></div>{{end}}

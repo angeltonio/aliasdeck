@@ -1,0 +1,20 @@
+root = "."
+tmp_dir = "/tmp/aliasdeck-air"
+
+[build]
+cmd = "go build -o /tmp/aliasdeck-air/aliasdeck-server ./cmd/aliasdeck-server"
+bin = "/tmp/aliasdeck-air/aliasdeck-server"
+args_bin = ["--addr", "0.0.0.0:8080", "--db", "/data/server.db"]
+include_dir = ["cmd/aliasdeck-server", "internal"]
+include_ext = ["go", "html", "css", "js"]
+exclude_dir = [".codegraph", ".git", ".tmp", "build", "coverage", "dist", "node_modules"]
+delay = 200
+stop_on_error = true
+send_interrupt = true
+kill_delay = "2s"
+
+[log]
+time = true
+
+[misc]
+clean_on_exit = true

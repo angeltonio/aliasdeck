@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"time"
 
 	"github.com/angeltonio/aliasdeck/internal/app"
+	"github.com/angeltonio/aliasdeck/internal/watchconfig"
 	"github.com/spf13/cobra"
 )
 
@@ -16,7 +18,10 @@ func newAgentCmd() *cobra.Command {
 }
 
 func newAgentInstallCmd() *cobra.Command {
-	return &cobra.Command{Use: "install", Short: "Install and start the macOS LaunchAgent.", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+	var interval time.Duration
+	cmd := &cobra.Command{Use: "install", Short: "Install and start the macOS LaunchAgent.", Args: cobra.NoArgs, PreRunE: func(_ *cobra.Command, _ []string) error {
+		return watchconfig.Validate(interval)
+	}, RunE: func(cmd *cobra.Command, _ []string) error {
 		cmd.SilenceUsage = true
 		if err := requireMacOS(); err != nil {
 			return err
@@ -25,13 +30,15 @@ func newAgentInstallCmd() *cobra.Command {
 		if err != nil {
 			return fmt.Errorf("resolving aliasdeck executable: %w", err)
 		}
-		status, err := app.AgentInstall(cmd.Context(), app.OSEnv(), app.AgentOptions{Executable: executable})
+		status, err := app.AgentInstall(cmd.Context(), app.OSEnv(), app.AgentOptions{Executable: executable, AliasDeckHome: os.Getenv("ALIASDECK_HOME"), Interval: interval})
 		if err != nil {
 			return err
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "installed and loaded %s\n", status.Path)
 		return nil
 	}}
+	cmd.Flags().DurationVar(&interval, "interval", watchconfig.DefaultInterval, "Synchronization interval persisted in the LaunchAgent")
+	return cmd
 }
 
 func newAgentStatusCmd() *cobra.Command {
@@ -50,18 +57,38 @@ func newAgentStatusCmd() *cobra.Command {
 }
 
 func newAgentUninstallCmd() *cobra.Command {
-	return &cobra.Command{Use: "uninstall", Short: "Stop and remove the macOS LaunchAgent.", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+	var ifExecutable string
+	var ifHome string
+	var ifInterval time.Duration
+	cmd := &cobra.Command{Use: "uninstall", Short: "Stop and remove the macOS LaunchAgent.", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		cmd.SilenceUsage = true
 		if err := requireMacOS(); err != nil {
 			return err
 		}
-		path, err := app.AgentUninstall(cmd.Context(), app.OSEnv())
+		env := app.OSEnv()
+		if ifExecutable != "" {
+			path, removed, err := app.AgentUninstallIfOwned(cmd.Context(), env, app.AgentOptions{Executable: ifExecutable, AliasDeckHome: ifHome, Interval: ifInterval})
+			if err != nil {
+				return err
+			}
+			if removed {
+				fmt.Fprintf(cmd.OutOrStdout(), "uninstalled %s\n", path)
+			} else {
+				fmt.Fprintf(cmd.OutOrStdout(), "no matching LaunchAgent removed at %s\n", path)
+			}
+			return nil
+		}
+		path, err := app.AgentUninstall(cmd.Context(), env)
 		if err != nil {
 			return err
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "uninstalled %s\n", path)
 		return nil
 	}}
+	cmd.Flags().StringVar(&ifExecutable, "if-executable", "", "remove only an agent using this executable")
+	cmd.Flags().StringVar(&ifHome, "if-home", "", "with --if-executable, require this ALIASDECK_HOME")
+	cmd.Flags().DurationVar(&ifInterval, "if-interval", watchconfig.DefaultInterval, "with --if-executable, require this watcher interval")
+	return cmd
 }
 
 func requireMacOS() error {

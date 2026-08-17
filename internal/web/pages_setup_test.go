@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -15,11 +16,13 @@ import (
 	"time"
 
 	"github.com/angeltonio/aliasdeck/internal/auth"
+	"github.com/angeltonio/aliasdeck/internal/store"
 	"github.com/angeltonio/aliasdeck/internal/store/sqlitestore"
 )
 
 const (
 	localSetupPeer  = "127.0.0.1:43210"
+	dockerSetupPeer = "172.17.0.1:43210"
 	remoteSetupPeer = "192.0.2.10:43210"
 	setupPassword   = "correct horse battery staple"
 )
@@ -59,6 +62,115 @@ func TestLocalDirectSetupDoesNotRequireCredential(t *testing.T) {
 	replay := serveSetup(a, replayRequest)
 	if replay.Code != http.StatusNotFound {
 		t.Fatalf("local setup replay status = %d, want 404", replay.Code)
+	}
+}
+
+func TestRootRoutesNativeFirstRunToSetup(t *testing.T) {
+	a, _, _ := newSetupWebapp(t)
+	if location := rootLocation(a, localSetupPeer, nil); location != "/setup" {
+		t.Fatalf("native first-run root redirect = %q, want /setup", location)
+	}
+}
+
+func TestRootRoutesConfiguredAndAuthenticatedBrowsers(t *testing.T) {
+	a, _, _ := newSetupWebapp(t)
+	op, err := a.store.Operators().Create(context.Background(), store.Operator{Username: "operator", PasswordHash: []byte("unused")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if location := rootLocation(a, localSetupPeer, nil); location != "/login" {
+		t.Fatalf("configured unauthenticated root redirect = %q, want /login", location)
+	}
+
+	minted, err := auth.Mint(store.TokenKindSession)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := a.now()
+	if err := a.store.Tokens().Create(context.Background(), store.Token{
+		Kind:       store.TokenKindSession,
+		SubjectID:  op.ID,
+		Lookup:     minted.Lookup,
+		SecretHash: minted.SecretHash,
+		CreatedAt:  now,
+		ExpiresAt:  now.Add(time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cookie := &http.Cookie{Name: sessionCookieName, Value: minted.Wire}
+	if location := rootLocation(a, localSetupPeer, cookie); location != "/aliases" {
+		t.Fatalf("authenticated root redirect = %q, want /aliases", location)
+	}
+}
+
+func TestRootFailsClosedWhenOperatorCountFails(t *testing.T) {
+	a, _, _ := newSetupWebapp(t)
+	a.store = countErrorStore{Store: a.store, err: errors.New("count unavailable")}
+	if location := rootLocation(a, localSetupPeer, nil); location != "/login" {
+		t.Fatalf("root redirect after operator Count failure = %q, want /login", location)
+	}
+}
+
+func TestTrustedDockerBoundaryEnablesCredentiallessSetup(t *testing.T) {
+	a, path, _ := newSetupWebapp(t)
+	a.trustLocalSetup = true
+
+	if location := rootLocation(a, dockerSetupPeer, nil); location != "/setup" {
+		t.Fatalf("trusted Docker-boundary root redirect = %q, want /setup", location)
+	}
+	page := serveSetup(a, newSetupRequest(http.MethodGet, "/setup", dockerSetupPeer, nil))
+	if page.Code != http.StatusOK {
+		t.Fatalf("trusted Docker-boundary GET /setup status = %d, want 200", page.Code)
+	}
+	token, cookie := setupTokenFromResponse(t, page)
+	form := setupForm("operator", "")
+	form.Set("local_token", token)
+	request := newSetupRequest(http.MethodPost, "/setup", dockerSetupPeer, form)
+	request.AddCookie(cookie)
+	if created := serveSetup(a, request); created.Code != http.StatusSeeOther {
+		t.Fatalf("trusted Docker-boundary POST /setup status = %d, want 303", created.Code)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("setup credential remains after trusted Docker-boundary setup: %v", err)
+	}
+}
+
+func TestDockerBridgePeerRequiresOptIn(t *testing.T) {
+	a, path, _ := newSetupWebapp(t)
+	if location := rootLocation(a, dockerSetupPeer, nil); location != "/login" {
+		t.Fatalf("untrusted Docker bridge root redirect = %q, want /login", location)
+	}
+	if page := serveSetup(a, newSetupRequest(http.MethodGet, "/setup", dockerSetupPeer, nil)); page.Code != http.StatusNotFound {
+		t.Fatalf("untrusted Docker bridge GET /setup status = %d, want 404", page.Code)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("untrusted Docker bridge request consumed credential: %v", err)
+	}
+}
+
+func TestTrustedDockerBoundaryStillRejectsProxyMetadata(t *testing.T) {
+	a, path, credential := newSetupWebapp(t)
+	a.trustLocalSetup = true
+	a.publicURL, _ = url.Parse("https://aliases.example")
+	request := newSetupRequest(http.MethodGet, "/setup", dockerSetupPeer, nil)
+	request.Header.Set("Forwarded", "for=192.0.2.10")
+	if page := serveSetup(a, request); page.Code != http.StatusNotFound {
+		t.Fatalf("proxied trusted-boundary GET /setup status = %d, want 404", page.Code)
+	}
+	root := newSetupRequest(http.MethodGet, "/", dockerSetupPeer, nil)
+	root.Header.Set("X-Forwarded-For", "192.0.2.10")
+	rec := httptest.NewRecorder()
+	a.handleRoot(rec, root)
+	if location := rec.Header().Get("Location"); location != "/login" {
+		t.Fatalf("proxied trusted-boundary root redirect = %q, want /login", location)
+	}
+	credentialed := newSetupRequest(http.MethodPost, "/setup", dockerSetupPeer, setupForm("operator", credential))
+	credentialed.Header.Set("Forwarded", "for=192.0.2.10")
+	if created := serveSetup(a, credentialed); created.Code != http.StatusSeeOther {
+		t.Fatalf("credentialed proxied setup status = %d, want 303", created.Code)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("setup credential remains after credentialed proxied setup: %v", err)
 	}
 }
 
@@ -382,4 +494,32 @@ func serveSetup(a *webapp, req *http.Request) *httptest.ResponseRecorder {
 		a.handleSetupSubmit(rec, req)
 	}
 	return rec
+}
+
+func rootLocation(a *webapp, remoteAddr string, cookie *http.Cookie) string {
+	req := newSetupRequest(http.MethodGet, "/", remoteAddr, nil)
+	if cookie != nil {
+		req.AddCookie(cookie)
+	}
+	rec := httptest.NewRecorder()
+	a.handleRoot(rec, req)
+	return rec.Header().Get("Location")
+}
+
+type countErrorStore struct {
+	store.Store
+	err error
+}
+
+func (s countErrorStore) Operators() store.OperatorRepo {
+	return countErrorOperatorRepo{OperatorRepo: s.Store.Operators(), err: s.err}
+}
+
+type countErrorOperatorRepo struct {
+	store.OperatorRepo
+	err error
+}
+
+func (r countErrorOperatorRepo) Count(context.Context) (int, error) {
+	return 0, r.err
 }

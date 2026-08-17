@@ -9,19 +9,12 @@ import (
 	"github.com/angeltonio/aliasdeck/internal/store"
 )
 
-// sessionCookieName is this prototype's one and only browser credential.
-//
-// PROTOTYPE GAP, stated plainly: this cookie is HttpOnly and
-// SameSite=Strict, which blocks the ordinary cross-site form-post CSRF
-// case, but there is no per-session double-submit CSRF token on the
-// state-changing forms (alias create/delete, token mint) the way the
-// Milestone 5 proposal calls for. A cookie is an ambient credential; that
-// is precisely what makes it CSRF-prone. Do not treat this as a finished
-// answer to that gap.
+// sessionCookieName is the browser credential. It is HttpOnly and paired
+// with the per-session CSRF token derived in csrf.go.
 const sessionCookieName = "aliasdeck_session"
 
 // sessionLifetime mirrors internal/api's own fixed 24h session lifetime
-// (design decision 8) exactly: this prototype mints the same
+// (design decision 8) exactly: the web UI mints the same
 // store.TokenKindSession row the JSON API's own login mints, just handed
 // back as a cookie instead of a JSON body.
 const sessionLifetime = 24 * time.Hour
@@ -35,6 +28,7 @@ type subjectContextKey struct{}
 type webSubject struct {
 	TokenID    string
 	OperatorID string
+	CSRFToken  string
 }
 
 func withSubject(ctx context.Context, subj webSubject) context.Context {
@@ -46,29 +40,22 @@ func subjectFromContext(ctx context.Context) (webSubject, bool) {
 	return subj, ok
 }
 
-// isSecureRequest is a best-effort loopback/TLS check for the cookie's
-// Secure attribute. It is deliberately conservative for a prototype: real
-// production wiring (Milestone 5) would need the same "loopback or
-// HTTPS" reasoning ServerSource already applies on the client side
-// (design decision 13), applied here on the server side instead. r.TLS
-// is nil for both "really loopback plaintext" and "behind a
-// non-TLS-terminating proxy" — this prototype does not attempt to
-// distinguish those, which is exactly the gap the milestone proposal's
-// own risk table names.
-func isSecureRequest(r *http.Request) bool {
-	return r.TLS != nil
+// isSecureRequest uses the explicit public origin behind TLS termination.
+// Without one it trusts only direct TLS, never forwarding headers.
+func (a *webapp) isSecureRequest(r *http.Request) bool {
+	return (a.publicURL != nil && a.publicURL.Scheme == "https") || (a.publicURL == nil && r.TLS != nil)
 }
 
 // setSessionCookie hands wire back to the browser as the session cookie,
 // expiring it exactly when the underlying store.Token does.
-func setSessionCookie(w http.ResponseWriter, r *http.Request, wire string, expiresAt time.Time) {
+func (a *webapp) setSessionCookie(w http.ResponseWriter, r *http.Request, wire string, expiresAt time.Time) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
 		Value:    wire,
 		Path:     "/",
 		HttpOnly: true,
 		SameSite: http.SameSiteStrictMode,
-		Secure:   isSecureRequest(r),
+		Secure:   a.isSecureRequest(r),
 		Expires:  expiresAt,
 	})
 }
@@ -76,14 +63,14 @@ func setSessionCookie(w http.ResponseWriter, r *http.Request, wire string, expir
 // clearSessionCookie removes the browser's copy of the cookie. It does not,
 // by itself, revoke the underlying store.Token — callers that want the
 // token dead server-side (handleLogout) must revoke it explicitly first.
-func clearSessionCookie(w http.ResponseWriter, r *http.Request) {
+func (a *webapp) clearSessionCookie(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
 		Value:    "",
 		Path:     "/",
 		HttpOnly: true,
 		SameSite: http.SameSiteStrictMode,
-		Secure:   isSecureRequest(r),
+		Secure:   a.isSecureRequest(r),
 		MaxAge:   -1,
 	})
 }
@@ -120,5 +107,5 @@ func authenticate(r *http.Request, tokens store.TokenRepo, now func() time.Time)
 		return webSubject{}, false
 	}
 
-	return webSubject{TokenID: tok.ID, OperatorID: tok.SubjectID}, true
+	return webSubject{TokenID: tok.ID, OperatorID: tok.SubjectID, CSRFToken: sessionCSRF(parsed.Secret, parsed.Lookup)}, true
 }
