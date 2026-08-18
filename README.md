@@ -2,139 +2,211 @@
 
 > Your commands. Every machine.
 
-You write an alias once. AliasDeck compiles it into the right syntax for every shell you use — zsh, bash, PowerShell — and writes it to each machine without touching your `.zshrc`.
+AliasDeck lets you define an alias once, manage it locally or from a
+self-hosted control plane, and render it safely for zsh, bash, or PowerShell.
+It understands commands rather than copying dotfiles, so every client writes
+the syntax its own shell needs without letting the server send shell code.
 
-It is not a dotfile manager. Dotfile managers copy files; AliasDeck understands what an alias *is*, which is why it can turn one definition into three different shells.
-
-AliasDeck ships **two programs**, for two different audiences. Full reasoning in [`docs/WHAT-WE-ARE-BUILDING.md`](docs/WHAT-WE-ARE-BUILDING.md).
+AliasDeck ships two separate programs:
 
 | | `aliasdeck` | `aliasdeck-server` |
 | --- | --- | --- |
-| Who runs it | Everybody — installed on every machine you use | Almost nobody, once, somewhere that stays on |
-| What it does | Renders your aliases into shell syntax | Holds aliases for many machines and serves the web UI and REST API |
-| Install with | `brew`/`scoop`/install script | Docker (primary), or a plain binary for systemd |
-| Listens on a port | Never | Yes |
+| Purpose | Client installed on each machine | Self-hosted control plane, web UI, and REST API |
+| Installation | Homebrew, Scoop, install script, or release archive | Docker Compose (recommended) or release archive |
+| Network listener | None | Yes |
+| Required for standalone use | Yes | No |
 
----
+Full product reasoning lives in
+[`docs/WHAT-WE-ARE-BUILDING.md`](docs/WHAT-WE-ARE-BUILDING.md).
 
-## Install the client
+## Quick start: server and macOS client
 
-**Homebrew** (macOS and Linux):
+The server deployment and the client installation are independent steps. Run
+the server once on a machine that stays on, then install and enroll the client
+on every Mac you want to synchronize.
+
+### 1. Deploy the server
+
+Prerequisites: Git, Docker Engine, and Docker Compose v2.
+
+The production Compose file lives in this repository, so run it from a clone:
 
 ```bash
-brew install angeltonio/tap/aliasdeck
+git clone https://github.com/angeltonio/aliasdeck.git
+cd aliasdeck
+docker compose -f compose.prod.yaml up -d --pull always --wait
 ```
 
-**Or without Homebrew:**
+Open <http://127.0.0.1:8088/setup> and create the first operator. The
+production file is deliberately pinned to the published
+[`v0.5.4`](https://github.com/angeltonio/aliasdeck/releases/tag/v0.5.4)
+server image and digest.
+
+### 2. Install or update the client on macOS
+
+Install the published Homebrew cask:
+
+```bash
+brew install --cask angeltonio/tap/aliasdeck
+```
+
+Update an existing installation:
+
+```bash
+brew update
+brew upgrade --cask aliasdeck
+```
+
+Homebrew reports that the latest version is already installed when there is
+nothing to upgrade.
+
+### 3. Enroll the Mac
+
+1. Sign in to the web UI.
+2. Open **Devices → Add device**.
+3. Choose whether automatic alias synchronization should be enabled and select
+   its interval.
+4. Mint the single-use enrollment token and run the generated command on the
+   new Mac.
+
+The generated command initializes the client, exchanges the short-lived token
+for a device credential, performs the first sync, optionally installs the
+macOS background agent, and loads the generated aliases into the current
+shell. Do not copy enrollment tokens into documentation or logs.
+
+`aliasdeck init` adds one reversible shell bootstrap after confirmation. A zsh
+session also notices watcher-written updates at its next prompt. Other shells
+load an updated generated file in a new session or when it is sourced again.
+
+> Automatic background agent installation is currently supported only on
+> macOS. Linux and Windows clients can synchronize manually with
+> `aliasdeck sync`; do not treat the macOS LaunchAgent as cross-platform.
+
+## Production operations
+
+Run these commands from the repository directory that contains
+`compose.prod.yaml`. The fixed Compose project name is `aliasdeck-prod`.
+
+### Status and health
+
+```bash
+docker compose -f compose.prod.yaml ps
+curl -fsS http://127.0.0.1:8088/api/v1/health
+```
+
+The separate health service exists because the minimal server image contains
+no shell or HTTP client.
+
+### Logs
+
+```bash
+docker compose -f compose.prod.yaml logs --follow aliasdeck-server
+```
+
+### Update and recreate
+
+Back up the persistent data before upgrading. Database migrations are
+forward-only; restoring a pre-upgrade backup is the rollback path.
+
+```bash
+git pull --ff-only
+docker compose -f compose.prod.yaml up -d --pull always --wait
+```
+
+The image is pinned in `compose.prod.yaml`, so updating the checkout is what
+moves the deployment to a newer reviewed pin when the repository publishes
+one.
+
+### Stop while preserving data
+
+```bash
+docker compose -f compose.prod.yaml down
+```
+
+Operator accounts, aliases, devices, and tokens remain in the named Docker
+volume `aliasdeck-prod_aliasdeck-data`. The database is stored at
+`/data/server.db` inside that volume.
+
+### Reset everything
+
+> **DANGER — permanent data loss:** this deletes the production volume and
+> every operator, alias, device, and token stored in it. The next start returns
+> to `/setup`. Do not run it as a normal restart or update command.
+
+```bash
+docker compose -f compose.prod.yaml down --volumes
+```
+
+Start again with the quick-start command after the destructive reset.
+
+## Security boundary
+
+The production Compose file publishes the server only on
+`127.0.0.1:8088`. Its `ALIASDECK_LOCAL_SETUP=true` setting is safe only while
+that host-port boundary remains loopback-only: it permits the direct local
+`/setup` flow even though Docker bridge traffic is not loopback inside the
+container.
+
+Complete first-run setup through the local URL before exposing the service.
+The credentialless local setup path rejects requests carrying proxy metadata;
+remote or proxied setup does not inherit local trust.
+
+For remote access:
+
+1. Keep the Compose port bound to loopback.
+2. Put a TLS-terminating reverse proxy in front of
+   `http://127.0.0.1:8088`.
+3. Set `ALIASDECK_PUBLIC_URL` to the exact browser-facing HTTPS origin and
+   recreate the service:
+
+```bash
+ALIASDECK_PUBLIC_URL=https://aliases.example.com \
+  docker compose -f compose.prod.yaml up -d --wait
+```
+
+The value must be an origin only: no credentials, path, query, or fragment.
+AliasDeck deliberately does not trust `Forwarded`, `X-Forwarded-*`, or similar
+headers for locality, setup authorization, cookie security, or enrollment
+URLs. `ALIASDECK_PUBLIC_URL` is the explicit source for secure cookies and the
+URL embedded in enrollment commands. Never publish the Compose port on
+`0.0.0.0` as a shortcut for remote access.
+
+## Other client installation paths
+
+The install script supports macOS and Linux on amd64 and arm64, resolves the
+latest published release, and verifies its checksum before installation:
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/angeltonio/aliasdeck/main/scripts/install.sh | sh
 ```
 
-The script verifies the download against the release checksums before installing anything.
-
-**Windows** (Scoop):
+Windows packages are available through Scoop:
 
 ```powershell
 scoop bucket add angeltonio https://github.com/angeltonio/scoop-bucket
 scoop install aliasdeck
 ```
 
-This installs `aliasdeck` only — a client with no `serve` command, no database, and no network dependency beyond fetching its own config. Standalone (no server at all) is the default and the primary way to use it.
+Published release archives contain client and server binaries for macOS,
+Linux, and Windows on amd64 and arm64. The client renders zsh, bash, and
+PowerShell aliases. See the
+[`v0.5.4` release](https://github.com/angeltonio/aliasdeck/releases/tag/v0.5.4)
+for the currently pinned deployment artifacts and checksums.
 
-## Getting started
+## Use the client without a server
 
-```bash
-aliasdeck init      # creates ~/.config/aliasdeck/{config,aliases}.yaml, detects platform and shell,
-                    # and asks before adding a one-line bootstrap to your shell rc file
-aliasdeck edit      # opens aliases.yaml in $EDITOR — add your own aliases here
-aliasdeck sync      # renders and writes the generated file for your shell
-aliasdeck status    # active source, device identity, up-to-date check
-aliasdeck list      # aliases that apply to this device, and why others are skipped
-```
-
-Reload your shell and your aliases are live. `aliasdeck uninstall` reverses all of it, leaving your rc file byte-identical to how it was found.
-
-On macOS, automatic synchronization can run as a per-user LaunchAgent:
+Standalone mode needs no account, database, or network service:
 
 ```bash
-aliasdeck agent install --interval 30s
+aliasdeck init      # create local configuration and configure shell integration
+aliasdeck edit      # edit aliases.yaml in $EDITOR
+aliasdeck sync      # render the aliases file for the active shell
+aliasdeck status    # show source, device identity, and sync status
+aliasdeck list      # show which aliases apply to this device
 ```
 
-The **Devices → Add device** page includes this automatically by default and
-lets the operator choose a safe synchronization interval. Zsh reloads a
-watcher-written aliases file at the next prompt; other shells pick it up in a
-new shell or when the generated file is sourced again.
-
-## Deploy the server
-
-Deployed once, somewhere that stays on — a VPS, a homelab box, a Raspberry Pi. Docker is the primary way to run it:
-
-```bash
-docker run --name aliasdeck-server \
-  -p 127.0.0.1:8080:8080 \
-  -e ALIASDECK_LOCAL_SETUP=true \
-  -v aliasdeck:/data \
-  ghcr.io/angeltonio/aliasdeck-server
-```
-
-Then open `http://127.0.0.1:8080/setup` to create the first operator.
-`ALIASDECK_LOCAL_SETUP=true` is an explicit trust assertion: Docker bridge
-traffic is not loopback inside the container, so use it only with a host
-loopback publish such as `-p 127.0.0.1:8080:8080`. Without the opt-in,
-non-loopback requests still require the one-time credential in
-`/data/setup-credential.txt`; proxied requests always require that credential.
-For headless deployments, set `ALIASDECK_ADMIN_PASSWORD` before the first
-start instead of using the browser flow.
-
-A plain binary is published too, for people who prefer systemd:
-
-```bash
-./aliasdeck-server
-```
-
-`aliasdeck-server` runs a single static binary with an embedded SQLite
-database, exposing the web UI and a REST API under `/api/v1`. TLS is not built
-in — put a reverse proxy in front for anything reachable beyond loopback. The
-default native bind (`--addr`) is `127.0.0.1:8080`; widening it to another
-interface is a deliberate operator choice.
-
-Behind a TLS-terminating reverse proxy, set the browser-facing origin
-explicitly:
-
-```bash
-ALIASDECK_PUBLIC_URL=https://aliases.example
-```
-
-This value must be an origin only: no credentials, path, query, or fragment.
-Remote origins require HTTPS; loopback HTTP remains available for local
-development. AliasDeck deliberately ignores `Forwarded` and
-`X-Forwarded-*` for trust, setup eligibility, cookie security, and enrollment
-URLs. The explicit origin sets Secure browser cookies and is embedded in the
-device enrollment command.
-
-Then, on each device:
-
-```bash
-aliasdeck login https://aliases.example.com
-aliasdeck register --name macbook
-aliasdeck sync
-```
-
-| Component | State |
-| --- | --- |
-| Domain model and resolution | ✅ |
-| Validation (name/command/description safety) | ✅ |
-| zsh + bash renderers | ✅ |
-| PowerShell renderer and Windows support | ✅ |
-| Git-hosted configuration | ✅ |
-| Standalone CLI (`init`, `sync`, `status`, `list`, `doctor`, `edit`, `uninstall`) | ✅ |
-| Homebrew, Scoop and install script (client only) | ✅ |
-| Self-hosted server (`aliasdeck-server`, REST API, SQLite, device enrollment) | ✅ |
-| Web UI with English and Spanish localization | ✅ |
-| Configurable automatic alias synchronization on macOS | ✅ |
-
----
+`aliasdeck uninstall` removes the managed integration and restores the shell
+configuration it changed.
 
 ## The idea
 
@@ -164,134 +236,72 @@ function dps {
 }
 ```
 
-That last line is the whole point. A dotfile manager cannot do this for you, because it does not know that `docker ps` is a command rather than a line of text.
+That is the core difference from a dotfile manager: AliasDeck knows that
+`docker ps` is a command rather than an arbitrary line of text.
 
 ### Where the output goes
 
-Never into your shell config. AliasDeck owns one generated file:
+AliasDeck owns one generated file instead of rewriting your shell config:
 
 ```text
 ~/.config/aliasdeck/aliases.zsh
 ```
 
-Your `.zshrc` needs exactly one line, added once:
-
-```bash
-[ -f "$HOME/.config/aliasdeck/aliases.zsh" ] && source "$HOME/.config/aliasdeck/aliases.zsh"
-```
-
-Installing is one line. Uninstalling is deleting it. AliasDeck never rewrites a file you own.
-
----
+The shell configuration contains one bootstrap line, added once by
+`aliasdeck init` and removed by `aliasdeck uninstall`.
 
 ## How is this different from Chezmoi?
 
-Chezmoi is excellent and AliasDeck does not replace it. They solve different problems.
+Chezmoi is excellent and AliasDeck does not replace it. They solve different
+problems.
 
-| | Chezmoi & friends | AliasDeck |
+| | Chezmoi and similar tools | AliasDeck |
 | --- | --- | --- |
 | Unit of work | Files | Commands |
-| Cross-shell support | You write template conditionals | Built in, per-shell renderers |
-| Escaping | Yours to get right | Handled and tested against real shells |
-| Targeting | Hostname conditionals | Profiles: Development, Homelab, Work |
-| Scope | All your dotfiles | Aliases and reusable commands |
+| Cross-shell support | Template conditionals | Built-in shell renderers |
+| Escaping | Maintained by the user | Handled and tested by AliasDeck |
+| Targeting | Hostname or template conditions | Profiles such as Development, Homelab, and Work |
+| Scope | All dotfiles | Aliases and reusable commands |
 
-**They compose.** Your `aliases.yaml` can live in your existing dotfiles repo, and AliasDeck will be able to apply through Chezmoi instead of writing files itself.
-
----
-
-## Two ways to use it
-
-**Standalone** — one CLI, one `aliases.yaml`. No server, no account, no database. This is the primary way to use AliasDeck, and it is what v0.1 ships.
-
-```bash
-aliasdeck init
-aliasdeck edit
-aliasdeck sync
-```
-
-**Control plane** — a self-hosted server for managing many machines centrally:
-a web UI and REST API under `/api/v1`, guarded by operator sessions and
-per-device tokens. A single static binary with an embedded SQLite database —
-no separate database server to run. TLS is not built in, so put a reverse
-proxy in front for anything reachable beyond loopback.
-
-```bash
-docker run -p 127.0.0.1:8080:8080 -e ALIASDECK_LOCAL_SETUP=true \
-  -v aliasdeck:/data ghcr.io/angeltonio/aliasdeck-server
-```
-
-`aliasdeck-server` is a separate binary from the client, published separately — not a hidden mode of `aliasdeck` you opt into with a flag. Same renderers, same validation, same module. The server is an upgrade, never a prerequisite.
-
----
+They can be used together: an `aliases.yaml` file can live in an existing
+dotfiles repository while AliasDeck owns rendering and synchronization.
 
 ## Design decisions worth knowing
 
-These are the choices that shape everything else. The reasoning lives in [`docs/PROJECT.md`](docs/PROJECT.md).
+The detailed reasoning lives in [`docs/PROJECT.md`](docs/PROJECT.md).
 
 | Decision | Why |
 | --- | --- |
-| **The client renders, never the server** | Escaping belongs next to the shell that needs it. It also means an updated CLI can support new shells against a server nobody has touched in a year. |
-| **The server transmits data, never shell code** | A compromised server should not be able to write arbitrary commands into every connected machine. |
-| **Strict alias names, not escaped ones** | A name sits outside the quoted region of the generated line. Rather than escaping names, AliasDeck refuses the ones that would need it. |
-| **Output has no timestamp** | Rendered files are byte-deterministic, so sync compares hashes instead of diffing. A generation time would make every sync look like a change. |
-| **One config source per device** | No merging local and remote. Two sources of truth that silently reconcile is a bottomless pit of conflict bugs. |
-| **Go everywhere** | One renderer package shared by the CLI and the server's UI preview. Two implementations of escaping logic would mean two sets of escaping bugs. |
+| **The client renders, never the server** | Escaping stays next to the shell that needs it, and clients can add shell support independently. |
+| **The server transmits data, never shell code** | The control plane cannot directly write pre-rendered commands into clients. |
+| **Strict alias names, not escaped ones** | Names outside quoted command regions are rejected when unsafe. |
+| **Output has no timestamp** | Generated files stay byte-deterministic, so sync can compare hashes. |
+| **One config source per device** | Local and remote sources never merge silently. |
+| **Go everywhere** | The same domain and validation rules support every client platform. |
 
----
+## Current capabilities
 
-## Roadmap
-
-| Version | Scope |
+| Component | State |
 | --- | --- |
-| — | Renderer core, validation, golden tests ✅ |
-| **v0.1** | Standalone CLI · zsh + bash · macOS + Linux ✅ |
-| **v0.2** | PowerShell + Windows · Git-hosted config ✅ |
-| **v0.3** | Self-hosted server · devices, profiles, REST API ✅ |
-| **v0.4** | Web UI with live rendered preview ✅ |
-| **v0.5** | Operator onboarding, device enrollment and automatic synchronization ✅ |
-| later | Import/export, version history, Chezmoi backend, MCP server |
+| Domain model, targeting, and validation | ✅ |
+| zsh, bash, and PowerShell renderers | ✅ |
+| Standalone and Git-hosted client configuration | ✅ |
+| Self-hosted server, REST API, SQLite, and device enrollment | ✅ |
+| English and Spanish web UI | ✅ |
+| Configurable automatic alias synchronization on macOS | ✅ |
+| Homebrew cask, Scoop manifest, release archives, and checksum-verifying install script | ✅ |
 
----
+## Development
 
-## Building from source
-
-Requires Go 1.25 or newer.
-
-```bash
-git clone https://github.com/angeltonio/aliasdeck
-cd aliasdeck
-make check              # format, vet, test
-go build -o aliasdeck ./cmd/aliasdeck               # the client
-go build -o aliasdeck-server ./cmd/aliasdeck-server # the server
-```
-
-Useful targets:
-
-```bash
-make test      # tests only
-make cover     # per-package coverage
-make golden    # regenerate renderer golden files, then read the diff
-```
-
-### A note on the tests
-
-The renderers are covered by golden files and by an integration test that sources AliasDeck's output in **real bash and zsh binaries**, feeding it four shell-injection payloads and proving the output stays inert.
-
-That test exists because unit tests only confirm that the escaping logic does what its author believed. This project writes executable code into other people's shells, so the assumption itself has to be verified against the shells rather than against our reading of them.
-
-If you contribute to the renderers or to validation, that is the test to keep green.
-
----
+For the isolated hot-reload server, checkout-built client, test workflow, and
+safe development reset, read [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
 
 ## Contributing
 
-Early days — the architecture is still settling, so the most useful contribution right now is discussion. Open an issue if you disagree with something in [`docs/PROJECT.md`](docs/PROJECT.md); a wrong decision is cheapest to fix before there are users.
+The architecture is still evolving, so discussion is valuable. Open an issue
+if you disagree with something in [`docs/PROJECT.md`](docs/PROJECT.md); a wrong
+decision is cheapest to fix before users depend on it.
 
 ## License
 
 [MIT](LICENSE).
-
-Permissive on purpose. AliasDeck's main artifact is a CLI that people install on
-their work machines, and a copyleft licence would put it behind a legal review
-at exactly the companies where a shared alias set is most useful.

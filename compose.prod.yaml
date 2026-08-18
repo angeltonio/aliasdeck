@@ -1,0 +1,55 @@
+# Run the published production artifacts on this machine:
+#
+#   docker compose -f compose.prod.yaml up -d
+#
+# Then open http://127.0.0.1:8088/setup. The host port stays bound to
+# loopback intentionally; put TLS in front before exposing AliasDeck remotely.
+
+name: aliasdeck-prod
+
+services:
+  aliasdeck-server:
+    image: ghcr.io/angeltonio/aliasdeck-server:v0.5.4@sha256:4b22006e9191d37ea68b8432a11f9b09d091f1f26b888ddfcb5c4be22999aa52
+    init: true
+    ports:
+      - "127.0.0.1:${ALIASDECK_PORT:-8088}:8080"
+    environment:
+      # Docker bridge traffic is not loopback inside the container. This is a
+      # safe trust assertion only because the host publish above is loopback.
+      ALIASDECK_LOCAL_SETUP: "true"
+      # If ALIASDECK_PORT changes, override this origin to match. For remote
+      # access, use the exact external HTTPS origin; proxy headers are ignored.
+      ALIASDECK_PUBLIC_URL: "${ALIASDECK_PUBLIC_URL:-http://127.0.0.1:8088}"
+    volumes:
+      - aliasdeck-data:/data
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  # The published server image is intentionally minimal and contains no shell
+  # or HTTP client. This isolated sidecar performs the real HTTP health probe
+  # without modifying or rebuilding the pinned AliasDeck image.
+  aliasdeck-health:
+    image: busybox:1.37.0-musl@sha256:fc6dddc4c44b1bfe37f41cae8e67d1693828e8f42a91862816d7953e2c9d3f23
+    network_mode: service:aliasdeck-server
+    depends_on:
+      aliasdeck-server:
+        condition: service_started
+    command: ["sh", "-c", "while :; do sleep 3600; done"]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/api/v1/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  aliasdeck-data:
