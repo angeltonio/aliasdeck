@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/angeltonio/aliasdeck/internal/config"
@@ -215,4 +216,68 @@ func readFile(t *testing.T, path string) []byte {
 		t.Fatalf("reading %s: %v", path, err)
 	}
 	return data
+}
+
+// TestRegisterRefusesWhenAlreadyRegistered is the regression test for a
+// defect found by using the product, not by reading it: registering twice on
+// one machine minted two devices server-side with the same hostname,
+// platform and shell — identical in every column the operator's device list
+// shows — and only the newest could ever sync again.
+//
+// The guard runs before the enrollment-token exchange, so a refused
+// re-registration also does not burn the token; otherwise recovering from a
+// command that did nothing would cost another token.
+func TestRegisterRefusesWhenAlreadyRegistered(t *testing.T) {
+	te := newTestEnv(t)
+	writeConfigYAML(t, te.Base, nativeDeviceConfig("already-registered"))
+	te.setenv("ALIASDECK_PLATFORM", "macos")
+	te.setenv("ALIASDECK_SHELL", "zsh")
+	seedCredentials(t, te.Base, config.Credentials{
+		Version:     1,
+		ServerURL:   "https://aliases.example.com",
+		DeviceID:    "device-already-here",
+		DeviceToken: "adt_lookup.secret",
+	})
+
+	called := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	_, err := Register(context.Background(), te.Env, RegisterOptions{
+		URL: srv.URL, Token: "ade_lookup.secret", AllowInsecureHTTP: true,
+	})
+	if err == nil {
+		t.Fatal("Register() must refuse when this device already holds a device token")
+	}
+	if !strings.Contains(err.Error(), "already registered") {
+		t.Errorf("error %q does not say the device is already registered", err.Error())
+	}
+	if !strings.Contains(err.Error(), "device-already-here") {
+		t.Errorf("error %q does not name the existing device", err.Error())
+	}
+	if called {
+		t.Error("Register() contacted the server, burning the enrollment token, before refusing")
+	}
+}
+
+func TestRegisterForceAllowsReRegistration(t *testing.T) {
+	te := newTestEnv(t)
+	writeConfigYAML(t, te.Base, nativeDeviceConfig("already-registered"))
+	te.setenv("ALIASDECK_PLATFORM", "macos")
+	te.setenv("ALIASDECK_SHELL", "zsh")
+	seedCredentials(t, te.Base, config.Credentials{
+		Version: 1, DeviceID: "old-device", DeviceToken: "adt_old.secret",
+	})
+
+	srv := registerServer(t, "ade_lookup.secret")
+	defer srv.Close()
+
+	if _, err := Register(context.Background(), te.Env, RegisterOptions{
+		URL: srv.URL, Token: "ade_lookup.secret", AllowInsecureHTTP: true, Force: true,
+	}); err != nil {
+		t.Fatalf("Register() with --force: %v", err)
+	}
 }

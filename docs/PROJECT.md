@@ -545,8 +545,34 @@ Milestone 1 (the renderer core: `internal/domain`, `internal/renderers`, `intern
 
 ### 9.4 Web
 
-- **Vite + React** (not Next.js), TypeScript, Tailwind CSS, shadcn/ui
-- Built to static assets, embedded into the Go binary via `embed.FS`
+- **Go `html/template` + htmx**, one hand-written stylesheet, no build step and no Node
+- Embedded into `aliasdeck-server` via `embed.FS`
+
+This reverses an earlier choice of Vite + React + Tailwind + shadcn/ui, which
+this section specified until a prototype was built and looked at. The reversal
+is recorded rather than edited away, because the original reasoning was sound
+for the question it was answering.
+
+React was chosen when a **live rendered-shell preview** was assumed to be part
+of the UI — type a command, watch it render for zsh and PowerShell at once.
+That is a screen where rich client state earns its keep. Two things then
+changed the premise:
+
+1. The preview is not in the MVP, whose screens are login, alias CRUD, profile
+   CRUD and device management — forms and tables, where a SPA buys little.
+2. The preview is blocked by more than a missing route. Design decision 2
+   forbids any server package importing `internal/renderers`, and `go list
+   -deps` is transitive, so no API route can serve rendered output without
+   `internal/api` depending on the renderer. Building it means narrowing that
+   guard or duplicating the escaping logic in JavaScript — and this project
+   has already shipped one PowerShell injection with a single implementation.
+
+What the choice costs, named rather than hidden: htmx is a poor fit if the UI
+later needs genuinely rich client state. That direction is the cheap one —
+adding a React island inside a Go-served page is far easier than dismantling
+a SPA back into server-rendered HTML. Measured: the web adds ~3.3 MB to
+`aliasdeck-server`, almost all of it Go's `html/template` rather than the
+assets, which are 48 KB of htmx and 6.5 KB of CSS.
 
 **Why not Next.js:** Next earns its complexity through SSR, routing and server components, all of which need a Node runtime at serve time. Embedding it in a Go binary means static export, which discards most of that value while keeping the framework weight. An authenticated control panel is honestly an SPA. Node stays a build-time dependency only.
 
@@ -599,7 +625,6 @@ aliasdeck/
 │   └── verify/             # cross-cutting tests only: byte-identity and full-flow integration,
 │                           # the one package allowed to import both internal/renderers and the
 │                           # full server stack at once
-├── web/                    # Vite + React app, built into internal/api/static (Milestone 5 — not yet built)
 ├── docs/
 │   ├── PROJECT.md
 │   ├── API.md
@@ -825,7 +850,7 @@ The standalone product now covers all three operating systems and composes with 
 
 ### Milestone 5 — Web UI · **v0.4**
 
-- Vite + React app embedded via `embed.FS`
+- Go `html/template` + htmx in `internal/web`, embedded via `embed.FS` (§9.4)
 - Alias, profile and device management
 - Search, filtering, tags
 - Sync status
@@ -860,7 +885,7 @@ Settled as of 2026-08-12:
 | Config input | `ConfigSource` interface: file, git, server |
 | Source binding | Exactly one source per device, explicit, no merging |
 | Standalone format | `aliases.yaml` (source) + `config.yaml` (device-local) |
-| Web | Vite + React + Tailwind + shadcn/ui, embedded via `embed.FS` |
+| Web | Go `html/template` + htmx, no build step, embedded via `embed.FS` (§9.4 records the reversal) |
 | Database | SQLite by default (pure-Go driver), PostgreSQL optional |
 | Query layer | `sqlc`, no ORM |
 | Deployment (original, reversed — see §3.2/§10, decision 28 in `openspec/changes/archive/2026-08-14-server/design.md`) | Single static binary; Docker as convenience |

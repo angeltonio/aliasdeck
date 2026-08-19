@@ -18,6 +18,7 @@ func newRegisterCmd() *cobra.Command {
 		url               string
 		token             string
 		allowInsecureHTTP bool
+		force             bool
 	)
 
 	cmd := &cobra.Command{
@@ -33,6 +34,7 @@ func newRegisterCmd() *cobra.Command {
 				URL:               url,
 				Token:             token,
 				AllowInsecureHTTP: allowInsecureHTTP,
+				Force:             force,
 			})
 			if err != nil {
 				return err
@@ -44,6 +46,9 @@ func newRegisterCmd() *cobra.Command {
 		},
 	}
 
+	cmd.Flags().BoolVar(&force, "force", false,
+		"register again even if this device already holds a device token; "+
+			"this mints a second device on the server and abandons the current one")
 	cmd.Flags().StringVar(&url, "url", "", "the server's base URL, e.g. https://aliases.example.com (required)")
 	cmd.Flags().StringVar(&token, "token", "", "the single-use enrollment token issued by the server operator (required)")
 	cmd.Flags().BoolVar(&allowInsecureHTTP, "allow-insecure", false,
