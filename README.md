@@ -39,7 +39,7 @@ docker compose -f compose.prod.yaml up -d --pull always --wait
 
 Open <http://127.0.0.1:8088/setup> and create the first operator. The
 production file is deliberately pinned to the published
-[`v0.5.4`](https://github.com/angeltonio/aliasdeck/releases/tag/v0.5.4)
+[`v0.5.5`](https://github.com/angeltonio/aliasdeck/releases/tag/v0.5.5)
 server image and digest.
 
 ### 2. Install or update the client on macOS
@@ -190,7 +190,7 @@ scoop install aliasdeck
 Published release archives contain client and server binaries for macOS,
 Linux, and Windows on amd64 and arm64. The client renders zsh, bash, and
 PowerShell aliases. See the
-[`v0.5.4` release](https://github.com/angeltonio/aliasdeck/releases/tag/v0.5.4)
+[`v0.5.5` release](https://github.com/angeltonio/aliasdeck/releases/tag/v0.5.5)
 for the currently pinned deployment artifacts and checksums.
 
 ## Use the client without a server
