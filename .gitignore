@@ -22,3 +22,6 @@ coverage/
 
 #ia
 .atl
+# Local dev build of the client. Machine-specific and rebuilt on demand
+# (see docs/DEVELOPMENT.md); it is not an artifact any checkout should share.
+/aliasdeck-dev
