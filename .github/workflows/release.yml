@@ -12,7 +12,16 @@ permissions:
   packages: write
 
 jobs:
+  # Tagging is not a promise that the code works. Gate the release on the very
+  # same checks a merge runs — the full three-OS matrix, formatting, vet, the
+  # drift and size gates — against the exact commit being released, rather
+  # than on a narrower subset that a platform-specific regression can slip
+  # past.
+  verify:
+    uses: ./.github/workflows/ci.yml
+
   release:
+    needs: verify
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -32,28 +41,11 @@ jobs:
           --version "$RELEASE_VERSION"
           --source-ref "$RELEASE_SOURCE_REF"
 
-      - name: Install zsh
-        run: sudo apt-get update && sudo apt-get install -y zsh
-
-      # See ci.yml's "Install pwsh" step for why this is required rather than
-      # optional: internal/renderers/powershell_integration_test.go carries no
-      # build tag and is covered by ALIASDECK_REQUIRE_SHELLS below, same as
-      # bash/zsh, so this runner needs a real pwsh too.
-      - name: Install pwsh
-        run: |
-          if command -v pwsh >/dev/null 2>&1; then
-            echo "pwsh already present: $(pwsh -Version)"
-          else
-            sudo snap install powershell --classic
-          fi
-
-      # Tagging is not a promise that the code works. Run the suite against the
-      # exact commit being released, with the real-shell tests required rather
-      # than skippable, before anything is published.
-      - name: Test before publishing
-        env:
-          ALIASDECK_REQUIRE_SHELLS: "1"
-        run: go test -race ./...
+      # The suite, the real-shell tests, formatting and vet all ran in the
+      # verify job above, on every OS AliasDeck targets. Re-running one OS of
+      # it here would only restate a weaker version of that result, so the
+      # shell installs it needed are gone with it; goreleaser's only hook is
+      # `go mod tidy`.
 
       # README.md calls Docker the primary way to run the server and prints
       # `docker run … ghcr.io/angeltonio/aliasdeck-server` as the first command

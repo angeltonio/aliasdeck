@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
   pull_request:
+  # release.yml gates on this workflow so a release runs the same checks a
+  # merge does. Publishing used to test one OS while this matrix tested
+  # three, which let an OS-specific regression ship green.
+  workflow_call:
 
 permissions:
   contents: read
