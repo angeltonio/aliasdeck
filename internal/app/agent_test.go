@@ -5,12 +5,16 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 )
 
 func TestAgentInstallWritesStablePlistAndLoadsOnlyTheWatcher(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("launchd plist assertions require POSIX absolute-path semantics")
+	}
 	home := t.TempDir()
 	var commands [][]string
 	env := testAgentEnv(home, func(_ context.Context, name string, args ...string) ([]byte, error) {
