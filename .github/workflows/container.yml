@@ -56,9 +56,14 @@ jobs:
         id: meta
         with:
           images: ghcr.io/angeltonio/aliasdeck-server
+          # The release-binding check above already refused anything that is
+          # not a stable vX.Y.Z tag built from that same tag, so latest can
+          # only ever move to a real release. It is a convenience pointer for
+          # discovery; deployments pin a digest instead (compose.prod.yaml).
           tags: |
             type=raw,value=${{ env.VERSION_NO_V }}
             type=raw,value=${{ inputs.version || github.ref_name }}
+            type=raw,value=latest
 
       - uses: docker/build-push-action@v6
         with:
