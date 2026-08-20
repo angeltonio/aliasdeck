@@ -111,6 +111,10 @@ SELECT id, username, password_hash, created_at, updated_at FROM operators WHERE 
 -- name: CountOperators :one
 SELECT COUNT(*) FROM operators;
 
+-- name: UpdateOperatorPassword :one
+UPDATE operators SET password_hash = ?, updated_at = ? WHERE username = ?
+RETURNING id, username, password_hash, created_at, updated_at;
+
 -- name: CreateToken :exec
 INSERT INTO tokens (id, kind, subject_id, lookup, secret_hash, profile_ids, created_at, expires_at, used_at, revoked_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);

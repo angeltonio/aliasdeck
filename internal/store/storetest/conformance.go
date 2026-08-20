@@ -474,6 +474,39 @@ func testOperatorCRUD(t *testing.T, st store.Store) {
 	if _, err := repo.Get(ctx, "does-not-exist"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("Get() on a missing id = %v, want ErrNotFound", err)
 	}
+
+	// UpdatePasswordHash is the only way a password already set can change,
+	// so it must keep the row's identity while replacing exactly the hash:
+	// a version that reassigned the ID or the username would break every
+	// token whose subject_id points at this operator.
+	updated, err := repo.UpdatePasswordHash(ctx, "root", []byte("second-hash"))
+	if err != nil {
+		t.Fatalf("UpdatePasswordHash(): %v", err)
+	}
+	if updated.ID != created.ID || updated.Username != created.Username {
+		t.Fatalf("UpdatePasswordHash() = %+v, want the same id and username as %+v", updated, created)
+	}
+	if string(updated.PasswordHash) != "second-hash" {
+		t.Fatalf("UpdatePasswordHash() hash = %q, want %q", updated.PasswordHash, "second-hash")
+	}
+
+	// Read it back through a separate call: the RETURNING clause agreeing
+	// with itself would not prove the row on disk actually changed.
+	reread, err := repo.ByUsername(ctx, "root")
+	if err != nil {
+		t.Fatalf("ByUsername() after UpdatePasswordHash(): %v", err)
+	}
+	if string(reread.PasswordHash) != "second-hash" {
+		t.Fatalf("re-read hash = %q, want %q", reread.PasswordHash, "second-hash")
+	}
+
+	if n, err := repo.Count(ctx); err != nil || n != 1 {
+		t.Fatalf("Count() after UpdatePasswordHash() = %d, %v, want 1, nil — an update must not insert a row", n, err)
+	}
+
+	if _, err := repo.UpdatePasswordHash(ctx, "nobody", []byte("hash")); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("UpdatePasswordHash() on a missing username = %v, want ErrNotFound", err)
+	}
 }
 
 // testDeviceProfileMembershipCascadesOnProfileDelete proves device_profiles

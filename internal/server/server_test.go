@@ -617,6 +617,12 @@ func (blockingOperatorRepo) ByUsername(_ context.Context, _ string) (store.Opera
 	return store.Operator{}, store.ErrNotFound
 }
 
+// This fake exists to block inside Count so a test can cancel mid-bootstrap;
+// it holds no rows, so there is never a password to replace.
+func (blockingOperatorRepo) UpdatePasswordHash(_ context.Context, _ string, _ []byte) (store.Operator, error) {
+	return store.Operator{}, store.ErrNotFound
+}
+
 func (r blockingOperatorRepo) Count(ctx context.Context) (int, error) {
 	r.once.Do(func() { close(r.entered) })
 	<-ctx.Done()

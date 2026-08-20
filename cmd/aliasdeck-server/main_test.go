@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -68,13 +69,31 @@ func TestNewRootCmdDBFlagDefaultsToEmpty(t *testing.T) {
 	}
 }
 
-// TestNewRootCmdHasNoSubcommands proves the "the binary is the server, not
-// a `serve` subcommand of it" design choice: aliasdeck-server's only job is
-// serving, so it must register zero child commands.
-func TestNewRootCmdHasNoSubcommands(t *testing.T) {
+// TestNewRootCmdServesWithoutAVerb keeps the half of the original "no
+// subcommands" design choice that still holds: serving is what the binary
+// does, so the root command runs it directly and `aliasdeck-server serve`
+// never becomes the spelling. Adding reset-password did not change that.
+func TestNewRootCmdServesWithoutAVerb(t *testing.T) {
 	cmd := newRootCmd()
-	if got := cmd.Commands(); len(got) != 0 {
-		t.Errorf("newRootCmd() registered %d subcommands, want 0 — aliasdeck-server has no verb beyond running", len(got))
+	if cmd.RunE == nil {
+		t.Error("newRootCmd() has no RunE — serving must not require a verb")
+	}
+}
+
+// TestNewRootCmdRegistersOnlyTheRecoveryVerb pins the subcommand set. The
+// original test asserted zero subcommands; reset-password earns one by not
+// serving at all — it mutates a stored credential and exits. Naming the set
+// exactly, rather than counting it, keeps this a real guard: a second verb
+// added by accident still fails here, and a rename has to be deliberate.
+func TestNewRootCmdRegistersOnlyTheRecoveryVerb(t *testing.T) {
+	got := make([]string, 0, 1)
+	for _, sub := range newRootCmd().Commands() {
+		got = append(got, sub.Name())
+	}
+
+	want := []string{"reset-password"}
+	if !slices.Equal(got, want) {
+		t.Errorf("newRootCmd() subcommands = %v, want exactly %v", got, want)
 	}
 }
 
@@ -184,6 +203,26 @@ func TestBootstrapPasswordFilePathDerivedFromDBPathWhenNotTerminal(t *testing.T)
 	want := filepath.Join("/base", bootstrapPasswordFileName)
 	if got != want {
 		t.Errorf("bootstrapPasswordFilePath(false, %q) = %q, want %q", "/base/server.db", got, want)
+	}
+}
+
+// TestResetPasswordFilePathRoutesLikeBootstrapButToItsOwnFile proves the
+// reset path makes the same terminal/file decision, and that it never lands
+// on bootstrapPasswordFileName: an operator recovering access must be able
+// to tell the file the reset just wrote from the one first start left
+// behind, and a reset must never look like it changed nothing.
+func TestResetPasswordFilePathRoutesLikeBootstrapButToItsOwnFile(t *testing.T) {
+	if got := resetPasswordFilePath(true, "/base/server.db"); got != "" {
+		t.Errorf("resetPasswordFilePath(true, ...) = %q, want empty", got)
+	}
+
+	got := resetPasswordFilePath(false, "/base/server.db")
+	want := filepath.Join("/base", resetPasswordFileName)
+	if got != want {
+		t.Errorf("resetPasswordFilePath(false, %q) = %q, want %q", "/base/server.db", got, want)
+	}
+	if resetPasswordFileName == bootstrapPasswordFileName {
+		t.Error("the reset and bootstrap password files share a name — a reset would overwrite first start's file")
 	}
 }
 

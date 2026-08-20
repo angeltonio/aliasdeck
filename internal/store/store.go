@@ -151,6 +151,14 @@ type OperatorRepo interface {
 	// uses this to decide whether the server is starting against an
 	// empty database.
 	Count(ctx context.Context) (int, error)
+
+	// UpdatePasswordHash replaces the stored password hash of the
+	// operator with the given username and returns the updated record,
+	// or ErrNotFound if no such operator exists. It is the only way a
+	// password already set can be changed: Create refuses a username
+	// that is taken, so without this an operator who lost their password
+	// had no recovery path short of deleting the database.
+	UpdatePasswordHash(ctx context.Context, username string, hash []byte) (Operator, error)
 }
 
 // TokenKind distinguishes the three purposes a token can serve. Wire form

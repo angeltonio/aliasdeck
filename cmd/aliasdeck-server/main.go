@@ -3,13 +3,19 @@
 // that registered devices and operators talk to
 // (docs/WHAT-WE-ARE-BUILDING.md, "aliasdeck-server — the control plane").
 //
-// This binary has exactly one job, so it has no subcommands — the root
-// command itself serves, the way `caddy run` needs no verb beyond its own
-// name and `nginx` does not ask for a "start" argument. A `serve` subcommand
-// would only ever have one sibling: itself. `aliasdeck-server --addr
-// 0.0.0.0:8080` reads as "run the server on this address", which is the only
-// sentence this program exists to make true; `aliasdeck-server serve --addr
-// ...` says the same thing with an extra word.
+// Serving needs no verb: the root command itself serves, the way `caddy run`
+// needs no verb beyond its own name and `nginx` does not ask for a "start"
+// argument. `aliasdeck-server --addr 0.0.0.0:8080` reads as "run the server
+// on this address", which is the sentence this program mainly exists to make
+// true; `aliasdeck-server serve --addr ...` says it with an extra word.
+//
+// `reset-password` is the one subcommand, and it earns the verb by not
+// serving at all: it opens the database, replaces an operator's password
+// hash, revokes that operator's sessions, and exits. It exists because every
+// other way into an account is one-shot — web setup refuses once an operator
+// exists, ALIASDECK_ADMIN_PASSWORD is read only while there is none, and the
+// store refuses to Create a username already taken — which left deleting the
+// database as the only recovery from a lost password.
 //
 // It never imports internal/renderers: the server transmits data, the
 // client produces shell syntax (design decision 2, docs/PROJECT.md
@@ -122,6 +128,12 @@ func newRootCmd() *cobra.Command {
 			"do this deliberately, such as behind a reverse proxy on another interface)")
 	cmd.Flags().StringVar(&dbPath, "db", "",
 		"path to the SQLite database file (default: <base>/"+serverDBFileName+")")
+
+	// The one verb that is not serving. It is a subcommand rather than a
+	// flag because it does not configure the server, it replaces a stored
+	// credential and exits — and because a flag that silently rewrote an
+	// operator's password on the way to listening would be a trap.
+	cmd.AddCommand(newResetPasswordCmd())
 	return cmd
 }
 

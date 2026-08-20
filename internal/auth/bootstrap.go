@@ -8,7 +8,6 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/angeltonio/aliasdeck/internal/store"
 )
@@ -217,14 +216,11 @@ func writeSyncCloseBootstrapPassword(f *os.File, password string) error {
 // minAdminPasswordLength (bounded-review finding: setting it to "a"
 // produced a working single-character admin password with no rejection
 // and no warning).
+// It shares validatePasswordStrength (reset.go) with the reset path so the
+// floor an operator-supplied password has to clear cannot drift between
+// creating an account and recovering one.
 func validateAdminPassword(password string) error {
-	if strings.TrimSpace(password) == "" {
-		return fmt.Errorf("auth: %s is set but empty or all whitespace: %w", AdminPasswordEnv, ErrWeakAdminPassword)
-	}
-	if len(password) < minAdminPasswordLength {
-		return fmt.Errorf("auth: %s must be at least %d characters, got %d: %w", AdminPasswordEnv, minAdminPasswordLength, len(password), ErrWeakAdminPassword)
-	}
-	return nil
+	return validatePasswordStrength(password, AdminPasswordEnv)
 }
 
 // GeneratePassword returns a length-character password drawn from

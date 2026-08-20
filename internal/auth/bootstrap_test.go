@@ -58,6 +58,16 @@ func (f *fakeOperatorRepo) Count(_ context.Context) (int, error) {
 	return len(f.operators), nil
 }
 
+func (f *fakeOperatorRepo) UpdatePasswordHash(_ context.Context, username string, hash []byte) (store.Operator, error) {
+	for i, o := range f.operators {
+		if o.Username == username {
+			f.operators[i].PasswordHash = hash
+			return f.operators[i], nil
+		}
+	}
+	return store.Operator{}, store.ErrNotFound
+}
+
 type fakeBootstrapStore struct {
 	operators *fakeOperatorRepo
 }

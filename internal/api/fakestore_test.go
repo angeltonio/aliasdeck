@@ -414,6 +414,21 @@ func (r fakeOperatorRepo) Count(_ context.Context) (int, error) {
 	return len(s.operators), nil
 }
 
+func (r fakeOperatorRepo) UpdatePasswordHash(_ context.Context, username string, hash []byte) (store.Operator, error) {
+	s := r.s
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id, o := range s.operators {
+		if o.Username == username {
+			o.PasswordHash = hash
+			o.UpdatedAt = time.Now()
+			s.operators[id] = o
+			return o, nil
+		}
+	}
+	return store.Operator{}, store.ErrNotFound
+}
+
 // --- tokens ---
 
 type fakeTokenRepo struct{ s *fakeStore }

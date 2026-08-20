@@ -127,11 +127,43 @@ Operator accounts, aliases, devices, and tokens remain in the named Docker
 volume `aliasdeck-prod_aliasdeck-data`. The database is stored at
 `/data/server.db` inside that volume.
 
+### Recover a lost operator password
+
+If you can no longer log in, reset the password instead of deleting the
+volume. This keeps every alias, device, and token:
+
+```bash
+docker compose -f compose.prod.yaml exec aliasdeck-server \
+  aliasdeck-server reset-password --db /data/server.db
+```
+
+The new password is generated and written to `/data/reset-password.txt` at
+mode `0600` — read it, then remove the file. To choose the password yourself,
+supply it in the environment instead, in which case nothing is printed or
+written:
+
+```bash
+docker compose -f compose.prod.yaml exec \
+  -e ALIASDECK_ADMIN_PASSWORD='your-new-password' aliasdeck-server \
+  aliasdeck-server reset-password --db /data/server.db
+```
+
+The password must be at least 12 characters — the same floor first-run setup
+applies. It is never accepted as a command-line flag, because arguments are
+visible to other processes on the host and are recorded in shell history.
+
+The reset also **revokes every session that operator holds**, so anyone
+already logged in as them is signed out. That is deliberate: if you are
+resetting because the password may be known to someone else, leaving their
+session open would make the reset cosmetic. The server does not need to be
+stopped, and `--username` targets a different account if you have one.
+
 ### Reset everything
 
 > **DANGER — permanent data loss:** this deletes the production volume and
 > every operator, alias, device, and token stored in it. The next start returns
-> to `/setup`. Do not run it as a normal restart or update command.
+> to `/setup`. Do not run it as a normal restart or update command. To recover
+> a forgotten password, use `reset-password` above instead — it keeps your data.
 
 ```bash
 docker compose -f compose.prod.yaml down --volumes

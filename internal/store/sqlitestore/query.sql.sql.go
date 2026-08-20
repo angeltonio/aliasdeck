@@ -805,6 +805,30 @@ func (q *Queries) UpdateDevice(ctx context.Context, arg UpdateDeviceParams) (int
 	return result.RowsAffected()
 }
 
+const updateOperatorPassword = `-- name: UpdateOperatorPassword :one
+UPDATE operators SET password_hash = ?, updated_at = ? WHERE username = ?
+RETURNING id, username, password_hash, created_at, updated_at
+`
+
+type UpdateOperatorPasswordParams struct {
+	PasswordHash string
+	UpdatedAt    string
+	Username     string
+}
+
+func (q *Queries) UpdateOperatorPassword(ctx context.Context, arg UpdateOperatorPasswordParams) (Operator, error) {
+	row := q.db.QueryRowContext(ctx, updateOperatorPassword, arg.PasswordHash, arg.UpdatedAt, arg.Username)
+	var i Operator
+	err := row.Scan(
+		&i.ID,
+		&i.Username,
+		&i.PasswordHash,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const updateProfile = `-- name: UpdateProfile :one
 UPDATE profiles SET name = ?, description = ?, updated_at = ?
 WHERE id = ?

@@ -122,3 +122,9 @@ func (fakeOperatorRepo) ByUsername(_ context.Context, _ string) (store.Operator,
 func (f fakeOperatorRepo) Count(_ context.Context) (int, error) {
 	return f.count, nil
 }
+
+// This fake keeps no operator rows at all — it exists to drive
+// auth.Bootstrap's Count branch — so there is never a record to update.
+func (fakeOperatorRepo) UpdatePasswordHash(_ context.Context, _ string, _ []byte) (store.Operator, error) {
+	return store.Operator{}, store.ErrNotFound
+}

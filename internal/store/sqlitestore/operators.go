@@ -52,6 +52,19 @@ func (r operatorRepo) Count(ctx context.Context) (int, error) {
 	return int(n), nil
 }
 
+func (r operatorRepo) UpdatePasswordHash(ctx context.Context, username string, hash []byte) (store.Operator, error) {
+	row, err := r.q.UpdateOperatorPassword(ctx, UpdateOperatorPasswordParams{
+		PasswordHash: string(hash), UpdatedAt: formatTime(time.Now()), Username: username,
+	})
+	if err != nil {
+		// A username that matches no row yields sql.ErrNoRows from the
+		// RETURNING clause rather than a write failure, so this reads as
+		// ErrNotFound the same way Get and ByUsername do.
+		return store.Operator{}, mapReadError("updating operator password", err)
+	}
+	return toStoreOperator(row)
+}
+
 func toStoreOperator(row Operator) (store.Operator, error) {
 	createdAt, err := parseTime(row.CreatedAt)
 	if err != nil {
