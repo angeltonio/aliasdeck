@@ -106,14 +106,19 @@ jobs:
         id: image
         run: |
           version="${GITHUB_REF_NAME#v}"
-          tags="ghcr.io/${{ github.repository_owner }}/aliasdeck-server:${version}"
+          image="ghcr.io/${{ github.repository_owner }}/aliasdeck-server"
+          # Both spellings come from this one build. They used to be published
+          # by two workflows racing on the same tag push, which meant the
+          # bare and v-prefixed tags could name different builds of the same
+          # commit whenever the images did not come out byte-identical.
+          tags="${image}:${version},${image}:v${version}"
           # A prerelease must never move `latest`, for the same reason
           # .goreleaser.yaml sets `skip_upload: auto` on the cask and the
           # manifest: `docker pull` with no tag is the unpinned default, and an
           # rc arriving there ships an untested build to everyone who takes it.
           case "$version" in
             *-*) echo "prerelease: $version — not tagging latest" ;;
-            *)   tags="${tags},ghcr.io/${{ github.repository_owner }}/aliasdeck-server:latest" ;;
+            *)   tags="${tags},${image}:latest" ;;
           esac
           echo "tags=${tags}" >> "$GITHUB_OUTPUT"
 

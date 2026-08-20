@@ -1,8 +1,12 @@
 name: Publish container
 
+# Manual republish only. release.yml owns the image on a tag push: it builds
+# once, publishes every tag from that single build, and does so only after
+# goreleaser has written the notes that tell an operator to back up the
+# database before upgrading. This workflow stays for the case where an image
+# has to be rebuilt for a release that already exists.
+
 on:
-  push:
-    tags: ["v*"]
   workflow_dispatch:
     inputs:
       version:
