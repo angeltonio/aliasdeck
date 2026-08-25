@@ -146,6 +146,9 @@ func (a *webapp) pages() []page {
 
 		{Method: http.MethodGet, Pattern: "/aliases", Handler: a.handleAliasesPage, Guard: guardSession},
 		{Method: http.MethodPost, Pattern: "/aliases", Handler: a.handleAliasesCreate, Guard: guardSession},
+		{Method: http.MethodGet, Pattern: "/aliases/panel", Handler: a.handleAliasesPanel, Guard: guardSession},
+		{Method: http.MethodGet, Pattern: "/aliases/{id}/edit", Handler: a.handleAliasesEdit, Guard: guardSession},
+		{Method: http.MethodPut, Pattern: "/aliases/{id}", Handler: a.handleAliasesUpdate, Guard: guardSession},
 		{Method: http.MethodDelete, Pattern: "/aliases/{id}", Handler: a.handleAliasesDelete, Guard: guardSession},
 
 		{Method: http.MethodGet, Pattern: "/devices", Handler: a.handleDevicesPage, Guard: guardSession},

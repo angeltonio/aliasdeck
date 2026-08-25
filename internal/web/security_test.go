@@ -59,6 +59,27 @@ func TestAuthenticatedMutationsRequireSessionBoundCSRF(t *testing.T) {
 		t.Fatalf("persisted aliases = %v, err=%v", aliases, err)
 	}
 
+	// The edit route is a mutation like any other, so it has to be inside
+	// this test rather than only in the handler's own: a route reachable
+	// with a session but no CSRF token would let another origin rewrite an
+	// operator's aliases.
+	editPath := "/aliases/" + aliases[0].ID
+	editForm := url.Values{"name": {"renamed"}, "command": {"printf renamed"}}
+	if rec := doWebRequest(h, http.MethodPut, editPath, editForm, cookieA, ""); rec.Code != http.StatusForbidden {
+		t.Fatalf("HTMX edit without token status = %d, want 403", rec.Code)
+	}
+	if rec := doWebRequest(h, http.MethodPut, editPath, editForm, cookieA, csrfB); rec.Code != http.StatusForbidden {
+		t.Fatalf("HTMX edit with another session's token status = %d, want 403", rec.Code)
+	}
+	accepted := url.Values{csrfFormField: {csrfA}, "name": {"renamed"}, "command": {"printf renamed"}}
+	if rec := doWebRequest(h, http.MethodPut, editPath, accepted, cookieA, ""); rec.Code != http.StatusOK {
+		t.Fatalf("HTMX edit with form token status = %d body=%q", rec.Code, rec.Body.String())
+	}
+	edited, err := st.Aliases().Get(context.Background(), aliases[0].ID)
+	if err != nil || edited.Name != "renamed" {
+		t.Fatalf("edited alias = %+v, err=%v; want the rename applied", edited, err)
+	}
+
 	deletePath := "/aliases/" + aliases[0].ID
 	if rec := doWebRequest(h, http.MethodDelete, deletePath, nil, cookieA, ""); rec.Code != http.StatusForbidden {
 		t.Fatalf("HTMX delete without token status = %d, want 403", rec.Code)
