@@ -13,7 +13,7 @@ import (
 
 // Version is AliasDeck's client version, recorded in domain.Device and
 // state.State so `status` can show which build last synced a device.
-const Version = "0.5.6"
+const Version = "0.5.7"
 
 // Options carries the flags every command shares. --shell overrides
 // detection the same way for every command (design, "Shell" precedence).

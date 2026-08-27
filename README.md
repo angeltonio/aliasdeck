@@ -39,7 +39,7 @@ docker compose -f compose.prod.yaml up -d --pull always --wait
 
 Open <http://127.0.0.1:8088/setup> and create the first operator. The
 production file is deliberately pinned to the published
-[`v0.5.6`](https://github.com/angeltonio/aliasdeck/releases/tag/v0.5.6)
+[`v0.5.7`](https://github.com/angeltonio/aliasdeck/releases/tag/v0.5.7)
 server image and digest.
 
 ### 2. Install or update the client on macOS
@@ -222,7 +222,7 @@ scoop install aliasdeck
 Published release archives contain client and server binaries for macOS,
 Linux, and Windows on amd64 and arm64. The client renders zsh, bash, and
 PowerShell aliases. See the
-[`v0.5.6` release](https://github.com/angeltonio/aliasdeck/releases/tag/v0.5.6)
+[`v0.5.7` release](https://github.com/angeltonio/aliasdeck/releases/tag/v0.5.7)
 for the currently pinned deployment artifacts and checksums.
 
 ## Use the client without a server
@@ -320,6 +320,8 @@ The detailed reasoning lives in [`docs/PROJECT.md`](docs/PROJECT.md).
 | Standalone and Git-hosted client configuration | ✅ |
 | Self-hosted server, REST API, SQLite, and device enrollment | ✅ |
 | English and Spanish web UI | ✅ |
+| Alias, group, and device management from the browser, including targeting | ✅ |
+| Operator password recovery without data loss | ✅ |
 | Configurable automatic alias synchronization on macOS | ✅ |
 | Homebrew cask, Scoop manifest, release archives, and checksum-verifying install script | ✅ |
 
