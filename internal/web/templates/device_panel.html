@@ -28,7 +28,10 @@
       <td>{{if .Synced}}<span class="badge ok">{{tr $.Lang "devices.synced"}}</span>{{else}}<span class="badge stale">{{tr $.Lang "devices.never_synced"}}</span>{{end}}
         <span class="muted">{{if .LastSyncAt}}<time class="mono" datetime="{{.LastSyncAt.DateTime}}" data-local-time data-utc="{{.LastSyncAt.UTC}}" data-local-title="{{tr $.Lang "time.local_title"}}" title="{{tr $.Lang "time.utc_title"}}">{{.LastSyncAt.UTC}}</time>{{else}}<span class="mono">{{tr $.Lang "devices.never"}}</span>{{end}}</span>
       </td>
-      <td><button hx-get="/devices/{{.ID}}/edit" hx-target="#device-panel" hx-swap="outerHTML">{{tr $.Lang "devices.edit"}}</button></td>
+      <td>
+        <a class="btn" href="/devices/{{.ID}}/preview">{{tr $.Lang "devices.preview"}}</a>
+        <button hx-get="/devices/{{.ID}}/edit" hx-target="#device-panel" hx-swap="outerHTML">{{tr $.Lang "devices.edit"}}</button>
+      </td>
       {{end}}
     </tr>{{end}}</tbody>
   </table>{{end}}

@@ -1,0 +1,22 @@
+{{define "content"}}
+<div class="page-header">
+  <div><h1>{{tr .Lang "preview.heading"}} <code>{{.Device.Name}}</code></h1>
+    <p>{{tr .Lang "preview.subtitle"}}</p>
+    <p class="mono muted">{{.Device.Platform}} · {{.Device.Shell}}</p>
+  </div>
+  <a class="btn" href="/devices">{{tr .Lang "preview.back"}}</a>
+</div>
+<div class="card">
+  <p>{{tr .Lang "preview.count" .Receives}}</p>
+  {{if not .Rows}}<p class="empty-state">{{tr .Lang "preview.no_aliases"}}</p>{{else}}
+  <table><thead><tr><th>{{tr .Lang "aliases.name"}}</th><th>{{tr .Lang "aliases.command"}}</th><th>{{tr .Lang "preview.result"}}</th></tr></thead>
+    <tbody>{{range .Rows}}<tr>
+      <td><code>{{.Name}}</code></td><td><code>{{.Command}}</code></td>
+      {{/* The excluded rows are the point of this page: an alias that never
+           arrives is invisible from the alias list and from the device list,
+           so it is listed here with the dimension that excluded it. */}}
+      <td>{{if .Applies}}<span class="badge ok">{{tr $.Lang "preview.receives"}}</span>{{else}}<span class="badge stale">{{tr $.Lang "preview.excluded"}}</span> <span class="muted">{{.Reason}}</span>{{end}}</td>
+    </tr>{{end}}</tbody>
+  </table>{{end}}
+</div>
+{{end}}

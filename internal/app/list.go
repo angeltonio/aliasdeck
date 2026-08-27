@@ -83,17 +83,21 @@ func List(_ context.Context, env Env, opts Options) (ListReport, error) {
 }
 
 // skipReason explains why a is not active for dev, or "" when it is.
+//
+// The decision of *which* dimension failed belongs to domain.Alias.Miss, so
+// this only phrases it. Deriving it here as well would let the CLI and the
+// server's preview disagree about the same alias.
 func skipReason(a domain.Alias, dev domain.Device) string {
-	switch {
-	case !a.Enabled:
+	switch a.Miss(dev) {
+	case domain.MissDisabled:
 		return "disabled"
-	case !a.TargetsPlatform(dev.Platform):
+	case domain.MissPlatform:
 		return fmt.Sprintf("not targeted at platform %q", dev.Platform)
-	case !a.TargetsShell(dev.Shell):
+	case domain.MissShell:
 		return fmt.Sprintf("not targeted at shell %q", dev.Shell)
-	case !a.TargetsProfiles(dev.ProfileIDs):
+	case domain.MissProfile:
 		return "no matching profile"
-	case !a.TargetsDevice(dev.ID):
+	case domain.MissDevice:
 		return "not targeted at this device"
 	default:
 		return ""

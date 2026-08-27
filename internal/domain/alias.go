@@ -84,15 +84,55 @@ func (a Alias) TargetsDevice(deviceID string) bool {
 	return false
 }
 
+// TargetingMiss names the first reason an alias does not apply to a device,
+// or MissNone when it does.
+//
+// It is a value rather than a sentence so every caller can phrase it for its
+// own audience: the CLI prints English next to `list`, and the web UI has to
+// say the same thing in two languages. What must not differ between them is
+// which dimension actually failed.
+type TargetingMiss string
+
+const (
+	MissNone     TargetingMiss = ""
+	MissDisabled TargetingMiss = "disabled"
+	MissPlatform TargetingMiss = "platform"
+	MissShell    TargetingMiss = "shell"
+	MissProfile  TargetingMiss = "profile"
+	MissDevice   TargetingMiss = "device"
+)
+
+// Miss reports why a does not apply to dev, in the order the dimensions are
+// evaluated, or MissNone when every dimension agrees.
+//
+// The order is the answer to "why is this alias not arriving?", so it is
+// deliberate rather than incidental: a disabled alias is reported as disabled
+// even when its targeting would also have excluded the device, because
+// re-enabling it is the first thing an operator would try.
+func (a Alias) Miss(dev Device) TargetingMiss {
+	switch {
+	case !a.Enabled:
+		return MissDisabled
+	case !a.TargetsPlatform(dev.Platform):
+		return MissPlatform
+	case !a.TargetsShell(dev.Shell):
+		return MissShell
+	case !a.TargetsProfiles(dev.ProfileIDs):
+		return MissProfile
+	case !a.TargetsDevice(dev.ID):
+		return MissDevice
+	default:
+		return MissNone
+	}
+}
+
 // AppliesTo reports whether a should be rendered for dev.
 //
 // Every targeting dimension must agree. This is the single place resolution
 // semantics live, so that a local FileSource and the server reach identical
-// conclusions from identical input.
+// conclusions from identical input — which is also why it is expressed
+// through Miss rather than repeating the same five checks: two spellings of
+// one predicate are two chances for them to disagree.
 func (a Alias) AppliesTo(dev Device) bool {
-	return a.Enabled &&
-		a.TargetsPlatform(dev.Platform) &&
-		a.TargetsShell(dev.Shell) &&
-		a.TargetsProfiles(dev.ProfileIDs) &&
-		a.TargetsDevice(dev.ID)
+	return a.Miss(dev) == MissNone
 }

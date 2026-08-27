@@ -361,3 +361,11 @@ func (a *webapp) writePanel(w http.ResponseWriter, r *http.Request, status int, 
 	w.WriteHeader(status)
 	_, _ = w.Write(buf.Bytes())
 }
+
+// writePage is writePanel for a full page: same buffering, same reason. A
+// template error halfway through a document is worse than a 500, because the
+// browser renders whatever arrived and the operator reads a page that looks
+// merely incomplete.
+func (a *webapp) writePage(w http.ResponseWriter, r *http.Request, status int, tmpl *template.Template, name string, data any) {
+	a.writePanel(w, r, status, tmpl, name, data)
+}

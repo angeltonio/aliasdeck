@@ -30,6 +30,7 @@ type pageTemplates struct {
 	profilePanel *template.Template
 	devices      *template.Template
 	devicePanel  *template.Template
+	preview      *template.Template
 	devicesAdd   *template.Template
 	mintResult   *template.Template
 }
@@ -78,6 +79,10 @@ func loadTemplates() (*pageTemplates, error) {
 	if err != nil {
 		return nil, err
 	}
+	preview, err := parse("templates/language_selector.html", "templates/base.html", "templates/preview.html")
+	if err != nil {
+		return nil, err
+	}
 	devicesAdd, err := parse("templates/language_selector.html", "templates/base.html", "templates/devices_add.html")
 	if err != nil {
 		return nil, err
@@ -96,6 +101,7 @@ func loadTemplates() (*pageTemplates, error) {
 		profilePanel: profilePanel,
 		devices:      devices,
 		devicePanel:  devicePanel,
+		preview:      preview,
 		devicesAdd:   devicesAdd,
 		mintResult:   mintResult,
 	}, nil
