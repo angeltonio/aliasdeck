@@ -70,9 +70,15 @@ type devicesPageData struct {
 	Active  string
 	Devices []deviceRow
 	// EditingID names the one device rendered as an inline edit row.
-	EditingID   string
-	FormError   string
-	Frequencies []enrollmentFrequencyPreset
+	EditingID string
+	// RotatedCommand is the adoption command for a credential that was just
+	// rotated, shown exactly once. Only the rotate handler ever sets it; every
+	// other response leaves it empty, which is what makes a later panel load
+	// unable to reveal the secret again.
+	RotatedCommand string
+	RotatedDevice  string
+	FormError      string
+	Frequencies    []enrollmentFrequencyPreset
 }
 
 // deviceTimestamp preserves the server-authoritative UTC instant for semantic
@@ -430,16 +436,7 @@ func (a *webapp) handleDevicesMintToken(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	baseURL := ""
-	if a.publicURL != nil {
-		baseURL = a.publicURL.String()
-	} else {
-		scheme := "http"
-		if r.TLS != nil {
-			scheme = "https"
-		}
-		baseURL = scheme + "://" + r.Host
-	}
+	baseURL := a.baseURLFor(r)
 	statusID := a.enrollments.create(subject.TokenID, minted.Lookup, expiresAt)
 	autoSync := r.FormValue("autoSync") == "true"
 	selectedInterval := resolveEnrollmentFrequency(r.FormValue("syncFrequency"), a.watchInterval())
@@ -568,4 +565,93 @@ func (a *webapp) handleDevicesRevoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.respondDevicePanel(r, w, http.StatusOK, "")
+}
+
+// baseURLFor is the browser-facing origin this server should put into a
+// command an operator will paste elsewhere. ALIASDECK_PUBLIC_URL wins when
+// set; proxy headers are never trusted for it (design decision 13's posture),
+// so the fallback is the request's own scheme and host.
+func (a *webapp) baseURLFor(r *http.Request) string {
+	if a.publicURL != nil {
+		return a.publicURL.String()
+	}
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	return scheme + "://" + r.Host
+}
+
+// handleDevicesRotateToken replaces a device's credential without disturbing
+// the device itself.
+//
+// It mirrors internal/api's handler, including the ordering that matters:
+// revoke every existing device-kind token first, then mint and persist the
+// replacement. Minting first would leave a window in which both the old and
+// the new token authenticate, which defeats the point of rotating a
+// credential you believe has leaked.
+//
+// The reply carries the only copy of the new token that will ever exist. It
+// is rendered into a fragment shown once; RotatedCommand is set nowhere else,
+// so reloading the page cannot reveal it again.
+func (a *webapp) handleDevicesRotateToken(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	lang := requestLanguage(r)
+
+	dev, err := a.store.Devices().Get(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			a.respondDevicePanel(r, w, http.StatusNotFound, translate(lang, "error.device_missing"))
+			return
+		}
+		http.Error(w, translate(lang, "error.device_load"), http.StatusInternalServerError)
+		return
+	}
+
+	now := a.now()
+	if err := a.store.Tokens().RevokeSubject(r.Context(), store.TokenKindDevice, id, now); err != nil {
+		a.respondDevicePanel(r, w, http.StatusInternalServerError, translate(lang, "error.device_rotate"))
+		return
+	}
+
+	minted, err := auth.Mint(store.TokenKindDevice)
+	if err != nil {
+		a.respondDevicePanel(r, w, http.StatusInternalServerError, translate(lang, "error.device_rotate_orphaned"))
+		return
+	}
+	if err := a.store.Tokens().Create(r.Context(), store.Token{
+		Kind: store.TokenKindDevice, SubjectID: id,
+		Lookup: minted.Lookup, SecretHash: minted.SecretHash, CreatedAt: now,
+	}); err != nil {
+		// Accepted rather than compensated, matching the API handler's
+		// documented behavior: the old token is already dead, so the device
+		// has no working credential until this is retried. Retrying is safe —
+		// RevokeSubject only touches unrevoked rows — and saying so is the
+		// difference between an operator retrying and an operator assuming
+		// the machine is broken.
+		a.respondDevicePanel(r, w, http.StatusInternalServerError, translate(lang, "error.device_rotate_orphaned"))
+		return
+	}
+
+	a.respondDeviceRotation(r, w, dev.Name, adoptCommand(a.baseURLFor(r), minted.Wire))
+}
+
+// adoptCommand is the line an operator pastes on the machine itself. It is
+// the whole command rather than the bare token because the token alone is not
+// actionable — --force is required, since this replaces a credential that
+// still exists on disk.
+func adoptCommand(url, deviceToken string) string {
+	return "aliasdeck register --url " + shellQuote(url) + " --device-token " + shellQuote(deviceToken) + " --force"
+}
+
+func (a *webapp) respondDeviceRotation(r *http.Request, w http.ResponseWriter, deviceName, command string) {
+	rows, err := a.deviceRows(r)
+	if err != nil {
+		http.Error(w, translate(requestLanguage(r), "error.device_load"), http.StatusInternalServerError)
+		return
+	}
+	a.writePanel(w, r, http.StatusOK, a.tmpl.devicePanel, "device_panel", devicesPageData{
+		pageData: pageDataFor(r), Devices: rows,
+		RotatedCommand: command, RotatedDevice: deviceName,
+	})
 }

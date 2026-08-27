@@ -132,6 +132,15 @@ func TestAuthenticatedMutationsRequireSessionBoundCSRF(t *testing.T) {
 		t.Fatalf("device revoke with another session's token status = %d, want 403", rec.Code)
 	}
 
+	// Rotation mints a credential. A CSRF hole here would let another origin
+	// issue one — and read it out of the response.
+	if rec := doWebRequest(h, http.MethodPost, "/devices/some-id/token", nil, cookieA, ""); rec.Code != http.StatusForbidden {
+		t.Fatalf("device rotate without token status = %d, want 403", rec.Code)
+	}
+	if rec := doWebRequest(h, http.MethodPost, "/devices/some-id/token", nil, cookieA, csrfB); rec.Code != http.StatusForbidden {
+		t.Fatalf("device rotate with another session's token status = %d, want 403", rec.Code)
+	}
+
 	mint := doWebRequest(h, http.MethodPost, "/devices/add/token", url.Values{
 		csrfFormField: {csrfA}, "autoSync": {"true"},
 	}, cookieA, csrfA)

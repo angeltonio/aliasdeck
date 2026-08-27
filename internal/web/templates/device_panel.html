@@ -1,6 +1,14 @@
 {{define "device_panel"}}
 <div id="device-panel">
   {{if .FormError}}<div class="error-banner">{{.FormError}}</div>{{end}}
+  {{/* Shown exactly once, on the response that minted it. No other handler
+       sets RotatedCommand, so reloading this panel cannot bring it back —
+       which is the whole contract of a one-time credential. */}}
+  {{if .RotatedCommand}}<div class="card">
+    <h3>{{tr .Lang "devices.rotated_title" .RotatedDevice}}</h3>
+    <p class="muted">{{tr .Lang "devices.rotated_hint"}}</p>
+    <pre class="commands">{{.RotatedCommand}}</pre>
+  </div>{{end}}
   {{if not .Devices}}<p class="empty-state">{{tr .Lang "devices.empty"}}</p>{{else}}
   <table><thead><tr><th>{{tr .Lang "devices.name"}}</th><th>{{tr .Lang "devices.platform"}}</th><th>{{tr .Lang "devices.shell"}}</th><th>{{tr .Lang "devices.groups"}}</th><th>{{tr .Lang "devices.status"}}</th><th>{{tr .Lang "devices.last_seen"}}</th><th>{{tr .Lang "devices.last_sync"}}</th><th></th></tr></thead>
     <tbody>{{range .Devices}}<tr id="device-row-{{.ID}}">
@@ -34,6 +42,7 @@
         {{/* A revoked device offers no second revoke: the action is already
              done, and a button that appeared to do it again would suggest the
              first one had not worked. */}}
+        {{if not .Revoked}}<button hx-post="/devices/{{.ID}}/token" hx-target="#device-panel" hx-swap="outerHTML" hx-confirm="{{tr $.Lang "devices.rotate_confirm" .Name}}">{{tr $.Lang "devices.rotate"}}</button>{{end}}
         {{if not .Revoked}}<button class="danger" hx-post="/devices/{{.ID}}/revoke" hx-target="#device-panel" hx-swap="outerHTML" hx-confirm="{{tr $.Lang "devices.revoke_confirm" .Name}}">{{tr $.Lang "devices.revoke"}}</button>{{end}}
       </td>
       {{end}}
