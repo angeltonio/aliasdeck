@@ -345,9 +345,17 @@ safe development reset, read [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
 
 ## Contributing
 
-The architecture is still evolving, so discussion is valuable. Open an issue
-if you disagree with something in [`docs/PROJECT.md`](docs/PROJECT.md); a wrong
-decision is cheapest to fix before users depend on it.
+Contributions are welcome, and [`CONTRIBUTING.md`](CONTRIBUTING.md) is worth
+reading first: AliasDeck enforces several rules through tests rather than
+review — the client binary cannot import server packages, the server cannot
+emit shell syntax, both translation catalogues must stay in step — and a pull
+request bounced for a rule you had no way of knowing is nobody's idea of a
+good time.
+
+Issues labelled `good first issue` are scoped and have context. The
+architecture is still evolving, so disagreement is useful too: open an issue
+if you think something in [`docs/PROJECT.md`](docs/PROJECT.md) is wrong. A
+wrong decision is cheapest to fix before users depend on it.
 
 ## License
 
