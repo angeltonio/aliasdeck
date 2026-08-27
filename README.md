@@ -2,10 +2,21 @@
 
 > Your commands. Every machine.
 
+You teach `gs` to mean `git status` on your laptop. Then you SSH into a
+server and it isn't there. You copy your shell config across, and the machine
+running bash gets zsh syntax. You put your dotfiles in Git, and every new
+machine still needs the same manual repair — plus a `git pull` you will
+forget on the machines you use least.
+
 AliasDeck lets you define an alias once, manage it locally or from a
 self-hosted control plane, and render it safely for zsh, bash, or PowerShell.
+
 It understands commands rather than copying dotfiles, so every client writes
-the syntax its own shell needs without letting the server send shell code.
+the syntax its own shell needs — and **the server never sends shell code**. It
+transmits what an alias means; each machine decides how to spell it. That
+boundary is enforced by tests, not by convention: the client binary cannot
+import a single server package, and the same alias renders byte-for-byte
+identically whether it came from a local file or from the server.
 
 AliasDeck ships two separate programs:
 
