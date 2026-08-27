@@ -169,6 +169,26 @@ resetting because the password may be known to someone else, leaving their
 session open would make the reset cosmetic. The server does not need to be
 stopped, and `--username` targets a different account if you have one.
 
+### Replace a device's credential without re-enrolling it
+
+If a device token may have leaked but the machine is still yours, rotate the
+credential instead of revoking the device. Rotating keeps the machine's
+server-side identity; enrolling it again would create a second device, so any
+alias aimed at the first one would stop reaching it and its history would
+restart.
+
+Rotate through the REST API to obtain the replacement, then adopt it on the
+machine:
+
+```bash
+aliasdeck register --url https://aliases.example.com \
+  --device-token '<the rotated token>' --force
+```
+
+`--force` is required because this replaces a credential that already works.
+The token is verified against the server before anything local is written, so
+a token that does not authenticate cannot take the machine offline.
+
 ### Reset everything
 
 > **DANGER — permanent data loss:** this deletes the production volume and

@@ -19,8 +19,24 @@ type RegisterOptions struct {
 	// URL is the server's base URL.
 	URL string
 
-	// Token is the single-use enrollment token to exchange.
+	// Token is the single-use enrollment token to exchange. Mutually
+	// exclusive with DeviceToken.
 	Token string
+
+	// DeviceToken adopts a device token the server has already issued —
+	// what POST /api/v1/devices/{id}/token returns when an operator rotates
+	// a machine's credential — instead of exchanging an enrollment token
+	// for a new one.
+	//
+	// This exists because rotation had no landing place. The server could
+	// mint a replacement credential and the operator had nowhere to put it
+	// short of hand-editing credentials.json, which made rotation
+	// indistinguishable from revocation in practice. The difference matters:
+	// re-enrolling creates a *new* device row, so any alias pinned to the
+	// old one stops reaching this machine and its history restarts.
+	// Adopting keeps the machine's server-side identity and replaces only
+	// the secret.
+	DeviceToken string
 
 	// Force registers again even when this device already holds a device
 	// token. It is deliberately not the default: the result is a second
@@ -76,8 +92,11 @@ func Register(ctx context.Context, env Env, opts RegisterOptions) (RegisterRepor
 	if opts.URL == "" {
 		return RegisterReport{}, fmt.Errorf("--url is required")
 	}
-	if opts.Token == "" {
-		return RegisterReport{}, fmt.Errorf("--token is required")
+	switch {
+	case opts.Token == "" && opts.DeviceToken == "":
+		return RegisterReport{}, fmt.Errorf("--token is required (or --device-token to adopt a rotated credential)")
+	case opts.Token != "" && opts.DeviceToken != "":
+		return RegisterReport{}, fmt.Errorf("--token and --device-token are alternatives; pass one")
 	}
 	if err := source.ValidateServerURL(opts.URL, opts.AllowInsecureHTTP); err != nil {
 		return RegisterReport{}, err
@@ -123,14 +142,29 @@ func Register(ctx context.Context, env Env, opts RegisterOptions) (RegisterRepor
 		if where == "" {
 			where = "a server"
 		}
+		// The consequence of --force differs by mode, so the sentence
+		// explaining it has to as well. Enrolling again mints a second
+		// device and abandons this one; adopting a rotated credential
+		// replaces only the secret and keeps this device's identity.
+		// Telling an operator recovering from a leak that they are about to
+		// abandon their device would talk them out of the safe path.
+		consequence := "re-run with --force to register again " +
+			"(which mints a second device server-side and abandons this one)"
+		if opts.DeviceToken != "" {
+			consequence = "re-run with --force to replace this machine's credential " +
+				"(which keeps this device and changes only its token)"
+		}
 		return RegisterReport{}, fmt.Errorf(
-			"this device is already registered with %s as %s; "+
-				"run `aliasdeck sync` to update it, or re-run with --force to register again "+
-				"(which mints a second device server-side and abandons this one)",
-			where, existing.DeviceID)
+			"this device is already registered with %s as %s; run `aliasdeck sync` to update it, or %s",
+			where, existing.DeviceID, consequence)
 	}
 
-	deviceID, deviceToken, err := requestDeviceRegistration(ctx, opts.Client, opts.URL, opts.Token, id.device)
+	var deviceID, deviceToken string
+	if opts.DeviceToken != "" {
+		deviceID, deviceToken, err = adoptDeviceToken(ctx, opts, id.device)
+	} else {
+		deviceID, deviceToken, err = requestDeviceRegistration(ctx, opts.Client, opts.URL, opts.Token, id.device)
+	}
 	if err != nil {
 		return RegisterReport{}, err
 	}
@@ -244,4 +278,44 @@ func requestDeviceRegistration(ctx context.Context, client *http.Client, baseURL
 		return "", "", fmt.Errorf("decoding registration response from %s: %w", baseURL, err)
 	}
 	return wire.DeviceID, wire.DeviceToken, nil
+}
+
+// adoptDeviceToken proves an already-issued device token works and returns
+// the device identity behind it.
+//
+// It does that by performing a real sync through source.ServerSource rather
+// than by trusting the operator's paste. Two reasons. A token that does not
+// authenticate must never reach credentials.json — saving it would replace a
+// working credential with a dead one and take the machine offline, which is
+// the opposite of what someone recovering a leaked token wants. And the sync
+// response is the only place a device is told its own id, so verifying and
+// identifying are the same request rather than two.
+//
+// ServerSource is reused rather than reimplemented: it already validates the
+// URL on every call, refuses redirects so the token cannot leak in cleartext,
+// and bounds the response it will read.
+func adoptDeviceToken(ctx context.Context, opts RegisterOptions, dev domain.Device) (string, string, error) {
+	src := &source.ServerSource{
+		URL:       opts.URL,
+		Token:     opts.DeviceToken,
+		Client:    opts.Client,
+		AllowHTTP: opts.AllowInsecureHTTP,
+	}
+
+	resolved, err := src.Resolve(ctx, dev)
+	if err != nil {
+		// Deliberately does not name the cause. Resolve fails for a
+		// refused token, but also for a response whose revision does not
+		// match its own content — an integrity failure that has nothing to
+		// do with the credential. Blaming the token there would send an
+		// operator to rotate again over a problem rotating cannot fix. The
+		// wrapped error says which it was.
+		return "", "", fmt.Errorf(
+			"could not verify that device token against %s, so nothing on this machine was changed: %w",
+			opts.URL, err)
+	}
+	if resolved.Device.ID == "" {
+		return "", "", fmt.Errorf("%s accepted the device token but did not say which device it belongs to", opts.URL)
+	}
+	return resolved.Device.ID, opts.DeviceToken, nil
 }
