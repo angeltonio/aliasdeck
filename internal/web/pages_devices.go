@@ -217,9 +217,7 @@ func (a *webapp) respondDevicePanelEditing(r *http.Request, w http.ResponseWrite
 		http.Error(w, translate(requestLanguage(r), "error.device_load"), http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(status)
-	_ = a.tmpl.devicePanel.ExecuteTemplate(w, "device_panel", devicesPageData{
+	a.writePanel(w, r, status, a.tmpl.devicePanel, "device_panel", devicesPageData{
 		pageData: pageDataFor(r), Devices: rows, EditingID: editingID, FormError: formError,
 	})
 }

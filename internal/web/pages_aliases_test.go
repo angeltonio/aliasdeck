@@ -86,21 +86,28 @@ func fullyTargetedAlias(t *testing.T, st store.Store) domain.Alias {
 	return created
 }
 
-// TestAliasEditPreservesTargetingTheFormDoesNotShow is the reason this
-// handler exists. store.AliasRepo.Update replaces targeting wholesale, so an
-// edit built from the three form fields alone would drop the platforms,
-// shells, tags, profiles and devices an alias was aimed at — the same
-// silent loss operators already suffered by deleting and recreating an alias
-// to change it. If this test ever fails, editing has become as destructive
-// as the workaround it replaced.
-func TestAliasEditPreservesTargetingTheFormDoesNotShow(t *testing.T) {
+// TestAliasEditPreservesTheTargetingTheFormDoesNotShow is the reason this
+// handler loads the stored alias instead of building one from the form.
+// AliasRepo.Update replaces targeting wholesale, so every dimension the row
+// does not render has to be carried through. The row now renders groups,
+// platforms and shells, which it therefore owns; tags and per-device
+// targeting it does not, so those must survive untouched. If this fails,
+// editing has started dropping targeting the operator cannot even see.
+func TestAliasEditPreservesTheTargetingTheFormDoesNotShow(t *testing.T) {
 	a, st := newAliasTestApp(t)
 	before := fullyTargetedAlias(t, st)
+	if len(before.Tags) == 0 || len(before.DeviceIDs) == 0 {
+		t.Fatalf("fixture = %+v, want it to carry both tags and device targeting", before)
+	}
 
+	// Post only the three text fields and the group it already had: the
+	// platform and shell boxes come back unchecked, which the domain model
+	// reads as "every one".
 	rec := submitAliasEdit(t, a, before.ID, url.Values{
 		"name":        {"gst"},
 		"command":     {"git status --short"},
 		"description": {"show the working tree, briefly"},
+		"groups":      {before.ProfileIDs[0]},
 	})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body = %q", rec.Code, rec.Body.String())
@@ -111,38 +118,86 @@ func TestAliasEditPreservesTargetingTheFormDoesNotShow(t *testing.T) {
 		t.Fatalf("Get() after the edit: %v", err)
 	}
 
-	// The three edited fields changed.
 	if after.Name != "gst" || after.Command != "git status --short" {
 		t.Fatalf("edited fields = %q/%q, want gst/git status --short", after.Name, after.Command)
 	}
-	if after.Description != "show the working tree, briefly" {
-		t.Fatalf("description = %q, want it updated", after.Description)
-	}
 
-	// Everything the form never showed survived.
-	if got, want := len(after.ProfileIDs), len(before.ProfileIDs); got != want {
-		t.Fatalf("profile targeting = %v, want %v — the edit dropped it", after.ProfileIDs, before.ProfileIDs)
+	// Dimensions the form does not render survived.
+	if len(after.Tags) != len(before.Tags) {
+		t.Fatalf("tags = %v, want %v — the edit dropped targeting the form never showed", after.Tags, before.Tags)
 	}
-	if len(after.ProfileIDs) > 0 && after.ProfileIDs[0] != before.ProfileIDs[0] {
-		t.Fatalf("profile targeting = %v, want %v", after.ProfileIDs, before.ProfileIDs)
-	}
-	if got, want := len(after.DeviceIDs), len(before.DeviceIDs); got != want {
-		t.Fatalf("device targeting = %v, want %v — the edit dropped it", after.DeviceIDs, before.DeviceIDs)
-	}
-	if len(after.DeviceIDs) > 0 && after.DeviceIDs[0] != before.DeviceIDs[0] {
-		t.Fatalf("device targeting = %v, want %v", after.DeviceIDs, before.DeviceIDs)
-	}
-	if len(after.Platforms) != 2 {
-		t.Fatalf("platforms = %v, want the two it was created with", after.Platforms)
-	}
-	if len(after.Shells) != 1 || after.Shells[0] != domain.ShellZsh {
-		t.Fatalf("shells = %v, want [zsh]", after.Shells)
-	}
-	if len(after.Tags) != 2 {
-		t.Fatalf("tags = %v, want the two it was created with", after.Tags)
+	if len(after.DeviceIDs) != len(before.DeviceIDs) || after.DeviceIDs[0] != before.DeviceIDs[0] {
+		t.Fatalf("device targeting = %v, want %v — the edit dropped targeting the form never showed", after.DeviceIDs, before.DeviceIDs)
 	}
 	if !after.Enabled {
 		t.Fatal("the alias was disabled by an edit that never showed an enabled field")
+	}
+
+	// Dimensions the form does render followed what it posted.
+	if len(after.ProfileIDs) != 1 || after.ProfileIDs[0] != before.ProfileIDs[0] {
+		t.Fatalf("group targeting = %v, want the posted %v", after.ProfileIDs, before.ProfileIDs)
+	}
+	if len(after.Platforms) != 0 {
+		t.Fatalf("platforms = %v, want none — unchecked boxes mean every platform", after.Platforms)
+	}
+	if len(after.Shells) != 0 {
+		t.Fatalf("shells = %v, want none — unchecked boxes mean every shell", after.Shells)
+	}
+}
+
+// TestAliasEditRetargetsGroupsPlatformsAndShells is the other half: what the
+// row does render must actually take effect, or the screen would look like it
+// changed targeting while changing nothing.
+func TestAliasEditRetargetsGroupsPlatformsAndShells(t *testing.T) {
+	a, st := newAliasTestApp(t)
+	before := fullyTargetedAlias(t, st)
+	other := seedProfile(t, st, "servers")
+
+	rec := submitAliasEdit(t, a, before.ID, url.Values{
+		"name": {"gs"}, "command": {"git status"}, "description": {""},
+		"groups":    {other.ID},
+		"platforms": {"windows"},
+		"shells":    {"powershell", "bash"},
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %q", rec.Code, rec.Body.String())
+	}
+
+	after, err := st.Aliases().Get(context.Background(), before.ID)
+	if err != nil {
+		t.Fatalf("Get(): %v", err)
+	}
+	if len(after.ProfileIDs) != 1 || after.ProfileIDs[0] != other.ID {
+		t.Fatalf("groups = %v, want [%s]", after.ProfileIDs, other.ID)
+	}
+	if len(after.Platforms) != 1 || after.Platforms[0] != domain.PlatformWindows {
+		t.Fatalf("platforms = %v, want [windows]", after.Platforms)
+	}
+	if len(after.Shells) != 2 {
+		t.Fatalf("shells = %v, want two", after.Shells)
+	}
+}
+
+// TestAliasEditRejectsAnUnknownPlatformWithoutWriting covers the one thing a
+// checkbox value can be that a text field cannot: a value the domain does not
+// define, hand-posted past the rendered options.
+func TestAliasEditRejectsAnUnknownPlatformWithoutWriting(t *testing.T) {
+	a, st := newAliasTestApp(t)
+	before := fullyTargetedAlias(t, st)
+
+	rec := submitAliasEdit(t, a, before.ID, url.Values{
+		"name": {"gs"}, "command": {"git status"}, "platforms": {"solaris"},
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body = %q", rec.Code, rec.Body.String())
+	}
+
+	after, err := st.Aliases().Get(context.Background(), before.ID)
+	if err != nil {
+		t.Fatalf("Get(): %v", err)
+	}
+	if len(after.Platforms) != 2 {
+		t.Fatalf("platforms = %v, want the original two — a rejected edit wrote anyway", after.Platforms)
 	}
 }
 

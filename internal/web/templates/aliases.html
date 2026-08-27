@@ -10,6 +10,24 @@
       <div class="field"><label for="description">{{tr .Lang "aliases.description"}}</label><input type="text" id="description" name="description" placeholder="{{tr .Lang "aliases.description_placeholder"}}" /></div>
       <div class="field"><button type="submit">{{tr .Lang "aliases.create"}}</button></div>
     </div>
+    {{/* Leaving a whole dimension unchecked is how you say "every one of
+         them" — the domain model treats an empty target list as matching
+         everything, so this is the default rather than a missing choice. */}}
+    <fieldset>
+      <legend>{{tr .Lang "aliases.targeting"}}</legend>
+      <p class="hint">{{tr .Lang "aliases.targeting_hint"}}</p>
+      <div class="form-grid">
+        <div class="field"><span class="label">{{tr .Lang "aliases.groups"}}</span>
+          {{if not .NewTargeting.Groups}}<span class="muted">{{tr .Lang "aliases.no_groups_yet"}}</span>{{else}}{{range .NewTargeting.Groups}}<label><input type="checkbox" name="groups" value="{{.Value}}" /> {{.Label}}</label> {{end}}{{end}}
+        </div>
+        <div class="field"><span class="label">{{tr .Lang "aliases.platforms"}}</span>
+          {{range .NewTargeting.Platforms}}<label><input type="checkbox" name="platforms" value="{{.Value}}" /> {{.Label}}</label> {{end}}
+        </div>
+        <div class="field"><span class="label">{{tr .Lang "aliases.shells"}}</span>
+          {{range .NewTargeting.Shells}}<label><input type="checkbox" name="shells" value="{{.Value}}" /> {{.Label}}</label> {{end}}
+        </div>
+      </div>
+    </fieldset>
   </form>
 </div>
 <div class="card"><h2>{{tr .Lang "aliases.all"}}</h2>{{template "alias_panel" .}}</div>

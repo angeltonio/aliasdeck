@@ -1,24 +1,30 @@
 {{define "alias_panel"}}
 <div id="alias-panel">
   {{if .FormError}}<div class="error-banner">{{.FormError}}</div>{{end}}
-  {{if not .Aliases}}<p class="empty-state">{{tr .Lang "aliases.empty"}}</p>{{else}}
-  <table><thead><tr><th>{{tr .Lang "aliases.name"}}</th><th>{{tr .Lang "aliases.command"}}</th><th>{{tr .Lang "aliases.description"}}</th><th></th></tr></thead>
-    <tbody id="alias-table-body">{{range .Aliases}}{{if eq .ID $.EditingID}}<tr id="alias-row-{{.ID}}">
-      {{/* No <form> here on purpose: a form element is not valid inside a
-           tr, and a browser's parser hoists it out of the table, which
-           silently breaks submission in a way a Go handler test cannot see.
-           hx-include gathers the row's inputs instead, and csrf.js supplies
-           the X-CSRF-Token header on every htmx request — the same way the
-           delete button already works. */}}
+  {{if not .Rows}}<p class="empty-state">{{tr .Lang "aliases.empty"}}</p>{{else}}
+  <table><thead><tr><th>{{tr .Lang "aliases.name"}}</th><th>{{tr .Lang "aliases.command"}}</th><th>{{tr .Lang "aliases.description"}}</th><th>{{tr .Lang "aliases.groups"}}</th><th>{{tr .Lang "aliases.platforms"}}</th><th>{{tr .Lang "aliases.shells"}}</th><th></th></tr></thead>
+    <tbody id="alias-table-body">{{range .Rows}}{{if eq .ID $.EditingID}}<tr id="alias-row-{{.ID}}">
+      {{/* No <form> inside a tr: a browser's parser hoists it out of the
+           table and submission silently stops working. hx-include gathers
+           the row's inputs, and csrf.js supplies the X-CSRF-Token header. */}}
       <td><input type="text" name="name" value="{{.Name}}" required aria-label="{{tr $.Lang "aliases.name"}}" /></td>
       <td><input type="text" name="command" value="{{.Command}}" required aria-label="{{tr $.Lang "aliases.command"}}" /></td>
       <td><input type="text" name="description" value="{{.Description}}" aria-label="{{tr $.Lang "aliases.description"}}" /></td>
+      <td>{{if not .Targeting.Groups}}<span class="muted">{{tr $.Lang "aliases.no_groups_yet"}}</span>{{else}}{{range .Targeting.Groups}}<label><input type="checkbox" name="groups" value="{{.Value}}" {{if .Selected}}checked{{end}} /> {{.Label}}</label> {{end}}{{end}}</td>
+      <td>{{range .Targeting.Platforms}}<label><input type="checkbox" name="platforms" value="{{.Value}}" {{if .Selected}}checked{{end}} /> {{.Label}}</label> {{end}}</td>
+      <td>{{range .Targeting.Shells}}<label><input type="checkbox" name="shells" value="{{.Value}}" {{if .Selected}}checked{{end}} /> {{.Label}}</label> {{end}}</td>
       <td>
         <button hx-put="/aliases/{{.ID}}" hx-include="closest tr" hx-target="#alias-panel" hx-swap="outerHTML">{{tr $.Lang "aliases.save"}}</button>
         <button hx-get="/aliases/panel" hx-target="#alias-panel" hx-swap="outerHTML">{{tr $.Lang "aliases.cancel"}}</button>
       </td>
     </tr>{{else}}<tr id="alias-row-{{.ID}}">
       <td><code>{{.Name}}</code></td><td><code>{{.Command}}</code></td><td class="muted">{{if .Description}}{{.Description}}{{else}}—{{end}}</td>
+      {{/* An empty selection means every one of them, so the read-only cell
+           says "all" rather than showing nothing — the difference between
+           "reaches everywhere" and "reaches nowhere" must not be silent. */}}
+      <td>{{$any := false}}{{range .Targeting.Groups}}{{if .Selected}}{{$any = true}}<span class="badge">{{.Label}}</span> {{end}}{{end}}{{if not $any}}<span class="muted">{{tr $.Lang "aliases.all_groups"}}</span>{{end}}</td>
+      <td>{{$any := false}}{{range .Targeting.Platforms}}{{if .Selected}}{{$any = true}}<span class="badge">{{.Label}}</span> {{end}}{{end}}{{if not $any}}<span class="muted">{{tr $.Lang "aliases.all_platforms"}}</span>{{end}}</td>
+      <td>{{$any := false}}{{range .Targeting.Shells}}{{if .Selected}}{{$any = true}}<span class="badge">{{.Label}}</span> {{end}}{{end}}{{if not $any}}<span class="muted">{{tr $.Lang "aliases.all_shells"}}</span>{{end}}</td>
       <td>
         <button hx-get="/aliases/{{.ID}}/edit" hx-target="#alias-panel" hx-swap="outerHTML">{{tr $.Lang "aliases.edit"}}</button>
         <button class="danger" hx-delete="/aliases/{{.ID}}" hx-target="#alias-row-{{.ID}}" hx-swap="outerHTML" hx-confirm="{{tr $.Lang "aliases.delete_confirm" .Name}}">{{tr $.Lang "aliases.delete"}}</button>

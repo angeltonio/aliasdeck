@@ -168,9 +168,7 @@ func (a *webapp) respondProfilePanelEditing(r *http.Request, w http.ResponseWrit
 		http.Error(w, translate(requestLanguage(r), "error.profile_load"), http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(status)
-	_ = a.tmpl.profilePanel.ExecuteTemplate(w, "profile_panel", profilesPageData{
+	a.writePanel(w, r, status, a.tmpl.profilePanel, "profile_panel", profilesPageData{
 		pageData: pageDataFor(r), Profiles: list, EditingID: editingID, FormError: formError,
 	})
 }
