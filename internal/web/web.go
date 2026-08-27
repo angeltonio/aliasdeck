@@ -128,8 +128,7 @@ func (a *webapp) requireSession(next http.HandlerFunc) http.HandlerFunc {
 }
 
 // pages is the complete UI route table. It is deliberately focused on the
-// current operator flows:
-// no profile screens and no device rename/revoke/rotate.
+// current operator flows: no device rename/revoke/rotate yet.
 func (a *webapp) pages() []page {
 	return []page{
 		{Method: http.MethodGet, Pattern: "/{$}", Handler: a.handleRoot, Guard: guardPublic},
@@ -150,6 +149,13 @@ func (a *webapp) pages() []page {
 		{Method: http.MethodGet, Pattern: "/aliases/{id}/edit", Handler: a.handleAliasesEdit, Guard: guardSession},
 		{Method: http.MethodPut, Pattern: "/aliases/{id}", Handler: a.handleAliasesUpdate, Guard: guardSession},
 		{Method: http.MethodDelete, Pattern: "/aliases/{id}", Handler: a.handleAliasesDelete, Guard: guardSession},
+
+		{Method: http.MethodGet, Pattern: "/profiles", Handler: a.handleProfilesPage, Guard: guardSession},
+		{Method: http.MethodPost, Pattern: "/profiles", Handler: a.handleProfilesCreate, Guard: guardSession},
+		{Method: http.MethodGet, Pattern: "/profiles/panel", Handler: a.handleProfilesPanel, Guard: guardSession},
+		{Method: http.MethodGet, Pattern: "/profiles/{id}/edit", Handler: a.handleProfilesEdit, Guard: guardSession},
+		{Method: http.MethodPut, Pattern: "/profiles/{id}", Handler: a.handleProfilesUpdate, Guard: guardSession},
+		{Method: http.MethodDelete, Pattern: "/profiles/{id}", Handler: a.handleProfilesDelete, Guard: guardSession},
 
 		{Method: http.MethodGet, Pattern: "/devices", Handler: a.handleDevicesPage, Guard: guardSession},
 		{Method: http.MethodGet, Pattern: "/devices/add", Handler: a.handleDevicesAddPage, Guard: guardSession},

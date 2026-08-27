@@ -1,0 +1,26 @@
+{{define "profile_panel"}}
+<div id="profile-panel">
+  {{if .FormError}}<div class="error-banner">{{.FormError}}</div>{{end}}
+  {{if not .Profiles}}<p class="empty-state">{{tr .Lang "profiles.empty"}}</p>{{else}}
+  <table><thead><tr><th>{{tr .Lang "profiles.name"}}</th><th>{{tr .Lang "profiles.description"}}</th><th></th></tr></thead>
+    <tbody id="profile-table-body">{{range .Profiles}}{{if eq .ID $.EditingID}}<tr id="profile-row-{{.ID}}">
+      {{/* No <form> inside a tr: a browser's parser hoists it out of the
+           table and submission silently stops working. hx-include gathers
+           the row's inputs, and csrf.js adds the X-CSRF-Token header. */}}
+      <td><input type="text" name="name" value="{{.Name}}" required aria-label="{{tr $.Lang "profiles.name"}}" /></td>
+      <td><input type="text" name="description" value="{{.Description}}" aria-label="{{tr $.Lang "profiles.description"}}" /></td>
+      <td>
+        <button hx-put="/profiles/{{.ID}}" hx-include="closest tr" hx-target="#profile-panel" hx-swap="outerHTML">{{tr $.Lang "profiles.save"}}</button>
+        <button hx-get="/profiles/panel" hx-target="#profile-panel" hx-swap="outerHTML">{{tr $.Lang "profiles.cancel"}}</button>
+      </td>
+    </tr>{{else}}<tr id="profile-row-{{.ID}}">
+      <td><code>{{.Name}}</code></td>
+      <td class="muted">{{if .Description}}{{.Description}}{{else}}—{{end}}</td>
+      <td>
+        <button hx-get="/profiles/{{.ID}}/edit" hx-target="#profile-panel" hx-swap="outerHTML">{{tr $.Lang "profiles.edit"}}</button>
+        <button class="danger" hx-delete="/profiles/{{.ID}}" hx-target="#profile-panel" hx-swap="outerHTML" hx-confirm="{{tr $.Lang "profiles.delete_confirm" .Name}}">{{tr $.Lang "profiles.delete"}}</button>
+      </td>
+    </tr>{{end}}{{end}}</tbody>
+  </table>{{end}}
+</div>
+{{end}}

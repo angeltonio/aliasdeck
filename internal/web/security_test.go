@@ -80,6 +80,32 @@ func TestAuthenticatedMutationsRequireSessionBoundCSRF(t *testing.T) {
 		t.Fatalf("edited alias = %+v, err=%v; want the rename applied", edited, err)
 	}
 
+	// The group screen's mutations are new routes, and a route reachable
+	// with a session but no CSRF token is exactly what this test exists to
+	// catch — so every one of them is checked here, not only in its own
+	// handler test.
+	if rec := doWebRequest(h, http.MethodPost, "/profiles", url.Values{"name": {"servers"}}, cookieA, ""); rec.Code != http.StatusForbidden {
+		t.Fatalf("group create without token status = %d, want 403", rec.Code)
+	}
+	group := doWebRequest(h, http.MethodPost, "/profiles", url.Values{csrfFormField: {csrfA}, "name": {"servers"}}, cookieA, "")
+	if group.Code != http.StatusOK {
+		t.Fatalf("group create with token status = %d body=%q", group.Code, group.Body.String())
+	}
+	groups, err := st.Profiles().List(context.Background())
+	if err != nil || len(groups) != 1 {
+		t.Fatalf("persisted groups = %v, err=%v", groups, err)
+	}
+	groupPath := "/profiles/" + groups[0].ID
+	if rec := doWebRequest(h, http.MethodPut, groupPath, url.Values{"name": {"renamed"}}, cookieA, ""); rec.Code != http.StatusForbidden {
+		t.Fatalf("group edit without token status = %d, want 403", rec.Code)
+	}
+	if rec := doWebRequest(h, http.MethodDelete, groupPath, nil, cookieA, csrfB); rec.Code != http.StatusForbidden {
+		t.Fatalf("group delete with another session's token status = %d, want 403", rec.Code)
+	}
+	if rec := doWebRequest(h, http.MethodDelete, groupPath, nil, cookieA, csrfA); rec.Code != http.StatusOK {
+		t.Fatalf("group delete with header token status = %d body=%q", rec.Code, rec.Body.String())
+	}
+
 	deletePath := "/aliases/" + aliases[0].ID
 	if rec := doWebRequest(h, http.MethodDelete, deletePath, nil, cookieA, ""); rec.Code != http.StatusForbidden {
 		t.Fatalf("HTMX delete without token status = %d, want 403", rec.Code)

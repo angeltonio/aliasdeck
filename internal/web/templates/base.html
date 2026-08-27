@@ -16,6 +16,7 @@
     <div class="brand">AliasDeck <span>{{tr .Lang "brand.control_plane"}}</span></div>
     <nav>
       <a href="/aliases" class="{{if eq .Active "aliases"}}active{{end}}">{{tr .Lang "nav.aliases"}}</a>
+      <a href="/profiles" class="{{if eq .Active "profiles"}}active{{end}}">{{tr .Lang "nav.profiles"}}</a>
       <a href="/devices" class="{{if eq .Active "devices"}}active{{end}}">{{tr .Lang "nav.devices"}}</a>
       {{template "language_selector" .}}
       <form method="post" action="/logout"><input type="hidden" name="_csrf" value="{{.CSRFToken}}" /><button type="submit" class="secondary">{{tr .Lang "nav.logout"}}</button></form>

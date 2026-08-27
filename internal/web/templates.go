@@ -22,13 +22,15 @@ var staticFS embed.FS
 // to avoid two files defining "content" (aliases.html and devices.html,
 // for instance) colliding in the same *template.Template.
 type pageTemplates struct {
-	login      *template.Template
-	setup      *template.Template
-	aliases    *template.Template
-	aliasPanel *template.Template
-	devices    *template.Template
-	devicesAdd *template.Template
-	mintResult *template.Template
+	login        *template.Template
+	setup        *template.Template
+	aliases      *template.Template
+	aliasPanel   *template.Template
+	profiles     *template.Template
+	profilePanel *template.Template
+	devices      *template.Template
+	devicesAdd   *template.Template
+	mintResult   *template.Template
 }
 
 func loadTemplates() (*pageTemplates, error) {
@@ -59,6 +61,14 @@ func loadTemplates() (*pageTemplates, error) {
 	if err != nil {
 		return nil, err
 	}
+	profiles, err := parse("templates/language_selector.html", "templates/base.html", "templates/profile_panel.html", "templates/profiles.html")
+	if err != nil {
+		return nil, err
+	}
+	profilePanel, err := parse("templates/profile_panel.html")
+	if err != nil {
+		return nil, err
+	}
 	devices, err := parse("templates/language_selector.html", "templates/base.html", "templates/devices.html")
 	if err != nil {
 		return nil, err
@@ -73,12 +83,14 @@ func loadTemplates() (*pageTemplates, error) {
 	}
 
 	return &pageTemplates{
-		login:      login,
-		setup:      setup,
-		aliases:    aliases,
-		aliasPanel: aliasPanel,
-		devices:    devices,
-		devicesAdd: devicesAdd,
-		mintResult: mintResult,
+		login:        login,
+		setup:        setup,
+		aliases:      aliases,
+		aliasPanel:   aliasPanel,
+		profiles:     profiles,
+		profilePanel: profilePanel,
+		devices:      devices,
+		devicesAdd:   devicesAdd,
+		mintResult:   mintResult,
 	}, nil
 }

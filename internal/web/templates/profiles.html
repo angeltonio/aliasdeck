@@ -1,0 +1,15 @@
+{{define "content"}}
+<div class="page-header"><div><h1>{{tr .Lang "profiles.title"}}</h1><p>{{tr .Lang "profiles.subtitle"}}</p></div></div>
+<div class="card">
+  <h2>{{tr .Lang "profiles.new"}}</h2>
+  <form hx-post="/profiles" hx-target="#profile-panel" hx-swap="outerHTML" hx-on::after-request="if(event.detail.successful) this.reset()">
+    <input type="hidden" name="_csrf" value="{{.CSRFToken}}" />
+    <div class="form-grid">
+      <div class="field"><label for="name">{{tr .Lang "profiles.name"}}</label><input type="text" id="name" name="name" placeholder="{{tr .Lang "profiles.name_placeholder"}}" required /></div>
+      <div class="field"><label for="description">{{tr .Lang "profiles.description"}}</label><input type="text" id="description" name="description" placeholder="{{tr .Lang "profiles.description_placeholder"}}" /></div>
+      <div class="field"><button type="submit">{{tr .Lang "profiles.create"}}</button></div>
+    </div>
+  </form>
+</div>
+<div class="card"><h2>{{tr .Lang "profiles.all"}}</h2>{{template "profile_panel" .}}</div>
+{{end}}
