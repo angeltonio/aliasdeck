@@ -45,6 +45,11 @@ type deviceRow struct {
 	Status       string
 	StatusClass  string
 	StatusDetail string
+	// Revoked reports that an operator cut this device's access. A revoked
+	// row stays listed rather than disappearing: it is the record of a
+	// decision, and hiding it would make "was that machine ever revoked?"
+	// unanswerable.
+	Revoked bool
 	// Groups is every group that exists, each flagged with whether this
 	// device belongs to it. The read-only row shows only the members; the
 	// edit row needs the full set to render an unchecked box for the groups
@@ -117,7 +122,7 @@ func (a *webapp) deviceRows(r *http.Request) ([]deviceRow, error) {
 	now := a.now()
 	rows := make([]deviceRow, 0, len(list))
 	for _, d := range list {
-		row := deviceRow{ID: d.ID, Name: d.Name, Platform: string(d.Platform), Shell: string(d.Shell)}
+		row := deviceRow{ID: d.ID, Name: d.Name, Platform: string(d.Platform), Shell: string(d.Shell), Revoked: d.RevokedAt != nil}
 		row.LastSeenAt = newDeviceTimestamp(d.LastSeenAt)
 		row.LastSyncAt = newDeviceTimestamp(d.LastSyncAt)
 		row.Synced = row.LastSyncAt != nil
@@ -527,4 +532,40 @@ func (a *webapp) renderEnrollmentStatus(w http.ResponseWriter, r *http.Request, 
 	data.pageData = pageDataFor(r)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = a.tmpl.mintResult.ExecuteTemplate(w, name, data)
+}
+
+// handleDevicesRevoke cuts a device's access.
+//
+// It mirrors internal/api's handleDevicesRevoke exactly, including the order:
+// mark the row revoked, then revoke every device-kind token belonging to it.
+// The token revocation is what actually stops the machine — a revoked row
+// with a live token would still authenticate — and the row is what lets an
+// operator see afterwards that it happened.
+//
+// The device is not deleted. Deleting would also discard which groups it was
+// in and every alias pinned to it, and an operator revoking a stolen laptop
+// is answering "cut its access", not "erase that it existed".
+func (a *webapp) handleDevicesRevoke(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	lang := requestLanguage(r)
+	now := a.now()
+
+	if err := a.store.Devices().Revoke(r.Context(), id, now); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			a.respondDevicePanel(r, w, http.StatusNotFound, translate(lang, "error.device_missing"))
+			return
+		}
+		a.respondDevicePanel(r, w, http.StatusInternalServerError, translate(lang, "error.device_revoke"))
+		return
+	}
+
+	// Reported rather than swallowed: the row now says revoked while the
+	// credential may still work, which is the one outcome an operator must
+	// not read as success. RevokeSubject only touches unrevoked rows, so
+	// clicking revoke again is a safe retry.
+	if err := a.store.Tokens().RevokeSubject(r.Context(), store.TokenKindDevice, id, now); err != nil {
+		a.respondDevicePanel(r, w, http.StatusInternalServerError, translate(lang, "error.device_revoke_token"))
+		return
+	}
+	a.respondDevicePanel(r, w, http.StatusOK, "")
 }

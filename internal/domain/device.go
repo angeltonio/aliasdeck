@@ -19,6 +19,17 @@ type Device struct {
 	LastSeenAt    *time.Time `json:"lastSeenAt,omitempty"`
 	LastSyncAt    *time.Time `json:"lastSyncAt,omitempty"`
 	ClientVersion string     `json:"clientVersion,omitempty"`
+
+	// RevokedAt is when an operator cut this device's access, or nil while it
+	// is still trusted. It is carried here because revocation that cannot be
+	// seen is revocation an operator cannot confirm: the row is otherwise
+	// indistinguishable from a live device, so a second revoke looks like the
+	// first one silently failed.
+	//
+	// It is a record, not the enforcement. What actually stops a revoked
+	// device is that its device-kind tokens are revoked in the same
+	// operation; this field is what lets a reader know that happened.
+	RevokedAt *time.Time `json:"revokedAt,omitempty"`
 }
 
 // Profile groups aliases by purpose rather than by machine.

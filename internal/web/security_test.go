@@ -123,6 +123,15 @@ func TestAuthenticatedMutationsRequireSessionBoundCSRF(t *testing.T) {
 		t.Fatalf("device edit with another session's token status = %d, want 403", rec.Code)
 	}
 
+	// Revoking a device is the most consequential mutation in the UI: it cuts
+	// a machine's access. A CSRF hole here would let another origin do it.
+	if rec := doWebRequest(h, http.MethodPost, "/devices/some-id/revoke", nil, cookieA, ""); rec.Code != http.StatusForbidden {
+		t.Fatalf("device revoke without token status = %d, want 403", rec.Code)
+	}
+	if rec := doWebRequest(h, http.MethodPost, "/devices/some-id/revoke", nil, cookieA, csrfB); rec.Code != http.StatusForbidden {
+		t.Fatalf("device revoke with another session's token status = %d, want 403", rec.Code)
+	}
+
 	mint := doWebRequest(h, http.MethodPost, "/devices/add/token", url.Values{
 		csrfFormField: {csrfA}, "autoSync": {"true"},
 	}, cookieA, csrfA)

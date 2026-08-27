@@ -23,7 +23,7 @@
       {{else}}
       <td>{{.Name}}</td><td class="mono muted">{{.Platform}}</td><td class="mono muted">{{.Shell}}</td>
       <td>{{$any := false}}{{range .Groups}}{{if .Member}}{{$any = true}}<span class="badge">{{.Name}}</span> {{end}}{{end}}{{if not $any}}<span class="muted">—</span>{{end}}</td>
-      <td><span class="badge {{.StatusClass}}" aria-label="{{.Status}}: {{.StatusDetail}}">{{.Status}}</span></td>
+      <td>{{if .Revoked}}<span class="badge stale">{{tr $.Lang "devices.revoked"}}</span>{{else}}<span class="badge {{.StatusClass}}" aria-label="{{.Status}}: {{.StatusDetail}}">{{.Status}}</span>{{end}}</td>
       <td>{{if .LastSeenAt}}<time class="mono muted" datetime="{{.LastSeenAt.DateTime}}" data-local-time data-utc="{{.LastSeenAt.UTC}}" data-local-title="{{tr $.Lang "time.local_title"}}" title="{{tr $.Lang "time.utc_title"}}">{{.LastSeenAt.UTC}}</time>{{else}}<span class="mono muted">{{tr $.Lang "devices.never"}}</span>{{end}}</td>
       <td>{{if .Synced}}<span class="badge ok">{{tr $.Lang "devices.synced"}}</span>{{else}}<span class="badge stale">{{tr $.Lang "devices.never_synced"}}</span>{{end}}
         <span class="muted">{{if .LastSyncAt}}<time class="mono" datetime="{{.LastSyncAt.DateTime}}" data-local-time data-utc="{{.LastSyncAt.UTC}}" data-local-title="{{tr $.Lang "time.local_title"}}" title="{{tr $.Lang "time.utc_title"}}">{{.LastSyncAt.UTC}}</time>{{else}}<span class="mono">{{tr $.Lang "devices.never"}}</span>{{end}}</span>
@@ -31,6 +31,10 @@
       <td>
         <a class="btn" href="/devices/{{.ID}}/preview">{{tr $.Lang "devices.preview"}}</a>
         <button hx-get="/devices/{{.ID}}/edit" hx-target="#device-panel" hx-swap="outerHTML">{{tr $.Lang "devices.edit"}}</button>
+        {{/* A revoked device offers no second revoke: the action is already
+             done, and a button that appeared to do it again would suggest the
+             first one had not worked. */}}
+        {{if not .Revoked}}<button class="danger" hx-post="/devices/{{.ID}}/revoke" hx-target="#device-panel" hx-swap="outerHTML" hx-confirm="{{tr $.Lang "devices.revoke_confirm" .Name}}">{{tr $.Lang "devices.revoke"}}</button>{{end}}
       </td>
       {{end}}
     </tr>{{end}}</tbody>

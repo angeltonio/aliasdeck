@@ -737,3 +737,7 @@ components:
           readOnly: true
         clientVersion:
           type: string
+        revokedAt:
+          type: string
+          format: date-time
+          readOnly: true

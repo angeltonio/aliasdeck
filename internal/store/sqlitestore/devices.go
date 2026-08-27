@@ -166,5 +166,6 @@ func toDomainDevice(row Device, profileIDs []string) domain.Device {
 		ProfileIDs:    profileIDs,
 		LastSeenAt:    parseNullableTimePtr(row.LastSeenAt),
 		LastSyncAt:    parseNullableTimePtr(row.LastSyncAt),
+		RevokedAt:     parseNullableTimePtr(row.RevokedAt),
 	}
 }
