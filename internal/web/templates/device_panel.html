@@ -1,0 +1,36 @@
+{{define "device_panel"}}
+<div id="device-panel">
+  {{if .FormError}}<div class="error-banner">{{.FormError}}</div>{{end}}
+  {{if not .Devices}}<p class="empty-state">{{tr .Lang "devices.empty"}}</p>{{else}}
+  <table><thead><tr><th>{{tr .Lang "devices.name"}}</th><th>{{tr .Lang "devices.platform"}}</th><th>{{tr .Lang "devices.shell"}}</th><th>{{tr .Lang "devices.groups"}}</th><th>{{tr .Lang "devices.status"}}</th><th>{{tr .Lang "devices.last_seen"}}</th><th>{{tr .Lang "devices.last_sync"}}</th><th></th></tr></thead>
+    <tbody>{{range .Devices}}<tr id="device-row-{{.ID}}">
+      {{/* Platform, shell and the timestamps stay read-only in both states:
+           the server observes them from what a device reports on sync, so
+           they are not operator input. Only the name and the group
+           membership are editable. No <form> inside a tr — a browser hoists
+           it out of the table — so hx-include gathers the row instead. */}}
+      {{if eq .ID $.EditingID}}
+      <td><input type="text" name="name" value="{{.Name}}" required aria-label="{{tr $.Lang "devices.name"}}" /></td>
+      <td class="mono muted">{{.Platform}}</td><td class="mono muted">{{.Shell}}</td>
+      <td>{{if not .Groups}}<span class="muted">{{tr $.Lang "devices.no_groups_yet"}}</span>{{else}}{{range .Groups}}<label><input type="checkbox" name="groups" value="{{.ID}}" {{if .Member}}checked{{end}} /> {{.Name}}</label> {{end}}{{end}}</td>
+      <td><span class="badge {{.StatusClass}}">{{.Status}}</span></td>
+      <td class="mono muted">{{if .LastSeenAt}}{{.LastSeenAt.UTC}}{{else}}{{tr $.Lang "devices.never"}}{{end}}</td>
+      <td class="mono muted">{{if .LastSyncAt}}{{.LastSyncAt.UTC}}{{else}}{{tr $.Lang "devices.never"}}{{end}}</td>
+      <td>
+        <button hx-put="/devices/{{.ID}}" hx-include="closest tr" hx-target="#device-panel" hx-swap="outerHTML">{{tr $.Lang "devices.save"}}</button>
+        <button hx-get="/devices/panel" hx-target="#device-panel" hx-swap="outerHTML">{{tr $.Lang "devices.cancel"}}</button>
+      </td>
+      {{else}}
+      <td>{{.Name}}</td><td class="mono muted">{{.Platform}}</td><td class="mono muted">{{.Shell}}</td>
+      <td>{{$any := false}}{{range .Groups}}{{if .Member}}{{$any = true}}<span class="badge">{{.Name}}</span> {{end}}{{end}}{{if not $any}}<span class="muted">—</span>{{end}}</td>
+      <td><span class="badge {{.StatusClass}}" aria-label="{{.Status}}: {{.StatusDetail}}">{{.Status}}</span></td>
+      <td>{{if .LastSeenAt}}<time class="mono muted" datetime="{{.LastSeenAt.DateTime}}" data-local-time data-utc="{{.LastSeenAt.UTC}}" data-local-title="{{tr $.Lang "time.local_title"}}" title="{{tr $.Lang "time.utc_title"}}">{{.LastSeenAt.UTC}}</time>{{else}}<span class="mono muted">{{tr $.Lang "devices.never"}}</span>{{end}}</td>
+      <td>{{if .Synced}}<span class="badge ok">{{tr $.Lang "devices.synced"}}</span>{{else}}<span class="badge stale">{{tr $.Lang "devices.never_synced"}}</span>{{end}}
+        <span class="muted">{{if .LastSyncAt}}<time class="mono" datetime="{{.LastSyncAt.DateTime}}" data-local-time data-utc="{{.LastSyncAt.UTC}}" data-local-title="{{tr $.Lang "time.local_title"}}" title="{{tr $.Lang "time.utc_title"}}">{{.LastSyncAt.UTC}}</time>{{else}}<span class="mono">{{tr $.Lang "devices.never"}}</span>{{end}}</span>
+      </td>
+      <td><button hx-get="/devices/{{.ID}}/edit" hx-target="#device-panel" hx-swap="outerHTML">{{tr $.Lang "devices.edit"}}</button></td>
+      {{end}}
+    </tr>{{end}}</tbody>
+  </table>{{end}}
+</div>
+{{end}}

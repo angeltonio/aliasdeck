@@ -114,6 +114,15 @@ func TestAuthenticatedMutationsRequireSessionBoundCSRF(t *testing.T) {
 		t.Fatalf("HTMX delete with header token status = %d body=%q", rec.Code, rec.Body.String())
 	}
 
+	// Device membership editing is a mutation too, and it is the one that
+	// decides which machines receive which aliases — so it belongs here.
+	if rec := doWebRequest(h, http.MethodPut, "/devices/some-id", url.Values{"name": {"x"}}, cookieA, ""); rec.Code != http.StatusForbidden {
+		t.Fatalf("device edit without token status = %d, want 403", rec.Code)
+	}
+	if rec := doWebRequest(h, http.MethodPut, "/devices/some-id", url.Values{"name": {"x"}}, cookieA, csrfB); rec.Code != http.StatusForbidden {
+		t.Fatalf("device edit with another session's token status = %d, want 403", rec.Code)
+	}
+
 	mint := doWebRequest(h, http.MethodPost, "/devices/add/token", url.Values{
 		csrfFormField: {csrfA}, "autoSync": {"true"},
 	}, cookieA, csrfA)

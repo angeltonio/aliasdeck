@@ -128,7 +128,7 @@ func (a *webapp) requireSession(next http.HandlerFunc) http.HandlerFunc {
 }
 
 // pages is the complete UI route table. It is deliberately focused on the
-// current operator flows: no device rename/revoke/rotate yet.
+// current operator flows: no device revoke or token rotation yet.
 func (a *webapp) pages() []page {
 	return []page{
 		{Method: http.MethodGet, Pattern: "/{$}", Handler: a.handleRoot, Guard: guardPublic},
@@ -158,6 +158,9 @@ func (a *webapp) pages() []page {
 		{Method: http.MethodDelete, Pattern: "/profiles/{id}", Handler: a.handleProfilesDelete, Guard: guardSession},
 
 		{Method: http.MethodGet, Pattern: "/devices", Handler: a.handleDevicesPage, Guard: guardSession},
+		{Method: http.MethodGet, Pattern: "/devices/panel", Handler: a.handleDevicesPanel, Guard: guardSession},
+		{Method: http.MethodGet, Pattern: "/devices/{id}/edit", Handler: a.handleDevicesEdit, Guard: guardSession},
+		{Method: http.MethodPut, Pattern: "/devices/{id}", Handler: a.handleDevicesUpdate, Guard: guardSession},
 		{Method: http.MethodGet, Pattern: "/devices/add", Handler: a.handleDevicesAddPage, Guard: guardSession},
 		{Method: http.MethodPost, Pattern: "/devices/add/token", Handler: a.handleDevicesMintToken, Guard: guardSession},
 		{Method: http.MethodGet, Pattern: "/devices/add/status/{id}", Handler: a.handleDeviceEnrollmentStatus, Guard: guardSession},

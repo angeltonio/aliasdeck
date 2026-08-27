@@ -1,6 +1,7 @@
 package web
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 	"sync"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/angeltonio/aliasdeck/internal/auth"
 	"github.com/angeltonio/aliasdeck/internal/store"
+	"github.com/angeltonio/aliasdeck/internal/validate"
 	"github.com/angeltonio/aliasdeck/internal/watchconfig"
 	"github.com/google/uuid"
 )
@@ -33,6 +35,7 @@ const (
 // deviceRow is devices.html's per-row view of a domain.Device, with all time
 // arithmetic resolved through webapp.now before the template renders it.
 type deviceRow struct {
+	ID           string
 	Name         string
 	Platform     string
 	Shell        string
@@ -42,13 +45,28 @@ type deviceRow struct {
 	Status       string
 	StatusClass  string
 	StatusDetail string
+	// Groups is every group that exists, each flagged with whether this
+	// device belongs to it. The read-only row shows only the members; the
+	// edit row needs the full set to render an unchecked box for the groups
+	// the device could be moved into.
+	Groups []deviceGroup
+}
+
+// deviceGroup pairs one profile with this device's membership in it.
+type deviceGroup struct {
+	ID     string
+	Name   string
+	Member bool
 }
 
 type devicesPageData struct {
 	pageData
-	Title       string
-	Active      string
-	Devices     []deviceRow
+	Title   string
+	Active  string
+	Devices []deviceRow
+	// EditingID names the one device rendered as an inline edit row.
+	EditingID   string
+	FormError   string
 	Frequencies []enrollmentFrequencyPreset
 }
 
@@ -72,16 +90,34 @@ func newDeviceTimestamp(at *time.Time) *deviceTimestamp {
 }
 
 func (a *webapp) handleDevicesPage(w http.ResponseWriter, r *http.Request) {
-	list, err := a.store.Devices().List(r.Context())
+	rows, err := a.deviceRows(r)
 	if err != nil {
 		http.Error(w, translate(requestLanguage(r), "error.device_load"), http.StatusInternalServerError)
 		return
 	}
 
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	view := pageDataFor(r)
+	_ = a.tmpl.devices.ExecuteTemplate(w, "base", devicesPageData{pageData: view, Title: translate(view.Lang, "devices.title"), Active: "devices", Devices: rows})
+}
+
+// deviceRows resolves every device into its rendered row, including the full
+// group list each row needs to offer a membership checkbox. Groups are read
+// once for the whole page rather than per device.
+func (a *webapp) deviceRows(r *http.Request) ([]deviceRow, error) {
+	list, err := a.store.Devices().List(r.Context())
+	if err != nil {
+		return nil, err
+	}
+	groups, err := a.store.Profiles().List(r.Context())
+	if err != nil {
+		return nil, err
+	}
+
 	now := a.now()
 	rows := make([]deviceRow, 0, len(list))
 	for _, d := range list {
-		row := deviceRow{Name: d.Name, Platform: string(d.Platform), Shell: string(d.Shell)}
+		row := deviceRow{ID: d.ID, Name: d.Name, Platform: string(d.Platform), Shell: string(d.Shell)}
 		row.LastSeenAt = newDeviceTimestamp(d.LastSeenAt)
 		row.LastSyncAt = newDeviceTimestamp(d.LastSyncAt)
 		row.Synced = row.LastSyncAt != nil
@@ -89,12 +125,103 @@ func (a *webapp) handleDevicesPage(w http.ResponseWriter, r *http.Request) {
 		row.Status = status.label
 		row.StatusClass = status.class
 		row.StatusDetail = status.detail
+
+		member := make(map[string]bool, len(d.ProfileIDs))
+		for _, id := range d.ProfileIDs {
+			member[id] = true
+		}
+		row.Groups = make([]deviceGroup, 0, len(groups))
+		for _, g := range groups {
+			row.Groups = append(row.Groups, deviceGroup{ID: g.ID, Name: g.Name, Member: member[g.ID]})
+		}
 		rows = append(rows, row)
 	}
+	return rows, nil
+}
 
+// handleDevicesEdit and handleDevicesPanel are the open/cancel pair the alias
+// and group screens already use.
+func (a *webapp) handleDevicesEdit(w http.ResponseWriter, r *http.Request) {
+	a.respondDevicePanelEditing(r, w, http.StatusOK, r.PathValue("id"), "")
+}
+
+func (a *webapp) handleDevicesPanel(w http.ResponseWriter, r *http.Request) {
+	a.respondDevicePanel(r, w, http.StatusOK, "")
+}
+
+// handleDevicesUpdate renames a device and sets which groups it belongs to.
+//
+// Group membership is otherwise fixed at enrollment: tokenRepo.ConsumeEnrollment
+// takes the profiles from the enrollment token and nothing afterwards could
+// change them from the browser, so a machine enrolled into the wrong group
+// stayed there. store.DeviceRepo.Update writes only the name and the
+// membership join rows — platform, shell and the sync timestamps are
+// observed facts the server records, never operator input — so those are
+// read-only in the row and untouched here.
+func (a *webapp) handleDevicesUpdate(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	lang := requestLanguage(r)
+
+	if err := r.ParseForm(); err != nil {
+		a.respondDevicePanelEditing(r, w, http.StatusBadRequest, id, translate(lang, "error.device_form"))
+		return
+	}
+
+	existing, err := a.store.Devices().Get(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			a.respondDevicePanel(r, w, http.StatusNotFound, translate(lang, "error.device_missing"))
+			return
+		}
+		http.Error(w, translate(lang, "error.device_load"), http.StatusInternalServerError)
+		return
+	}
+
+	updated := existing
+	updated.Name = strings.TrimSpace(r.FormValue("name"))
+	if updated.Name == "" {
+		a.respondDevicePanelEditing(r, w, http.StatusBadRequest, id, translate(lang, "error.device_name_required"))
+		return
+	}
+	if err := validate.Description(updated.Name); err != nil {
+		a.respondDevicePanelEditing(r, w, http.StatusBadRequest, id, localizeValidationError(lang, err))
+		return
+	}
+
+	// An unchecked box sends nothing, so the absent form key is what
+	// "belongs to no group" looks like — exactly the state an operator
+	// removing the last membership is asking for.
+	updated.ProfileIDs = r.Form["groups"]
+
+	if _, err := a.store.Devices().Update(r.Context(), updated); err != nil {
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+			a.respondDevicePanel(r, w, http.StatusNotFound, translate(lang, "error.device_missing"))
+		case errors.Is(err, store.ErrInvalidReference):
+			a.respondDevicePanelEditing(r, w, http.StatusBadRequest, id, translate(lang, "error.device_group_missing"))
+		default:
+			a.respondDevicePanelEditing(r, w, http.StatusInternalServerError, id, formatted(lang, "error.device_update", err.Error()))
+		}
+		return
+	}
+	a.respondDevicePanel(r, w, http.StatusOK, "")
+}
+
+func (a *webapp) respondDevicePanel(r *http.Request, w http.ResponseWriter, status int, formError string) {
+	a.respondDevicePanelEditing(r, w, status, "", formError)
+}
+
+func (a *webapp) respondDevicePanelEditing(r *http.Request, w http.ResponseWriter, status int, editingID, formError string) {
+	rows, err := a.deviceRows(r)
+	if err != nil {
+		http.Error(w, translate(requestLanguage(r), "error.device_load"), http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	view := pageDataFor(r)
-	_ = a.tmpl.devices.ExecuteTemplate(w, "base", devicesPageData{pageData: view, Title: translate(view.Lang, "devices.title"), Active: "devices", Devices: rows})
+	w.WriteHeader(status)
+	_ = a.tmpl.devicePanel.ExecuteTemplate(w, "device_panel", devicesPageData{
+		pageData: pageDataFor(r), Devices: rows, EditingID: editingID, FormError: formError,
+	})
 }
 
 type deviceFreshness struct {

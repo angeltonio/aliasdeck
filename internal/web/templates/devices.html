@@ -5,17 +5,5 @@
   </div>
   <a class="btn" href="/devices/add">{{tr .Lang "devices.add"}}</a>
 </div>
-<div class="card">
-  {{if not .Devices}}<p class="empty-state">{{tr .Lang "devices.empty"}}</p>{{else}}
-  <table><thead><tr><th>{{tr .Lang "devices.name"}}</th><th>{{tr .Lang "devices.platform"}}</th><th>{{tr .Lang "devices.shell"}}</th><th>{{tr .Lang "devices.status"}}</th><th>{{tr .Lang "devices.last_seen"}}</th><th>{{tr .Lang "devices.last_sync"}}</th></tr></thead>
-    <tbody>{{range .Devices}}<tr>
-      <td>{{.Name}}</td><td class="mono muted">{{.Platform}}</td><td class="mono muted">{{.Shell}}</td>
-      <td><span class="badge {{.StatusClass}}" aria-label="{{.Status}}: {{.StatusDetail}}">{{.Status}}</span></td>
-      <td>{{if .LastSeenAt}}<time class="mono muted" datetime="{{.LastSeenAt.DateTime}}" data-local-time data-utc="{{.LastSeenAt.UTC}}" data-local-title="{{tr $.Lang "time.local_title"}}" title="{{tr $.Lang "time.utc_title"}}">{{.LastSeenAt.UTC}}</time>{{else}}<span class="mono muted">{{tr $.Lang "devices.never"}}</span>{{end}}</td>
-      <td>{{if .Synced}}<span class="badge ok">{{tr $.Lang "devices.synced"}}</span>{{else}}<span class="badge stale">{{tr $.Lang "devices.never_synced"}}</span>{{end}}
-        <span class="muted">{{if .LastSyncAt}}<time class="mono" datetime="{{.LastSyncAt.DateTime}}" data-local-time data-utc="{{.LastSyncAt.UTC}}" data-local-title="{{tr $.Lang "time.local_title"}}" title="{{tr $.Lang "time.utc_title"}}">{{.LastSyncAt.UTC}}</time>{{else}}<span class="mono">{{tr $.Lang "devices.never"}}</span>{{end}}</span>
-      </td>
-    </tr>{{end}}</tbody>
-  </table>{{end}}
-</div>
+<div class="card">{{template "device_panel" .}}</div>
 {{end}}
