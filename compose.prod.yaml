@@ -9,7 +9,7 @@ name: aliasdeck-prod
 
 services:
   aliasdeck-server:
-    image: ghcr.io/angeltonio/aliasdeck-server:v0.5.8@sha256:7eb860dbd9f032585153c7f116cdbe3f902dccfce6bdfebc2e35ec2bc3114237
+    image: ghcr.io/angeltonio/aliasdeck-server:v0.5.9@sha256:59b4c0f78db96621459d71f1a0a8cb59871d82598dc733f603ce7bd6713aca35
     init: true
     ports:
       - "127.0.0.1:${ALIASDECK_PORT:-8088}:8080"
