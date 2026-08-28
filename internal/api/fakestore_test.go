@@ -29,6 +29,12 @@ type fakeStore struct {
 	operators map[string]store.Operator
 	tokens    map[string]store.Token // keyed by Lookup, matching ByLookup's real access pattern
 
+	// auditEvents records what the handlers under test claim they did.
+	// This one is a real in-memory implementation rather than a no-op: the
+	// property most worth testing here is that a mutation leaves a record,
+	// and a fake that discards them could never fail that assertion.
+	auditEvents []store.AuditEvent
+
 	// byUsernameHook, when non-nil, is invoked by fakeOperatorRepo.ByUsername
 	// with the looked-up username immediately after a successful lookup,
 	// before returning. It exists only for
@@ -73,10 +79,7 @@ func (s *fakeStore) Profiles() store.ProfileRepo   { return fakeProfileRepo{s} }
 func (s *fakeStore) Tokens() store.TokenRepo       { return fakeTokenRepo{s} }
 func (s *fakeStore) Operators() store.OperatorRepo { return fakeOperatorRepo{s} }
 
-// This fake records nothing: the code under test here does not audit.
-// A nil repo would panic the moment it did, which is the failure this
-// should have rather than a silently dropped record.
-func (s *fakeStore) Audit() store.AuditRepo { return noopAuditRepo{} }
+func (s *fakeStore) Audit() store.AuditRepo { return fakeAuditRepo{s} }
 func (s *fakeStore) Close() error           { return nil }
 
 // --- aliases ---
@@ -628,4 +631,37 @@ func mintDeviceTokenFor(s *fakeStore, deviceID string) string {
 		panic(fmt.Sprintf("test setup: persisting device token: %v", err))
 	}
 	return minted.Wire
+}
+
+// --- audit ---
+
+type fakeAuditRepo struct{ s *fakeStore }
+
+func (r fakeAuditRepo) Append(_ context.Context, e store.AuditEvent) error {
+	s := r.s
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if e.ID == "" {
+		e.ID = uuid.NewString()
+	}
+	s.auditEvents = append(s.auditEvents, e)
+	return nil
+}
+
+func (r fakeAuditRepo) Recent(_ context.Context, limit int) ([]store.AuditEvent, error) {
+	s := r.s
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]store.AuditEvent, 0, len(s.auditEvents))
+	for i := len(s.auditEvents) - 1; i >= 0 && len(out) < limit; i-- {
+		out = append(out, s.auditEvents[i])
+	}
+	return out, nil
+}
+
+func (r fakeAuditRepo) Count(_ context.Context) (int, error) {
+	s := r.s
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.auditEvents), nil
 }

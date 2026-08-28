@@ -182,6 +182,9 @@ func (a *api) handleEnrollmentTokensCreate(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// The subject is the token, not a device: none exists yet. What is worth
+	// tracing is that an operator handed out the capability to create one.
+	a.audit(r, store.AuditDeviceEnroll, "enrollment", minted.Lookup, "")
 	writeJSON(w, http.StatusCreated, enrollmentTokenResponse{Token: minted.Wire, ExpiresAt: expiresAt})
 }
 

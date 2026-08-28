@@ -112,6 +112,7 @@ func (a *api) handleAliasesCreate(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
+	a.audit(r, store.AuditAliasCreated, "alias", out.ID, out.Name)
 	writeJSON(w, http.StatusCreated, aliasResponse{Alias: out, NameWarnings: warnings})
 }
 
@@ -140,13 +141,24 @@ func (a *api) handleAliasesUpdate(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
+	a.audit(r, store.AuditAliasUpdated, "alias", out.ID, out.Name)
 	writeJSON(w, http.StatusOK, aliasResponse{Alias: out, NameWarnings: warnings})
 }
 
 func (a *api) handleAliasesDelete(w http.ResponseWriter, r *http.Request) {
-	if err := a.store.Aliases().Delete(r.Context(), r.PathValue("id")); err != nil {
+	id := r.PathValue("id")
+
+	// Read the name before the row goes: it is what makes the record
+	// legible, and it is unrecoverable afterwards.
+	label := ""
+	if existing, err := a.store.Aliases().Get(r.Context(), id); err == nil {
+		label = existing.Name
+	}
+
+	if err := a.store.Aliases().Delete(r.Context(), id); err != nil {
 		writeStoreError(w, err)
 		return
 	}
+	a.audit(r, store.AuditAliasDeleted, "alias", id, label)
 	w.WriteHeader(http.StatusNoContent)
 }

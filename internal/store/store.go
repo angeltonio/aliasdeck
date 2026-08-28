@@ -236,6 +236,7 @@ const (
 	AuditDeviceUpdated AuditAction = "device.updated"
 	AuditDeviceRevoked AuditAction = "device.revoked"
 	AuditDeviceRotated AuditAction = "device.rotated"
+	AuditDeviceDeleted AuditAction = "device.deleted"
 	AuditDeviceEnroll  AuditAction = "device.enrollment_minted"
 )
 

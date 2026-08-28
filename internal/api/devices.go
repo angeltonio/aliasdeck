@@ -66,6 +66,7 @@ func (a *api) handleDevicesUpdate(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
+	a.audit(r, store.AuditDeviceUpdated, "device", out.ID, out.Name)
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -85,6 +86,13 @@ func (a *api) handleDevicesUpdate(w http.ResponseWriter, r *http.Request) {
 func (a *api) handleDevicesDelete(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
+	// Read the name first: deleting is the one action after which nothing
+	// can be recovered, so it is the one whose record most needs a label.
+	label := ""
+	if existing, err := a.store.Devices().Get(r.Context(), id); err == nil {
+		label = existing.Name
+	}
+
 	if err := a.store.Tokens().RevokeSubject(r.Context(), store.TokenKindDevice, id, a.now()); err != nil {
 		writeStoreError(w, err)
 		return
@@ -93,6 +101,7 @@ func (a *api) handleDevicesDelete(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
+	a.audit(r, store.AuditDeviceDeleted, "device", id, label)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -107,6 +116,11 @@ func (a *api) handleDevicesRevoke(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	now := a.now()
 
+	label := ""
+	if existing, err := a.store.Devices().Get(r.Context(), id); err == nil {
+		label = existing.Name
+	}
+
 	if err := a.store.Devices().Revoke(r.Context(), id, now); err != nil {
 		writeStoreError(w, err)
 		return
@@ -115,6 +129,7 @@ func (a *api) handleDevicesRevoke(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
+	a.audit(r, store.AuditDeviceRevoked, "device", id, label)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -126,7 +141,8 @@ func (a *api) handleDevicesRevoke(w http.ResponseWriter, r *http.Request) {
 func (a *api) handleDevicesRotateToken(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
-	if _, err := a.store.Devices().Get(r.Context(), id); err != nil {
+	rotating, err := a.store.Devices().Get(r.Context(), id)
+	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
@@ -168,5 +184,6 @@ func (a *api) handleDevicesRotateToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	a.audit(r, store.AuditDeviceRotated, "device", id, rotating.Name)
 	writeJSON(w, http.StatusOK, deviceTokenResponse{DeviceID: id, DeviceToken: minted.Wire})
 }

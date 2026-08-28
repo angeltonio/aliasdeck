@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/angeltonio/aliasdeck/internal/domain"
+	"github.com/angeltonio/aliasdeck/internal/store"
 )
 
 // profilesPattern and profilePattern mirror aliasesPattern/aliasPattern:
@@ -37,6 +38,7 @@ func (a *api) handleProfilesCreate(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
+	a.audit(r, store.AuditGroupCreated, "group", out.ID, out.Name)
 	writeJSON(w, http.StatusCreated, out)
 }
 
@@ -60,13 +62,24 @@ func (a *api) handleProfilesUpdate(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
+	a.audit(r, store.AuditGroupUpdated, "group", out.ID, out.Name)
 	writeJSON(w, http.StatusOK, out)
 }
 
 func (a *api) handleProfilesDelete(w http.ResponseWriter, r *http.Request) {
-	if err := a.store.Profiles().Delete(r.Context(), r.PathValue("id")); err != nil {
+	id := r.PathValue("id")
+
+	// Deleting a group cascades, so this record is often the only remaining
+	// trace of what was detached from what.
+	label := ""
+	if existing, err := a.store.Profiles().Get(r.Context(), id); err == nil {
+		label = existing.Name
+	}
+
+	if err := a.store.Profiles().Delete(r.Context(), id); err != nil {
 		writeStoreError(w, err)
 		return
 	}
+	a.audit(r, store.AuditGroupDeleted, "group", id, label)
 	w.WriteHeader(http.StatusNoContent)
 }
