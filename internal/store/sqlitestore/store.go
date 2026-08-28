@@ -103,3 +103,4 @@ func (s *SQLiteStore) Devices() store.DeviceRepo     { return deviceRepo{db: s.d
 func (s *SQLiteStore) Profiles() store.ProfileRepo   { return profileRepo{q: s.q} }
 func (s *SQLiteStore) Tokens() store.TokenRepo       { return tokenRepo{db: s.db, q: s.q} }
 func (s *SQLiteStore) Operators() store.OperatorRepo { return operatorRepo{q: s.q} }
+func (s *SQLiteStore) Audit() store.AuditRepo        { return auditRepo{q: s.q} }

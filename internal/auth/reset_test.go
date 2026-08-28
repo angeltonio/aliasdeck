@@ -69,6 +69,7 @@ func (f *fakeResetStore) Devices() store.DeviceRepo     { return nil }
 func (f *fakeResetStore) Profiles() store.ProfileRepo   { return nil }
 func (f *fakeResetStore) Tokens() store.TokenRepo       { return f.tokens }
 func (f *fakeResetStore) Operators() store.OperatorRepo { return f.operators }
+func (f *fakeResetStore) Audit() store.AuditRepo        { return noopAuditRepo{} }
 func (f *fakeResetStore) Close() error                  { return nil }
 
 // newResetStore returns a store holding one operator whose password is

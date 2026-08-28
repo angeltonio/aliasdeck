@@ -81,7 +81,12 @@ func (f *fakeBootstrapStore) Devices() store.DeviceRepo     { return nil }
 func (f *fakeBootstrapStore) Profiles() store.ProfileRepo   { return nil }
 func (f *fakeBootstrapStore) Tokens() store.TokenRepo       { return nil }
 func (f *fakeBootstrapStore) Operators() store.OperatorRepo { return f.operators }
-func (f *fakeBootstrapStore) Close() error                  { return nil }
+
+// This fake records nothing: the code under test here does not audit.
+// A nil repo would panic the moment it did, which is the failure this
+// should have rather than a silently dropped record.
+func (f *fakeBootstrapStore) Audit() store.AuditRepo { return noopAuditRepo{} }
+func (f *fakeBootstrapStore) Close() error           { return nil }
 
 func noEnv(string) string { return "" }
 

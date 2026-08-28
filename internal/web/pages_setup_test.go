@@ -515,6 +515,11 @@ func (s countErrorStore) Operators() store.OperatorRepo {
 	return countErrorOperatorRepo{OperatorRepo: s.Store.Operators(), err: s.err}
 }
 
+// This fake records nothing: the code under test here does not audit.
+// A nil repo would panic the moment it did, which is the failure this
+// should have rather than a silently dropped record.
+func (s countErrorStore) Audit() store.AuditRepo { return noopAuditRepo{} }
+
 type countErrorOperatorRepo struct {
 	store.OperatorRepo
 	err error

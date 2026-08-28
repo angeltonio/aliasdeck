@@ -134,3 +134,14 @@ UPDATE tokens SET revoked_at = ? WHERE id = ?;
 
 -- name: RevokeTokensBySubject :exec
 UPDATE tokens SET revoked_at = ? WHERE kind = ? AND subject_id = ? AND revoked_at IS NULL;
+
+-- name: AppendAuditEvent :exec
+INSERT INTO audit_events (id, at, actor_id, actor_name, action, subject_kind, subject_id, subject_label)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+
+-- name: ListRecentAuditEvents :many
+SELECT id, at, actor_id, actor_name, action, subject_kind, subject_id, subject_label
+FROM audit_events ORDER BY at DESC, id DESC LIMIT ?;
+
+-- name: CountAuditEvents :one
+SELECT COUNT(*) FROM audit_events;

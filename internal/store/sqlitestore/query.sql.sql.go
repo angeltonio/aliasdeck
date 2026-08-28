@@ -9,6 +9,36 @@ import (
 	"context"
 )
 
+const appendAuditEvent = `-- name: AppendAuditEvent :exec
+INSERT INTO audit_events (id, at, actor_id, actor_name, action, subject_kind, subject_id, subject_label)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+`
+
+type AppendAuditEventParams struct {
+	ID           string
+	At           string
+	ActorID      string
+	ActorName    string
+	Action       string
+	SubjectKind  string
+	SubjectID    string
+	SubjectLabel string
+}
+
+func (q *Queries) AppendAuditEvent(ctx context.Context, arg AppendAuditEventParams) error {
+	_, err := q.db.ExecContext(ctx, appendAuditEvent,
+		arg.ID,
+		arg.At,
+		arg.ActorID,
+		arg.ActorName,
+		arg.Action,
+		arg.SubjectKind,
+		arg.SubjectID,
+		arg.SubjectLabel,
+	)
+	return err
+}
+
 const clearAliasDevices = `-- name: ClearAliasDevices :exec
 DELETE FROM alias_devices WHERE alias_id = ?
 `
@@ -61,6 +91,17 @@ func (q *Queries) ConsumeEnrollmentToken(ctx context.Context, arg ConsumeEnrollm
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const countAuditEvents = `-- name: CountAuditEvents :one
+SELECT COUNT(*) FROM audit_events
+`
+
+func (q *Queries) CountAuditEvents(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countAuditEvents)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
 }
 
 const countOperators = `-- name: CountOperators :one
@@ -648,6 +689,43 @@ func (q *Queries) ListProfiles(ctx context.Context) ([]Profile, error) {
 			&i.Description,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRecentAuditEvents = `-- name: ListRecentAuditEvents :many
+SELECT id, at, actor_id, actor_name, action, subject_kind, subject_id, subject_label
+FROM audit_events ORDER BY at DESC, id DESC LIMIT ?
+`
+
+func (q *Queries) ListRecentAuditEvents(ctx context.Context, limit int64) ([]AuditEvent, error) {
+	rows, err := q.db.QueryContext(ctx, listRecentAuditEvents, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AuditEvent
+	for rows.Next() {
+		var i AuditEvent
+		if err := rows.Scan(
+			&i.ID,
+			&i.At,
+			&i.ActorID,
+			&i.ActorName,
+			&i.Action,
+			&i.SubjectKind,
+			&i.SubjectID,
+			&i.SubjectLabel,
 		); err != nil {
 			return nil, err
 		}

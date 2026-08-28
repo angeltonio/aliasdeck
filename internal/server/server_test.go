@@ -600,6 +600,11 @@ func (b *blockingBootstrapStore) Operators() store.OperatorRepo {
 	return blockingOperatorRepo{entered: b.entered, once: &b.once}
 }
 
+// This fake records nothing: the code under test here does not audit.
+// A nil repo would panic the moment it did, which is the failure this
+// should have rather than a silently dropped record.
+func (b *blockingBootstrapStore) Audit() store.AuditRepo { return noopAuditRepo{} }
+
 type blockingOperatorRepo struct {
 	entered chan struct{}
 	once    *sync.Once

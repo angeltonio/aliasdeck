@@ -62,6 +62,11 @@ func (f *fakeStore) Operators() store.OperatorRepo {
 	return fakeOperatorRepo{count: count, createErr: f.createErr, onCreate: f.markCreateCalled}
 }
 
+// This fake records nothing: the code under test here does not audit.
+// A nil repo would panic the moment it did, which is the failure this
+// should have rather than a silently dropped record.
+func (f *fakeStore) Audit() store.AuditRepo { return noopAuditRepo{} }
+
 func (f *fakeStore) markCreateCalled() {
 	f.mu.Lock()
 	defer f.mu.Unlock()

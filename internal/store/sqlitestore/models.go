@@ -27,6 +27,17 @@ type AliasProfile struct {
 	ProfileID string
 }
 
+type AuditEvent struct {
+	ID           string
+	At           string
+	ActorID      string
+	ActorName    string
+	Action       string
+	SubjectKind  string
+	SubjectID    string
+	SubjectLabel string
+}
+
 type Device struct {
 	ID            string
 	Name          string

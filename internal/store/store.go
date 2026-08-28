@@ -21,6 +21,7 @@ type Store interface {
 	Profiles() ProfileRepo
 	Tokens() TokenRepo
 	Operators() OperatorRepo
+	Audit() AuditRepo
 	Close() error
 }
 
@@ -218,4 +219,64 @@ type TokenRepo interface {
 	// subjectID revoked at the given time — "log out everywhere" for a
 	// session, or invalidating every device token for a device.
 	RevokeSubject(ctx context.Context, kind TokenKind, subjectID string, at time.Time) error
+}
+
+// AuditAction names one recorded operator action. The set is closed so a
+// reader can switch on it, and so a typo cannot invent a category nothing
+// will ever query for.
+type AuditAction string
+
+const (
+	AuditAliasCreated  AuditAction = "alias.created"
+	AuditAliasUpdated  AuditAction = "alias.updated"
+	AuditAliasDeleted  AuditAction = "alias.deleted"
+	AuditGroupCreated  AuditAction = "group.created"
+	AuditGroupUpdated  AuditAction = "group.updated"
+	AuditGroupDeleted  AuditAction = "group.deleted"
+	AuditDeviceUpdated AuditAction = "device.updated"
+	AuditDeviceRevoked AuditAction = "device.revoked"
+	AuditDeviceRotated AuditAction = "device.rotated"
+	AuditDeviceEnroll  AuditAction = "device.enrollment_minted"
+)
+
+// AuditEvent is one thing an operator did.
+//
+// Actor and subject carry both an id and the name each had at the time.
+// Resolving names at read time would show today's name for yesterday's
+// action, and nothing at all once the subject is gone — which is precisely
+// the record an investigation needs most.
+type AuditEvent struct {
+	ID        string
+	At        time.Time
+	ActorID   string
+	ActorName string
+	Action    AuditAction
+
+	// SubjectKind is "alias", "group", or "device". SubjectID may be empty
+	// for an action with no single subject.
+	SubjectKind  string
+	SubjectID    string
+	SubjectLabel string
+}
+
+// AuditRepo persists AuditEvent.
+//
+// It is append-only by construction: there is no update and no delete. An
+// audit record an operator can edit is not evidence of anything, and the
+// growth this implies is not a real cost at this product's scale — an event
+// is roughly 200 bytes, so a control plane seeing a hundred operator actions
+// a day accumulates about seven megabytes a year.
+//
+// Device syncs and heartbeats are deliberately not recorded. They are not
+// operator actions, they happen every few seconds per device, and burying
+// the handful of rows that matter under that traffic would defeat the point.
+type AuditRepo interface {
+	// Append records e, assigning an ID if e.ID is empty.
+	Append(ctx context.Context, e AuditEvent) error
+
+	// Recent returns at most limit events, newest first.
+	Recent(ctx context.Context, limit int) ([]AuditEvent, error)
+
+	// Count reports how many events exist.
+	Count(ctx context.Context) (int, error)
 }

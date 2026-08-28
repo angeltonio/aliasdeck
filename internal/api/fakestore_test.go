@@ -72,7 +72,12 @@ func (s *fakeStore) Devices() store.DeviceRepo     { return fakeDeviceRepo{s} }
 func (s *fakeStore) Profiles() store.ProfileRepo   { return fakeProfileRepo{s} }
 func (s *fakeStore) Tokens() store.TokenRepo       { return fakeTokenRepo{s} }
 func (s *fakeStore) Operators() store.OperatorRepo { return fakeOperatorRepo{s} }
-func (s *fakeStore) Close() error                  { return nil }
+
+// This fake records nothing: the code under test here does not audit.
+// A nil repo would panic the moment it did, which is the failure this
+// should have rather than a silently dropped record.
+func (s *fakeStore) Audit() store.AuditRepo { return noopAuditRepo{} }
+func (s *fakeStore) Close() error           { return nil }
 
 // --- aliases ---
 

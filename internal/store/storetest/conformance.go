@@ -44,6 +44,7 @@ func Run(t *testing.T, newStore func(t *testing.T) store.Store) {
 	t.Run("DeviceProfileMembershipCascadesOnProfileDelete", func(t *testing.T) { testDeviceProfileMembershipCascadesOnProfileDelete(t, newStore(t)) })
 	t.Run("DeviceProfileMembershipCascadesOnDeviceDelete", func(t *testing.T) { testDeviceProfileMembershipCascadesOnDeviceDelete(t, newStore(t)) })
 	t.Run("OperatorCRUD", func(t *testing.T) { testOperatorCRUD(t, newStore(t)) })
+	t.Run("AuditAppendAndRecent", func(t *testing.T) { testAuditAppendAndRecent(t, newStore(t)) })
 	t.Run("TokenLifecycle", func(t *testing.T) { testTokenLifecycle(t, newStore(t)) })
 	t.Run("TokenLookupConflict", func(t *testing.T) { testTokenLookupConflict(t, newStore(t)) })
 	t.Run("ConsumeEnrollmentRejectsExpiredToken", func(t *testing.T) { testConsumeEnrollmentRejectsExpiredToken(t, newStore(t)) })
@@ -882,5 +883,75 @@ func testCancelledContextWritesNothing(t *testing.T, st store.Store) {
 	}
 	if len(list) != 0 {
 		t.Fatalf("List() = %d aliases after a Create() with a cancelled context, want 0 — a cancelled write must write nothing", len(list))
+	}
+}
+
+// testAuditAppendAndRecent covers the only two things an audit record has to
+// do: survive being written, and come back newest-first. It also pins that
+// the actor and subject names are stored as given rather than resolved at
+// read time — the point of denormalizing them is that they still answer once
+// the operator or the device is gone.
+func testAuditAppendAndRecent(t *testing.T, st store.Store) {
+	t.Helper()
+	ctx := context.Background()
+	repo := st.Audit()
+
+	if n, err := repo.Count(ctx); err != nil || n != 0 {
+		t.Fatalf("Count() on an empty store = %d, %v, want 0, nil", n, err)
+	}
+
+	base := time.Date(2030, time.January, 1, 12, 0, 0, 0, time.UTC)
+	for i, e := range []store.AuditEvent{
+		{At: base, ActorID: "op-1", ActorName: "admin", Action: store.AuditAliasCreated, SubjectKind: "alias", SubjectID: "alias-1", SubjectLabel: "gs"},
+		{At: base.Add(time.Minute), ActorID: "op-1", ActorName: "admin", Action: store.AuditGroupCreated, SubjectKind: "group", SubjectID: "group-1", SubjectLabel: "laptops"},
+		{At: base.Add(2 * time.Minute), ActorID: "op-1", ActorName: "admin", Action: store.AuditDeviceRevoked, SubjectKind: "device", SubjectID: "device-1", SubjectLabel: "work-mac"},
+	} {
+		if err := repo.Append(ctx, e); err != nil {
+			t.Fatalf("Append(%d): %v", i, err)
+		}
+	}
+
+	if n, err := repo.Count(ctx); err != nil || n != 3 {
+		t.Fatalf("Count() = %d, %v, want 3, nil", n, err)
+	}
+
+	recent, err := repo.Recent(ctx, 10)
+	if err != nil {
+		t.Fatalf("Recent(): %v", err)
+	}
+	if len(recent) != 3 {
+		t.Fatalf("Recent(10) returned %d events, want 3", len(recent))
+	}
+	// Newest first: an audit reader asks "what just happened", not "what
+	// happened first".
+	if recent[0].Action != store.AuditDeviceRevoked {
+		t.Fatalf("first event = %q, want the newest (%q)", recent[0].Action, store.AuditDeviceRevoked)
+	}
+	if recent[2].Action != store.AuditAliasCreated {
+		t.Fatalf("last event = %q, want the oldest (%q)", recent[2].Action, store.AuditAliasCreated)
+	}
+
+	got := recent[0]
+	if got.ID == "" {
+		t.Error("Append() left the ID empty; it must assign one")
+	}
+	if !got.At.Equal(base.Add(2 * time.Minute)) {
+		t.Errorf("At = %v, want the supplied instant %v", got.At, base.Add(2*time.Minute))
+	}
+	if got.ActorName != "admin" || got.SubjectLabel != "work-mac" {
+		t.Errorf("event = %+v, want the actor and subject names stored as given", got)
+	}
+
+	// A limit is a limit, and it takes from the newest end.
+	limited, err := repo.Recent(ctx, 2)
+	if err != nil {
+		t.Fatalf("Recent(2): %v", err)
+	}
+	if len(limited) != 2 || limited[0].Action != store.AuditDeviceRevoked {
+		t.Fatalf("Recent(2) = %+v, want the two newest", limited)
+	}
+
+	if _, err := repo.Recent(ctx, 0); err == nil {
+		t.Error("Recent(0) returned no error; a limit of zero is a caller mistake, not an empty page")
 	}
 }
