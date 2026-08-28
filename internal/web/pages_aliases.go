@@ -206,7 +206,8 @@ func (a *webapp) handleAliasesCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := store.CreateAliasWithinLimit(r.Context(), a.store.Aliases(), al, validate.MaxAliases); err != nil {
+	created, err := store.CreateAliasWithinLimit(r.Context(), a.store.Aliases(), al, validate.MaxAliases)
+	if err != nil {
 		if errors.Is(err, store.ErrCapacity) {
 			a.respondAliasPanel(r, w, http.StatusBadRequest, translate(requestLanguage(r), "error.alias_capacity"))
 			return
@@ -219,6 +220,7 @@ func (a *webapp) handleAliasesCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	a.audit(r, store.AuditAliasCreated, "alias", created.ID, created.Name)
 	a.respondAliasPanel(r, w, http.StatusOK, "")
 }
 
@@ -294,7 +296,8 @@ func (a *webapp) handleAliasesUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := a.store.Aliases().Update(r.Context(), updated); err != nil {
+	saved, err := a.store.Aliases().Update(r.Context(), updated)
+	if err != nil {
 		switch {
 		case errors.Is(err, store.ErrConflict):
 			a.respondAliasPanelEditing(r, w, http.StatusConflict, id, translate(lang, "error.alias_conflict"))
@@ -306,6 +309,7 @@ func (a *webapp) handleAliasesUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	a.audit(r, store.AuditAliasUpdated, "alias", saved.ID, saved.Name)
 	a.respondAliasPanel(r, w, http.StatusOK, "")
 }
 
@@ -315,10 +319,20 @@ func (a *webapp) handleAliasesUpdate(w http.ResponseWriter, r *http.Request) {
 // disappear without a page reload.
 func (a *webapp) handleAliasesDelete(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+
+	// Read before deleting: the name is what makes the record legible
+	// afterwards, and it is unrecoverable once the row is gone. A failed
+	// read is not fatal — the id alone still answers "what was deleted".
+	label := ""
+	if existing, err := a.store.Aliases().Get(r.Context(), id); err == nil {
+		label = existing.Name
+	}
+
 	if err := a.store.Aliases().Delete(r.Context(), id); err != nil {
 		http.Error(w, translate(requestLanguage(r), "error.alias_delete"), http.StatusInternalServerError)
 		return
 	}
+	a.audit(r, store.AuditAliasDeleted, "alias", id, label)
 	w.WriteHeader(http.StatusOK)
 }
 

@@ -52,7 +52,8 @@ func (a *webapp) handleProfilesCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := a.store.Profiles().Create(r.Context(), p); err != nil {
+	created, err := a.store.Profiles().Create(r.Context(), p)
+	if err != nil {
 		if errors.Is(err, store.ErrConflict) {
 			a.respondProfilePanel(r, w, http.StatusConflict, translate(lang, "error.profile_conflict"))
 			return
@@ -60,6 +61,7 @@ func (a *webapp) handleProfilesCreate(w http.ResponseWriter, r *http.Request) {
 		a.respondProfilePanel(r, w, http.StatusInternalServerError, formatted(lang, "error.profile_create", err.Error()))
 		return
 	}
+	a.audit(r, store.AuditGroupCreated, "group", created.ID, created.Name)
 	a.respondProfilePanel(r, w, http.StatusOK, "")
 }
 
@@ -107,7 +109,8 @@ func (a *webapp) handleProfilesUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := a.store.Profiles().Update(r.Context(), updated); err != nil {
+	saved, err := a.store.Profiles().Update(r.Context(), updated)
+	if err != nil {
 		switch {
 		case errors.Is(err, store.ErrConflict):
 			a.respondProfilePanelEditing(r, w, http.StatusConflict, id, translate(lang, "error.profile_conflict"))
@@ -118,6 +121,7 @@ func (a *webapp) handleProfilesUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	a.audit(r, store.AuditGroupUpdated, "group", saved.ID, saved.Name)
 	a.respondProfilePanel(r, w, http.StatusOK, "")
 }
 
@@ -130,7 +134,16 @@ func (a *webapp) handleProfilesUpdate(w http.ResponseWriter, r *http.Request) {
 // will happen rather than asking a bare "are you sure?".
 func (a *webapp) handleProfilesDelete(w http.ResponseWriter, r *http.Request) {
 	lang := requestLanguage(r)
-	if err := a.store.Profiles().Delete(r.Context(), r.PathValue("id")); err != nil {
+	id := r.PathValue("id")
+
+	// Read the name before the row is gone; deleting a group cascades, so
+	// this record is often the only remaining trace of what was detached.
+	label := ""
+	if existing, err := a.store.Profiles().Get(r.Context(), id); err == nil {
+		label = existing.Name
+	}
+
+	if err := a.store.Profiles().Delete(r.Context(), id); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			a.respondProfilePanel(r, w, http.StatusNotFound, translate(lang, "error.profile_missing"))
 			return
@@ -138,6 +151,7 @@ func (a *webapp) handleProfilesDelete(w http.ResponseWriter, r *http.Request) {
 		a.respondProfilePanel(r, w, http.StatusInternalServerError, translate(lang, "error.profile_delete"))
 		return
 	}
+	a.audit(r, store.AuditGroupDeleted, "group", id, label)
 	a.respondProfilePanel(r, w, http.StatusOK, "")
 }
 

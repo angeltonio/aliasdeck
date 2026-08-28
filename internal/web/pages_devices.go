@@ -204,7 +204,8 @@ func (a *webapp) handleDevicesUpdate(w http.ResponseWriter, r *http.Request) {
 	// removing the last membership is asking for.
 	updated.ProfileIDs = r.Form["groups"]
 
-	if _, err := a.store.Devices().Update(r.Context(), updated); err != nil {
+	saved, err := a.store.Devices().Update(r.Context(), updated)
+	if err != nil {
 		switch {
 		case errors.Is(err, store.ErrNotFound):
 			a.respondDevicePanel(r, w, http.StatusNotFound, translate(lang, "error.device_missing"))
@@ -215,6 +216,7 @@ func (a *webapp) handleDevicesUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	a.audit(r, store.AuditDeviceUpdated, "device", saved.ID, saved.Name)
 	a.respondDevicePanel(r, w, http.StatusOK, "")
 }
 
@@ -455,6 +457,11 @@ func (a *webapp) handleDevicesMintToken(w http.ResponseWriter, r *http.Request) 
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	// The subject is the token, not a device: no device exists yet. What
+	// this records is that an operator handed out the capability to create
+	// one, which is the part worth being able to trace back.
+	a.audit(r, store.AuditDeviceEnroll, "enrollment", minted.Lookup, "")
+
 	_ = a.tmpl.mintResult.ExecuteTemplate(w, "device_mint_result", mintResultData{
 		pageData:          pageDataFor(r),
 		Command:           command,
@@ -547,6 +554,13 @@ func (a *webapp) handleDevicesRevoke(w http.ResponseWriter, r *http.Request) {
 	lang := requestLanguage(r)
 	now := a.now()
 
+	// Read the name first: the row survives a revoke, but reading it after
+	// the write would mean two round trips for a value already available.
+	name := ""
+	if existing, err := a.store.Devices().Get(r.Context(), id); err == nil {
+		name = existing.Name
+	}
+
 	if err := a.store.Devices().Revoke(r.Context(), id, now); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			a.respondDevicePanel(r, w, http.StatusNotFound, translate(lang, "error.device_missing"))
@@ -564,6 +578,7 @@ func (a *webapp) handleDevicesRevoke(w http.ResponseWriter, r *http.Request) {
 		a.respondDevicePanel(r, w, http.StatusInternalServerError, translate(lang, "error.device_revoke_token"))
 		return
 	}
+	a.audit(r, store.AuditDeviceRevoked, "device", id, name)
 	a.respondDevicePanel(r, w, http.StatusOK, "")
 }
 
@@ -633,6 +648,7 @@ func (a *webapp) handleDevicesRotateToken(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	a.audit(r, store.AuditDeviceRotated, "device", id, dev.Name)
 	a.respondDeviceRotation(r, w, dev.Name, adoptCommand(a.baseURLFor(r), minted.Wire))
 }
 
