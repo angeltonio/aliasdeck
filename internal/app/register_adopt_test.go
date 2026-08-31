@@ -229,3 +229,109 @@ func TestRegisterRefusesNeitherTokenKind(t *testing.T) {
 		t.Errorf("error = %v, want it to mention the adoption alternative", err)
 	}
 }
+
+// revokedThenRegisterServer answers the probe with 401 — a device revoked in
+// the control plane — and accepts a fresh enrollment token, which is exactly
+// the sequence an operator hits after revoking a machine and re-enrolling it.
+func revokedThenRegisterServer(t *testing.T, enrollmentToken string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/sync":
+			w.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"error": map[string]any{"code": "invalid_token", "message": "this device's token is missing, invalid, expired, or revoked"},
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/devices/register":
+			if r.Header.Get("Authorization") != "Bearer "+enrollmentToken {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"deviceId": "device-new", "deviceToken": "add_fresh.secret",
+			})
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+}
+
+// TestRegisterAfterRevocationNeedsNoForce is the bug this probe fixes. The
+// local credential survives a revoke, so the old guard refused on its mere
+// presence and sent the operator to `aliasdeck sync`, which could only fail
+// with the same 401. Nothing was protected: the credential it guarded was
+// already dead.
+func TestRegisterAfterRevocationNeedsNoForce(t *testing.T) {
+	srv := revokedThenRegisterServer(t, "adx_fresh.enroll")
+	defer srv.Close()
+
+	te := adoptTestEnv(t)
+	if err := config.SaveCredentials(config.CredentialsFile(te.Base), config.Credentials{
+		Version: 1, ServerURL: srv.URL, DeviceID: "device-revoked", DeviceToken: "add_revoked.secret",
+	}); err != nil {
+		t.Fatalf("seeding the revoked credential: %v", err)
+	}
+
+	report, err := Register(context.Background(), te.Env, RegisterOptions{
+		URL:   srv.URL,
+		Token: "adx_fresh.enroll",
+	})
+	if err != nil {
+		t.Fatalf("Register() after a revocation returned an error: %v", err)
+	}
+	if report.DeviceID != "device-new" {
+		t.Errorf("DeviceID = %q, want the newly enrolled device", report.DeviceID)
+	}
+
+	creds, err := config.LoadCredentials(config.CredentialsFile(te.Base))
+	if err != nil {
+		t.Fatalf("LoadCredentials(): %v", err)
+	}
+	if creds.DeviceToken != "add_fresh.secret" {
+		t.Errorf("DeviceToken = %q, want the replacement", creds.DeviceToken)
+	}
+}
+
+// TestRegisterRefusesWhenTheCredentialCannotBeChecked is the other half, and
+// the more important one. Being unable to reach the server is not evidence
+// that a credential is dead, so an unreachable server must not become a way
+// to overwrite one that works.
+func TestRegisterRefusesWhenTheCredentialCannotBeChecked(t *testing.T) {
+	// A server that accepts nothing and is then closed: every request fails
+	// at the transport, which is what a network outage looks like.
+	srv := revokedThenRegisterServer(t, "adx_fresh.enroll")
+	url := srv.URL
+	srv.Close()
+
+	te := adoptTestEnv(t)
+	credsPath := config.CredentialsFile(te.Base)
+	if err := config.SaveCredentials(credsPath, config.Credentials{
+		Version: 1, ServerURL: url, DeviceID: "device-existing", DeviceToken: "add_working.secret",
+	}); err != nil {
+		t.Fatalf("seeding credentials: %v", err)
+	}
+
+	_, err := Register(context.Background(), te.Env, RegisterOptions{
+		URL:               url,
+		Token:             "adx_fresh.enroll",
+		AllowInsecureHTTP: true,
+	})
+	if err == nil {
+		t.Fatal("Register() replaced a credential it could not verify was dead")
+	}
+	for _, want := range []string{"already registered", "device-existing", "could not be checked", "--force"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %v, want it to mention %q", err, want)
+		}
+	}
+
+	after, err := config.LoadCredentials(credsPath)
+	if err != nil {
+		t.Fatalf("LoadCredentials(): %v", err)
+	}
+	if after.DeviceToken != "add_working.secret" {
+		t.Fatalf("DeviceToken = %q, want the existing credential untouched", after.DeviceToken)
+	}
+}

@@ -172,6 +172,9 @@ func (s *ServerSource) Heartbeat(ctx context.Context) error {
 	if len(body) > ServerResponseLimit {
 		return fmt.Errorf("server source %s: response exceeds the %d byte limit", s.URL, ServerResponseLimit)
 	}
+	if resp.StatusCode == http.StatusUnauthorized {
+		return unauthorized{fmt.Errorf("server source %s: %s: %s", s.URL, resp.Status, serverErrorMessage(body))}
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("server source %s: %s: %s", s.URL, resp.Status, serverErrorMessage(body))
 	}
@@ -240,6 +243,10 @@ func (s *ServerSource) fetchSync(ctx context.Context, dev domain.Device) (server
 			"server source %s: response exceeds the %d byte limit", s.URL, ServerResponseLimit)
 	}
 
+	if resp.StatusCode == http.StatusUnauthorized {
+		return serverSyncResponse{}, unauthorized{fmt.Errorf(
+			"server source %s: %s: %s", s.URL, resp.Status, serverErrorMessage(body))}
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return serverSyncResponse{}, fmt.Errorf(
 			"server source %s: %s: %s", s.URL, resp.Status, serverErrorMessage(body))
@@ -281,6 +288,28 @@ func (s *ServerSource) heartbeatURL() (string, error) {
 // redirect is reported plainly rather than folded into the generic
 // "unreachable" wording every other transport error gets there.
 var errRedirectRefused = errors.New("refusing to follow redirect")
+
+// ErrUnauthorized reports that the server refused this device's credential —
+// missing, invalid, expired, or revoked. It is exported and wrapped, rather
+// than left inside a formatted string, because callers need to tell "the
+// server said no" apart from "the server did not answer". Those two lead to
+// opposite actions: one means get a new credential, the other means wait or
+// check the network, and guessing wrong either strands a working device or
+// overwrites a working credential.
+var ErrUnauthorized = errors.New("the server refused this device's credential")
+
+// unauthorized carries ErrUnauthorized alongside a message that already names
+// the HTTP status, without appending the sentinel's own prose to it. Wrapping
+// with %w would have produced "401 Unauthorized: ... : the server refused
+// this device's credential", which says the same thing twice — and dropping
+// the status to make room would lose what an operator actually reads.
+type unauthorized struct{ err error }
+
+func (u unauthorized) Error() string { return u.err.Error() }
+
+func (u unauthorized) Unwrap() error { return u.err }
+
+func (u unauthorized) Is(target error) bool { return target == ErrUnauthorized }
 
 // refuseRedirect is installed as CheckRedirect on every client fetchSync
 // uses (design decision 13's correction, bounded-review CRITICAL 1). Go's

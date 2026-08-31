@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -137,26 +138,60 @@ func Register(ctx context.Context, env Env, opts RegisterOptions) (RegisterRepor
 	if err != nil {
 		return RegisterReport{}, fmt.Errorf("loading existing credentials: %w", err)
 	}
-	if existing.DeviceToken != "" && !opts.Force {
-		where := existing.ServerURL
-		if where == "" {
-			where = "a server"
+	if existing.DeviceToken != "" && !opts.Force && opts.DeviceToken == "" {
+		// Ask the server whether the credential on disk still works before
+		// refusing to replace it.
+		//
+		// Without this the guard fired on the mere presence of a token, which
+		// made revoking a device from the control plane a dead end: the local
+		// file still held the dead credential, so re-enrolling refused, and
+		// the refusal's own advice ("run aliasdeck sync") could only fail with
+		// the same 401. The operator had to reach for --force and read a
+		// warning about abandoning a device that was already gone.
+		//
+		// An unreachable server is treated as "still working" on purpose.
+		// Being unable to check is not evidence the credential is dead, and
+		// overwriting a good one because the network was down is the worse
+		// mistake of the two.
+		if err := probeExistingCredential(ctx, opts, id.device, existing); err != nil {
+			if !errors.Is(err, source.ErrUnauthorized) {
+				// Still names the server and the device: an operator whose
+				// network is down needs to know what is already here before
+				// deciding whether to force past it.
+				return RegisterReport{}, fmt.Errorf(
+					"this device is already registered with %s as %s, and that credential could not be checked, "+
+						"so nothing was changed (re-run with --force to register again anyway): %w",
+					credentialServer(existing), existing.DeviceID, err)
+			}
+			// Refused by the server: the credential is dead, there is
+			// nothing to protect, and enrolling again is exactly right.
+		} else {
+			where := credentialServer(existing)
+			return RegisterReport{}, fmt.Errorf(
+				"this device is already registered with %s as %s and that credential still works; "+
+					"run `aliasdeck sync` to update it, or re-run with --force to register again "+
+					"(which mints a second device server-side and abandons this one)",
+				where, existing.DeviceID)
 		}
+	}
+
+	if existing.DeviceToken != "" && !opts.Force && opts.DeviceToken != "" {
+		where := credentialServer(existing)
 		// The consequence of --force differs by mode, so the sentence
 		// explaining it has to as well. Enrolling again mints a second
 		// device and abandons this one; adopting a rotated credential
 		// replaces only the secret and keeps this device's identity.
 		// Telling an operator recovering from a leak that they are about to
 		// abandon their device would talk them out of the safe path.
-		consequence := "re-run with --force to register again " +
-			"(which mints a second device server-side and abandons this one)"
-		if opts.DeviceToken != "" {
-			consequence = "re-run with --force to replace this machine's credential " +
-				"(which keeps this device and changes only its token)"
-		}
+		// Adoption is not probed. Replacing a credential is the whole point
+		// of it, so whether the current one works changes nothing about
+		// whether the operator meant to do this — and an operator rotating a
+		// leaked token has a reason to replace one that still works.
 		return RegisterReport{}, fmt.Errorf(
-			"this device is already registered with %s as %s; run `aliasdeck sync` to update it, or %s",
-			where, existing.DeviceID, consequence)
+			"this device is already registered with %s as %s; "+
+				"re-run with --force to replace this machine's credential "+
+				"(which keeps this device and changes only its token)",
+			where, existing.DeviceID)
 	}
 
 	var deviceID, deviceToken string
@@ -318,4 +353,36 @@ func adoptDeviceToken(ctx context.Context, opts RegisterOptions, dev domain.Devi
 		return "", "", fmt.Errorf("%s accepted the device token but did not say which device it belongs to", opts.URL)
 	}
 	return resolved.Device.ID, opts.DeviceToken, nil
+}
+
+// credentialServer names where an existing credential belongs, for a message
+// an operator has to act on.
+func credentialServer(existing config.Credentials) string {
+	if existing.ServerURL == "" {
+		return "a server"
+	}
+	return existing.ServerURL
+}
+
+// probeExistingCredential reports whether the credential already on disk is
+// still accepted, returning nil when it is.
+//
+// It asks the server the credential claims to belong to, not the one being
+// registered against: a machine moving between servers has a token that was
+// never valid at the new one, and testing it there would report a refusal
+// that says nothing about whether the old credential is still live.
+func probeExistingCredential(ctx context.Context, opts RegisterOptions, dev domain.Device, existing config.Credentials) error {
+	url := existing.ServerURL
+	if url == "" {
+		url = opts.URL
+	}
+
+	src := &source.ServerSource{
+		URL:       url,
+		Token:     existing.DeviceToken,
+		Client:    opts.Client,
+		AllowHTTP: opts.AllowInsecureHTTP,
+	}
+	_, err := src.Resolve(ctx, dev)
+	return err
 }

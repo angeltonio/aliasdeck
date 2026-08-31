@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/angeltonio/aliasdeck/internal/config"
+	"github.com/angeltonio/aliasdeck/internal/domain"
 )
 
 // registerServer returns an httptest.Server implementing exactly
@@ -21,6 +22,15 @@ func registerServer(t *testing.T, wantToken string) *httptest.Server {
 	t.Helper()
 	consumed := false
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Register now probes an existing credential before refusing to
+		// replace it, so this stub has to answer the sync route too. It
+		// accepts the token it issued, which is what a real server does —
+		// a stub that refused its own credential would quietly exercise the
+		// dead-credential branch in every test that reaches here.
+		if r.Method == http.MethodGet && r.URL.Path == "/api/v1/sync" {
+			writeStubSync(w, "device-abc123")
+			return
+		}
 		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/devices/register" {
 			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)
@@ -280,4 +290,23 @@ func TestRegisterForceAllowsReRegistration(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Register() with --force: %v", err)
 	}
+}
+
+// writeStubSync answers GET /api/v1/sync with an empty but internally
+// consistent alias set. The revision has to be the one the client recomputes:
+// ServerSource rejects a response that misreports its own revision.
+func writeStubSync(w http.ResponseWriter, deviceID string) {
+	resolved := domain.ResolvedConfig{
+		Device:  domain.Device{ID: deviceID, Name: "macbook", Platform: domain.PlatformMacOS, Shell: domain.ShellZsh},
+		Aliases: []domain.Alias{},
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"revision": resolved.ComputeRevision(),
+		"device": map[string]any{
+			"id": deviceID, "name": "macbook", "platform": "macos", "shell": "zsh", "profileIds": []string{},
+		},
+		"aliases":     []any{},
+		"generatedAt": "2030-01-01T00:00:00Z",
+	})
 }
