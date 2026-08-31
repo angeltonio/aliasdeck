@@ -1,0 +1,42 @@
+# A throwaway machine for exercising the client.
+#
+# The client cannot be tested on the host without touching it: `init` writes a
+# bootstrap block into the real ~/.zshrc, `register` writes the real
+# credentials.json, and `agent install` writes a real LaunchAgent. Pointing
+# ALIASDECK_HOME elsewhere moves only the second of those. So a throwaway
+# machine is the only way to run the full enrol/sync/revoke/rotate flow
+# without leaving marks on the developer's own setup — and without a stale
+# credential for one server refusing a registration against another.
+#
+# Deliberately not the same image as the server: this one needs a real shell,
+# because half of what is under test is what the client writes into it.
+FROM golang:1.25-alpine
+
+RUN apk add --no-cache zsh bash git ca-certificates curl jq ripgrep
+
+WORKDIR /workspace
+
+# The client is built at run time from the mounted source, so a code change
+# needs no image rebuild — the same reason the server side uses Air.
+ENV ALIASDECK_HOME=/root/.config/aliasdeck \
+    SHELL=/bin/zsh \
+    ALIASDECK_PLATFORM=linux \
+    ALIASDECK_SHELL=zsh
+
+# A minimal zshrc so the bootstrap block the client writes has somewhere to
+# land, and so `. aliases.zsh` behaves the way it would on a real machine.
+RUN printf '%s\n' \
+    '# Throwaway shell for AliasDeck client testing.' \
+    'export PS1="devclient %~ %# "' \
+    > /root/.zshrc
+
+# aliasdeck on PATH, rebuilt on every invocation so it always matches the
+# mounted source rather than whatever was current when the image was built.
+RUN printf '%s\n' \
+    '#!/bin/sh' \
+    'set -e' \
+    'go build -o /usr/local/bin/aliasdeck-bin ./cmd/aliasdeck' \
+    'exec /usr/local/bin/aliasdeck-bin "$@"' \
+    > /usr/local/bin/aliasdeck && chmod +x /usr/local/bin/aliasdeck
+
+CMD ["/bin/zsh"]

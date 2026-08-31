@@ -56,6 +56,14 @@ DEV_ROOT := $(CURDIR)/build/aliasdeck-dev
 DEV_BINARY := $(DEV_ROOT)/bin/aliasdeck
 DEV_CLIENT_HOME := $(DEV_ROOT)/client
 DEV_WATCH_INTERVAL := 5s
+# The dev server as seen from inside a client container: host.docker.internal
+# rather than 127.0.0.1, which inside a container is the container itself.
+DEV_CLIENT_URL := http://host.docker.internal:$(or $(ALIASDECK_DEV_PORT),8088)
+# The throwaway client's home survives between `make dev-client` sessions, so
+# a revoke/re-enrol test can span two of them. `make dev-client-reset` is how
+# it gets forgotten — deliberately explicit, since the whole value of this
+# container is that nothing it does reaches the developer's own machine.
+DEV_CLIENT_VOLUME := aliasdeck-devclient-home
 
 .PHONY: dev-up
 dev-up: ## Run the hot-reloading development server in the foreground
@@ -64,6 +72,21 @@ dev-up: ## Run the hot-reloading development server in the foreground
 .PHONY: dev-down
 dev-down: ## Stop the development server while preserving its state
 	$(DEV_COMPOSE) down
+
+.PHONY: dev-client
+dev-client: ## Open a throwaway shell for exercising the client, isolated from this machine
+	docker build -q -f Dockerfile.devclient -t aliasdeck-devclient . >/dev/null
+	@printf 'Reach the dev server at %s\n' "$(DEV_CLIENT_URL)"
+	docker run --rm -it \
+		--add-host host.docker.internal:host-gateway \
+		-v "$(CURDIR)":/workspace:ro \
+		-v $(DEV_CLIENT_VOLUME):/root \
+		-e ALIASDECK_DEV_URL="$(DEV_CLIENT_URL)" \
+		aliasdeck-devclient
+
+.PHONY: dev-client-reset
+dev-client-reset: ## Forget the throwaway client's enrolment, config and shell block
+	docker volume rm -f $(DEV_CLIENT_VOLUME)
 
 .PHONY: dev-logs
 dev-logs: ## Follow development server and hot-reload logs
