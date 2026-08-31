@@ -74,6 +74,20 @@ type InitReport struct {
 	BootstrapSkippedReason string // "--no-bootstrap", "declined", or ""
 	RCPath                 string
 	ManualBootstrapLine    string
+
+	// BootstrapAlreadyPresent reports that the rc file already carried an
+	// AliasDeck block, so nothing was written. AddBootstrap is idempotent by
+	// design and leaves a hand-edited block alone; this is how a caller
+	// learns that is what happened, instead of being told a line was added.
+	BootstrapAlreadyPresent bool
+
+	// BootstrapPointsElsewhere reports that the existing block does not
+	// source the file this run would have pointed at — the case where being
+	// idempotent is silently wrong for the user. Running `init` from a
+	// different ALIASDECK_HOME leaves a shell loading aliases from a
+	// directory nobody is writing to any more, and saying nothing about it
+	// is how that survives unnoticed.
+	BootstrapPointsElsewhere bool
 }
 
 // Init creates config.yaml and aliases.yaml when absent, detects this
@@ -173,11 +187,27 @@ func Init(ctx context.Context, env Env, opts InitOptions) (InitReport, error) {
 		return report, nil
 	}
 
+	// Asked before the write, because afterwards every rc file has a block
+	// and the question "was one already here, pointing elsewhere?" can no
+	// longer be answered.
+	present, matches, err := apply.BootstrapTargets(rcPath, dc.Device.Shell, syncReport.OutputPath, home)
+	if err != nil {
+		return report, fmt.Errorf("checking %s for an existing bootstrap line: %w", rcPath, err)
+	}
+
 	block, err := apply.AddBootstrap(rcPath, dc.Device.Shell, syncReport.OutputPath, home)
 	if err != nil {
 		return report, fmt.Errorf("adding bootstrap line to %s: %w", rcPath, err)
 	}
-	report.BootstrapAdded = true
+
+	// Only claim to have added something when something was written. A block
+	// already in place means AddBootstrap returned "" and changed nothing.
+	report.BootstrapAdded = block != ""
+	report.BootstrapAlreadyPresent = present
+	report.BootstrapPointsElsewhere = present && !matches
+	if report.BootstrapPointsElsewhere {
+		report.ManualBootstrapLine = apply.BootstrapLine(dc.Device.Shell, syncReport.OutputPath, home)
+	}
 
 	if block != "" {
 		if err := recordBootstrap(config.StateFile(base), rcPath, block, env.Now()); err != nil {

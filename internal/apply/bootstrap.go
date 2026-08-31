@@ -386,3 +386,39 @@ func stripTrailingEOL(content []byte, pos int) (int, bool) {
 	}
 	return pos, false
 }
+
+// BootstrapTargets reports whether rcPath's existing AliasDeck block already
+// sources generatedPath.
+//
+// AddBootstrap is idempotent by design: any prior marker means it leaves the
+// file alone, which is right — a block a user hand-edited must not be
+// clobbered. But "left alone" and "correct" are different claims, and only
+// the caller can decide what to do about a block pointing somewhere else.
+// Without this there was no way to tell them apart, so `init` reported having
+// added a line while a stale block kept sourcing a different file.
+//
+// present is false when there is no block at all; matches is meaningless
+// then.
+func BootstrapTargets(rcPath string, sh domain.Shell, generatedPath, home string) (present, matches bool, err error) {
+	resolved, _, err := resolveRCPath(rcPath)
+	if err != nil {
+		return false, false, err
+	}
+
+	existing, err := os.ReadFile(resolved)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, false, nil
+		}
+		return false, false, fmt.Errorf("reading %s: %w", rcPath, err)
+	}
+	if !bytes.Contains(existing, []byte(beginMarker)) {
+		return false, false, nil
+	}
+
+	// Compared against the line this run would have written, rather than by
+	// parsing the block: the renderer is the only thing that knows how a path
+	// is spelled for a given shell, including the $HOME rewrite.
+	want := BootstrapLine(sh, generatedPath, home)
+	return true, bytes.Contains(existing, []byte(want)), nil
+}

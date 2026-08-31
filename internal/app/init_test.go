@@ -275,3 +275,92 @@ func TestInitAssumeYesAndNoBootstrapPrefersNotTouchingTheFile(t *testing.T) {
 		t.Errorf("rc file was modified despite --no-bootstrap:\n%s", rc)
 	}
 }
+
+// TestInitDoesNotClaimToHaveAddedAnExistingBlock is the bug this pins. Init
+// reported "Added AliasDeck's bootstrap line" on every consented run, because
+// BootstrapAdded was set unconditionally — while AddBootstrap, correctly, had
+// left a pre-existing block alone. The command claimed an action it had not
+// performed, which is the one thing a tool that edits a shell profile must
+// not do.
+func TestInitDoesNotClaimToHaveAddedAnExistingBlock(t *testing.T) {
+	te := newTestEnv(t)
+	te.setenv("ALIASDECK_PLATFORM", "macos")
+	te.setenv("ALIASDECK_SHELL", "zsh")
+
+	first, err := Init(context.Background(), te.Env, InitOptions{AssumeYes: true})
+	if err != nil {
+		t.Fatalf("first Init(): %v", err)
+	}
+	if !first.BootstrapAdded {
+		t.Fatal("first Init() did not add the block; this test cannot exercise the second run")
+	}
+
+	rcPath := filepath.Join(te.Home, ".zshrc")
+	before := readFile(t, rcPath)
+
+	second, err := Init(context.Background(), te.Env, InitOptions{AssumeYes: true})
+	if err != nil {
+		t.Fatalf("second Init(): %v", err)
+	}
+
+	if second.BootstrapAdded {
+		t.Error("BootstrapAdded = true on a run that wrote nothing")
+	}
+	if !second.BootstrapAlreadyPresent {
+		t.Error("BootstrapAlreadyPresent = false, want true when a block was already there")
+	}
+	if second.BootstrapPointsElsewhere {
+		t.Error("BootstrapPointsElsewhere = true for a block that points at exactly this run's output")
+	}
+	if after := readFile(t, rcPath); string(after) != string(before) {
+		t.Errorf("the rc file changed on a run that reported adding nothing:\nbefore: %s\nafter:  %s", before, after)
+	}
+}
+
+// TestInitReportsAStaleBlockPointingSomewhereElse covers the case that cost a
+// real afternoon: running init under a different ALIASDECK_HOME leaves the
+// shell sourcing a file nobody writes to any more, and the old code reported
+// success while changing nothing. Being idempotent is right; being silent
+// about it is not.
+func TestInitReportsAStaleBlockPointingSomewhereElse(t *testing.T) {
+	te := newTestEnv(t)
+	te.setenv("ALIASDECK_PLATFORM", "macos")
+	te.setenv("ALIASDECK_SHELL", "zsh")
+
+	if _, err := Init(context.Background(), te.Env, InitOptions{AssumeYes: true}); err != nil {
+		t.Fatalf("first Init(): %v", err)
+	}
+	rcPath := filepath.Join(te.Home, ".zshrc")
+	before := readFile(t, rcPath)
+
+	// A second base directory stands in for a dev checkout, a moved home, or
+	// any other reason the generated file's path changes.
+	elsewhere := filepath.Join(t.TempDir(), "other-home")
+	te.setenv("ALIASDECK_HOME", elsewhere)
+
+	report, err := Init(context.Background(), te.Env, InitOptions{AssumeYes: true})
+	if err != nil {
+		t.Fatalf("second Init(): %v", err)
+	}
+
+	if report.BootstrapAdded {
+		t.Error("BootstrapAdded = true, but the existing block was left in place")
+	}
+	if !report.BootstrapAlreadyPresent {
+		t.Error("BootstrapAlreadyPresent = false, want true")
+	}
+	if !report.BootstrapPointsElsewhere {
+		t.Fatal("BootstrapPointsElsewhere = false; the block sources the first base, not this one")
+	}
+	if report.ManualBootstrapLine == "" {
+		t.Error("ManualBootstrapLine is empty; a warning with no correct line to use is not actionable")
+	}
+	if !strings.Contains(report.ManualBootstrapLine, "aliases.zsh") {
+		t.Errorf("ManualBootstrapLine = %q, want it to name the generated file", report.ManualBootstrapLine)
+	}
+
+	// The whole point of the idempotence it keeps: the file is untouched.
+	if after := readFile(t, rcPath); string(after) != string(before) {
+		t.Errorf("the rc file was rewritten:\nbefore: %s\nafter:  %s", before, after)
+	}
+}

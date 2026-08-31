@@ -66,6 +66,15 @@ func printInitReport(cmd *cobra.Command, r app.InitReport) {
 	switch {
 	case r.BootstrapAdded:
 		fmt.Fprintf(out, "Added AliasDeck's bootstrap line to %s\n", r.RCPath)
+	case r.BootstrapPointsElsewhere:
+		// The loud case. The shell is loading aliases from somewhere this run
+		// is not writing to, and `init` will keep leaving it that way, so the
+		// only useful thing to do is say which line belongs there.
+		fmt.Fprintf(out, "%s already has an AliasDeck block, but it does not source %s.\n"+
+			"Nothing was changed. Replace the block's contents with:\n  %s\n",
+			r.RCPath, r.Sync.OutputPath, r.ManualBootstrapLine)
+	case r.BootstrapAlreadyPresent:
+		fmt.Fprintf(out, "AliasDeck's bootstrap line is already in %s\n", r.RCPath)
 	case r.BootstrapSkippedReason != "":
 		fmt.Fprintf(out, "Bootstrap line not added (%s). Add it manually to your shell rc file:\n  %s\n",
 			r.BootstrapSkippedReason, r.ManualBootstrapLine)
