@@ -107,9 +107,8 @@ func (a *webapp) handleDevicesPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	view := pageDataFor(r)
-	_ = a.tmpl.devices.ExecuteTemplate(w, "base", devicesPageData{pageData: view, Title: translate(view.Lang, "devices.title"), Active: "devices", Devices: rows})
+	a.writePage(w, r, http.StatusOK, a.tmpl.devices, "base", devicesPageData{pageData: view, Title: translate(view.Lang, "devices.title"), Active: "devices", Devices: rows})
 }
 
 // deviceRows resolves every device into its rendered row, including the full
@@ -267,9 +266,8 @@ func classifyDeviceFreshnessForLanguage(lastSeenAt, lastSyncAt *time.Time, now t
 }
 
 func (a *webapp) handleDevicesAddPage(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	view := pageDataFor(r)
-	_ = a.tmpl.devicesAdd.ExecuteTemplate(w, "base", devicesPageData{pageData: view, Title: translate(view.Lang, "add.title"), Active: "devices", Frequencies: enrollmentFrequencyPresetsForLanguage(a.watchInterval(), view.Lang)})
+	a.writePage(w, r, http.StatusOK, a.tmpl.devicesAdd, "base", devicesPageData{pageData: view, Title: translate(view.Lang, "add.title"), Active: "devices", Frequencies: enrollmentFrequencyPresetsForLanguage(a.watchInterval(), view.Lang)})
 }
 
 // mintResultData is device_mint_result.html's data shape: the exact
@@ -456,13 +454,12 @@ func (a *webapp) handleDevicesMintToken(w http.ResponseWriter, r *http.Request) 
 		command = mintCommand(baseURL, minted.Wire, true, selectedInterval)
 	}
 
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	// The subject is the token, not a device: no device exists yet. What
 	// this records is that an operator handed out the capability to create
 	// one, which is the part worth being able to trace back.
 	a.audit(r, store.AuditDeviceEnroll, "enrollment", minted.Lookup, "")
 
-	_ = a.tmpl.mintResult.ExecuteTemplate(w, "device_mint_result", mintResultData{
+	a.writePanel(w, r, http.StatusOK, a.tmpl.mintResult, "device_mint_result", mintResultData{
 		pageData:          pageDataFor(r),
 		Command:           command,
 		ManualCommand:     manualCommand,
@@ -534,8 +531,7 @@ func (a *webapp) handleDeviceEnrollmentStatus(w http.ResponseWriter, r *http.Req
 
 func (a *webapp) renderEnrollmentStatus(w http.ResponseWriter, r *http.Request, name string, data enrollmentStatusData) {
 	data.pageData = pageDataFor(r)
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_ = a.tmpl.mintResult.ExecuteTemplate(w, name, data)
+	a.writePanel(w, r, http.StatusOK, a.tmpl.mintResult, name, data)
 }
 
 // handleDevicesRevoke cuts a device's access.

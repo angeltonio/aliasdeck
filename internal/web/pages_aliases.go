@@ -162,9 +162,8 @@ func (a *webapp) handleAliasesPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, translate(requestLanguage(r), "error.alias_load"), http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	view := pageDataFor(r)
-	_ = a.tmpl.aliases.ExecuteTemplate(w, "base", aliasesPageData{
+	a.writePage(w, r, http.StatusOK, a.tmpl.aliases, "base", aliasesPageData{
 		pageData: view, Title: translate(view.Lang, "aliases.title"), Active: "aliases",
 		Rows: rows, NewTargeting: blank,
 	})

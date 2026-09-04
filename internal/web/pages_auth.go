@@ -28,9 +28,7 @@ func (a *webapp) handleLoginPage(w http.ResponseWriter, r *http.Request) {
 
 func (a *webapp) renderLogin(w http.ResponseWriter, r *http.Request, status int, data loginPageData) {
 	data.pageData = pageDataFor(r)
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(status)
-	_ = a.tmpl.login.ExecuteTemplate(w, "login.html", data)
+	a.writePage(w, r, status, a.tmpl.login, "login.html", data)
 }
 
 // handleLoginSubmit exchanges the operator's username/password for a
