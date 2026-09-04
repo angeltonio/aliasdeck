@@ -50,7 +50,7 @@ docker compose -f compose.prod.yaml up -d --pull always --wait
 
 Open <http://127.0.0.1:8088/setup> and create the first operator. The
 production file is deliberately pinned to the published
-[`v0.6.1`](https://github.com/angeltonio/aliasdeck/releases/tag/v0.6.1)
+[`v0.6.2`](https://github.com/angeltonio/aliasdeck/releases/tag/v0.6.2)
 server image and digest.
 
 ### 2. Install or update the client on macOS
@@ -169,6 +169,21 @@ resetting because the password may be known to someone else, leaving their
 session open would make the reset cosmetic. The server does not need to be
 stopped, and `--username` targets a different account if you have one.
 
+### Re-enrol a device you revoked
+
+Revoking is server-side, so the machine keeps its now-worthless credential.
+Just run the enrolment command again — the client checks whether the
+credential it holds still works before refusing to replace one, so a revoked
+device enrols again with no extra flags:
+
+```bash
+aliasdeck init --yes --skip-initial-sync && aliasdeck register --url ... --token '<new token>'
+```
+
+If the server cannot be reached, the client refuses instead and says so.
+Being unable to check is not evidence a credential is dead, and overwriting a
+working one because the network was down is the worse mistake.
+
 ### Replace a device's credential without re-enrolling it
 
 If a device token may have leaked but the machine is still yours, rotate the
@@ -253,7 +268,7 @@ scoop install aliasdeck
 Published release archives contain client and server binaries for macOS,
 Linux, and Windows on amd64 and arm64. The client renders zsh, bash, and
 PowerShell aliases. See the
-[`v0.6.1` release](https://github.com/angeltonio/aliasdeck/releases/tag/v0.6.1)
+[`v0.6.2` release](https://github.com/angeltonio/aliasdeck/releases/tag/v0.6.2)
 for the currently pinned deployment artifacts and checksums.
 
 ## Use the client without a server
