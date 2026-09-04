@@ -29,9 +29,8 @@ func (a *webapp) handleProfilesPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, translate(requestLanguage(r), "error.profile_load"), http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	view := pageDataFor(r)
-	_ = a.tmpl.profiles.ExecuteTemplate(w, "base", profilesPageData{
+	a.writePage(w, r, http.StatusOK, a.tmpl.profiles, "base", profilesPageData{
 		pageData: view, Title: translate(view.Lang, "profiles.title"), Active: "profiles", Profiles: list,
 	})
 }

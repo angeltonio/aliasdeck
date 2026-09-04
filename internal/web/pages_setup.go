@@ -58,9 +58,7 @@ func (a *webapp) handleSetupPage(w http.ResponseWriter, r *http.Request) {
 
 func (a *webapp) renderSetup(w http.ResponseWriter, r *http.Request, status int, data setupPageData) {
 	data.pageData = pageDataFor(r)
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(status)
-	_ = a.tmpl.setup.ExecuteTemplate(w, "setup.html", data)
+	a.writePage(w, r, status, a.tmpl.setup, "setup.html", data)
 }
 
 func (a *webapp) handleSetupSubmit(w http.ResponseWriter, r *http.Request) {
