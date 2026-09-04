@@ -19,11 +19,11 @@ func newAgentCmd() *cobra.Command {
 
 func newAgentInstallCmd() *cobra.Command {
 	var interval time.Duration
-	cmd := &cobra.Command{Use: "install", Short: "Install and start the macOS LaunchAgent.", Args: cobra.NoArgs, PreRunE: func(_ *cobra.Command, _ []string) error {
+	cmd := &cobra.Command{Use: "install", Short: "Install and start the user background agent.", Args: cobra.NoArgs, PreRunE: func(_ *cobra.Command, _ []string) error {
 		return watchconfig.Validate(interval)
 	}, RunE: func(cmd *cobra.Command, _ []string) error {
 		cmd.SilenceUsage = true
-		if err := requireMacOS(); err != nil {
+		if err := requireAgentOS(runtime.GOOS); err != nil {
 			return err
 		}
 		executable, err := os.Executable()
@@ -37,14 +37,14 @@ func newAgentInstallCmd() *cobra.Command {
 		fmt.Fprintf(cmd.OutOrStdout(), "installed and loaded %s\n", status.Path)
 		return nil
 	}}
-	cmd.Flags().DurationVar(&interval, "interval", watchconfig.DefaultInterval, "Synchronization interval persisted in the LaunchAgent")
+	cmd.Flags().DurationVar(&interval, "interval", watchconfig.DefaultInterval, "Synchronization interval persisted in the background agent")
 	return cmd
 }
 
 func newAgentStatusCmd() *cobra.Command {
-	return &cobra.Command{Use: "status", Short: "Show macOS LaunchAgent status.", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+	return &cobra.Command{Use: "status", Short: "Show user background agent status.", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		cmd.SilenceUsage = true
-		if err := requireMacOS(); err != nil {
+		if err := requireAgentOS(runtime.GOOS); err != nil {
 			return err
 		}
 		status, err := app.AgentStatusFor(cmd.Context(), app.OSEnv())
@@ -60,9 +60,9 @@ func newAgentUninstallCmd() *cobra.Command {
 	var ifExecutable string
 	var ifHome string
 	var ifInterval time.Duration
-	cmd := &cobra.Command{Use: "uninstall", Short: "Stop and remove the macOS LaunchAgent.", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+	cmd := &cobra.Command{Use: "uninstall", Short: "Stop and remove the user background agent.", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		cmd.SilenceUsage = true
-		if err := requireMacOS(); err != nil {
+		if err := requireAgentOS(runtime.GOOS); err != nil {
 			return err
 		}
 		env := app.OSEnv()
@@ -74,7 +74,7 @@ func newAgentUninstallCmd() *cobra.Command {
 			if removed {
 				fmt.Fprintf(cmd.OutOrStdout(), "uninstalled %s\n", path)
 			} else {
-				fmt.Fprintf(cmd.OutOrStdout(), "no matching LaunchAgent removed at %s\n", path)
+				fmt.Fprintf(cmd.OutOrStdout(), "no matching background agent removed at %s\n", path)
 			}
 			return nil
 		}
@@ -91,9 +91,9 @@ func newAgentUninstallCmd() *cobra.Command {
 	return cmd
 }
 
-func requireMacOS() error {
-	if runtime.GOOS != "darwin" {
-		return fmt.Errorf("agent commands are supported only on macOS")
+func requireAgentOS(goos string) error {
+	if goos != "darwin" && goos != "windows" {
+		return fmt.Errorf("agent commands are supported only on macOS and Windows")
 	}
 	return nil
 }

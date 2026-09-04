@@ -51,6 +51,9 @@ func TestAgentInstallWritesStablePlistAndLoadsOnlyTheWatcher(t *testing.T) {
 }
 
 func TestAgentInstallDefaultsToThirtySecondsAndRejectsUnsafeInterval(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("launchd plist assertions require POSIX absolute-path semantics")
+	}
 	home := t.TempDir()
 	env := testAgentEnv(home, func(context.Context, string, ...string) ([]byte, error) { return nil, nil })
 	if _, err := AgentInstall(context.Background(), env, AgentOptions{Executable: "/usr/local/bin/aliasdeck"}); err != nil {
@@ -69,6 +72,9 @@ func TestAgentInstallDefaultsToThirtySecondsAndRejectsUnsafeInterval(t *testing.
 }
 
 func TestAgentInstallSurfacesBootstrapFailure(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("launchd command assertions require launchctl")
+	}
 	home := t.TempDir()
 	var commands [][]string
 	env := testAgentEnv(home, func(_ context.Context, name string, args ...string) ([]byte, error) {
@@ -87,6 +93,9 @@ func TestAgentInstallSurfacesBootstrapFailure(t *testing.T) {
 }
 
 func TestAgentUninstallIfOwnedPreservesDifferentInstallation(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("launchd ownership assertions require POSIX absolute-path semantics")
+	}
 	home := t.TempDir()
 	var commands [][]string
 	env := testAgentEnv(home, func(_ context.Context, name string, args ...string) ([]byte, error) {
@@ -121,6 +130,9 @@ func TestAgentUninstallIfOwnedPreservesDifferentInstallation(t *testing.T) {
 }
 
 func TestAgentUninstallIfOwnedRemovesMatchingDevelopmentAgent(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("launchd ownership assertions require POSIX absolute-path semantics")
+	}
 	home := t.TempDir()
 	var commands [][]string
 	env := testAgentEnv(home, func(_ context.Context, name string, args ...string) ([]byte, error) {
@@ -156,6 +168,9 @@ func TestAgentUninstallIfOwnedRemovesMatchingDevelopmentAgent(t *testing.T) {
 }
 
 func TestAgentStatusAndUninstallHandleNotLoadedAgent(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("launchd status assertions require POSIX paths")
+	}
 	home := t.TempDir()
 	env := testAgentEnv(home, func(_ context.Context, _ string, args ...string) ([]byte, error) {
 		if len(args) > 0 && args[0] == "print" {
@@ -186,8 +201,104 @@ func TestAgentStatusAndUninstallHandleNotLoadedAgent(t *testing.T) {
 	}
 }
 
+func TestAgentInstallCreatesWindowsScheduledTask(t *testing.T) {
+	home := t.TempDir()
+	var commands [][]string
+	var written []byte
+	env := testAgentEnv(home, func(_ context.Context, name string, args ...string) ([]byte, error) {
+		commands = append(commands, append([]string{name}, args...))
+		return nil, nil
+	})
+	env.WriteFile = func(path string, data []byte, perm os.FileMode) error {
+		written = append([]byte(nil), data...)
+		return os.WriteFile(path, data, perm)
+	}
+
+	status, err := agentInstallForOS(context.Background(), env, AgentOptions{
+		Executable:    `C:\Program Files\AliasDeck\aliasdeck.exe`,
+		AliasDeckHome: `C:\Users\me\.aliasdeck`,
+		Interval:      time.Minute,
+	}, "windows")
+	if err != nil {
+		t.Fatalf("agentInstallForOS(windows) error = %v", err)
+	}
+	if status.Path != taskName || !status.Installed || !status.Loaded {
+		t.Fatalf("status = %+v, want installed and loaded task", status)
+	}
+	if len(commands) != 2 ||
+		commands[0][0] != "schtasks" || commands[0][1] != "/Create" || commands[0][3] != taskName ||
+		commands[1][0] != "schtasks" || commands[1][1] != "/Run" || commands[1][3] != taskName {
+		t.Fatalf("schtasks commands = %#v", commands)
+	}
+	_, wantArgs := agentTaskAction(AgentOptions{
+		Executable:    `C:\Program Files\AliasDeck\aliasdeck.exe`,
+		AliasDeckHome: `C:\Users\me\.aliasdeck`,
+		Interval:      time.Minute,
+	})
+	if !strings.Contains(string(written), "<LogonType>InteractiveToken</LogonType>") ||
+		!strings.Contains(string(written), "<RunLevel>LeastPrivilege</RunLevel>") ||
+		!strings.Contains(string(written), "<Command>powershell.exe</Command>") ||
+		!strings.Contains(string(written), "<Arguments>"+xmlEscape(wantArgs)+"</Arguments>") {
+		t.Fatalf("scheduled task XML does not install a least-privilege per-user task:\n%s", written)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".config", "aliasdeck", "agent-task.xml")); !os.IsNotExist(err) {
+		t.Fatalf("staged task XML was not removed: %v", err)
+	}
+}
+
+func TestAgentTaskStatusAndUninstallUseSchtasks(t *testing.T) {
+	home := t.TempDir()
+	var commands [][]string
+	env := testAgentEnv(home, func(_ context.Context, name string, args ...string) ([]byte, error) {
+		commands = append(commands, append([]string{name}, args...))
+		if len(args) >= 5 && args[0] == "/Query" && args[4] == "LIST" {
+			return []byte("Status:                         Running\r\n"), nil
+		}
+		return []byte(renderAgentTaskXML(AgentOptions{Executable: `C:\aliasdeck.exe`, Interval: 30 * time.Second})), nil
+	})
+
+	status, err := agentStatusForOS(context.Background(), env, "windows")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Path != taskName || !status.Installed || !status.Loaded {
+		t.Fatalf("status = %+v, want installed and running", status)
+	}
+	path, err := agentUninstallForOS(context.Background(), env, "windows")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path != taskName {
+		t.Fatalf("uninstalled path = %q, want %q", path, taskName)
+	}
+	if got := commands[len(commands)-1]; got[0] != "schtasks" || got[1] != "/Delete" || got[3] != taskName || got[4] != "/F" {
+		t.Fatalf("final command = %#v, want schtasks delete", got)
+	}
+}
+
+func TestAgentUninstallTaskIfOwnedPreservesDifferentTask(t *testing.T) {
+	home := t.TempDir()
+	var commands [][]string
+	env := testAgentEnv(home, func(_ context.Context, name string, args ...string) ([]byte, error) {
+		commands = append(commands, append([]string{name}, args...))
+		return []byte(renderAgentTaskXML(AgentOptions{Executable: `C:\other\aliasdeck.exe`, Interval: 30 * time.Second})), nil
+	})
+
+	_, removed, err := agentUninstallIfOwnedForOS(context.Background(), env, AgentOptions{Executable: `C:\aliasdeck.exe`}, "windows")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed {
+		t.Fatal("AgentUninstallIfOwned removed a different scheduled task")
+	}
+	if len(commands) != 1 || commands[0][1] != "/Query" {
+		t.Fatalf("commands = %#v, want only ownership query", commands)
+	}
+}
+
 func testAgentEnv(home string, runner func(context.Context, string, ...string) ([]byte, error)) Env {
 	return Env{
+		Getenv:     func(string) string { return "" },
 		HomeDir:    func() (string, error) { return home, nil },
 		UserID:     func() int { return 501 },
 		RunCommand: runner,

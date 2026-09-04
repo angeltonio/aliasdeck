@@ -89,9 +89,9 @@ shell. Do not copy enrollment tokens into documentation or logs.
 session also notices watcher-written updates at its next prompt. Other shells
 load an updated generated file in a new session or when it is sourced again.
 
-> Automatic background agent installation is currently supported only on
-> macOS. Linux and Windows clients can synchronize manually with
-> `aliasdeck sync`; do not treat the macOS LaunchAgent as cross-platform.
+> Automatic background agent installation is supported on macOS with a
+> LaunchAgent and on Windows with a per-user Scheduled Task. Linux clients can
+> synchronize manually with `aliasdeck sync`.
 
 ## Production operations
 
@@ -373,7 +373,7 @@ The detailed reasoning lives in [`docs/PROJECT.md`](docs/PROJECT.md).
 | Every operator action available in the browser, not only through the REST API | ✅ |
 | Audit record of every operator action, from either surface | ✅ |
 | Operator password recovery without data loss | ✅ |
-| Configurable automatic alias synchronization on macOS | ✅ |
+| Configurable automatic alias synchronization on macOS and Windows | ✅ |
 | Homebrew cask, Scoop manifest, release archives, and checksum-verifying install script | ✅ |
 
 ## Development

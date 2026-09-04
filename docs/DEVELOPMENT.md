@@ -66,7 +66,7 @@ two of them. `make dev-client-reset` forgets it.
 The development server explicitly generates automatic-enrollment commands
 with a `5s` watcher interval for a fast feedback loop. Normal server and CLI
 defaults remain `30s`; `aliasdeck agent install --interval <duration>` records
-an explicit validated override in the macOS LaunchAgent.
+an explicit validated override in the platform background agent.
 
 The fast loop is: create or delete an alias in `/aliases`, then run:
 

@@ -21,3 +21,14 @@ func TestAgentInstallIntervalDefaultsAndValidation(t *testing.T) {
 		t.Fatalf("unsafe interval error = %v, want bounded validation", err)
 	}
 }
+
+func TestAgentCommandSupportsMacOSAndWindowsOnly(t *testing.T) {
+	for _, goos := range []string{"darwin", "windows"} {
+		if err := requireAgentOS(goos); err != nil {
+			t.Fatalf("requireAgentOS(%q) = %v, want nil", goos, err)
+		}
+	}
+	if err := requireAgentOS("linux"); err == nil || !strings.Contains(err.Error(), "macOS and Windows") {
+		t.Fatalf("requireAgentOS(linux) = %v, want unsupported-platform error", err)
+	}
+}
