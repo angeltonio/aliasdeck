@@ -277,6 +277,7 @@ Standalone mode needs no account, database, or network service:
 
 ```bash
 aliasdeck init      # create local configuration and configure shell integration
+aliasdeck import    # bring in the aliases already in your .zshrc or .bashrc
 aliasdeck edit      # edit aliases.yaml in $EDITOR
 aliasdeck sync      # render the aliases file for the active shell
 aliasdeck status    # show source, device identity, and sync status
@@ -285,6 +286,58 @@ aliasdeck list      # show which aliases apply to this device
 
 `aliasdeck uninstall` removes the managed integration and restores the shell
 configuration it changed.
+
+## Bring your existing aliases
+
+You already have aliases. `aliasdeck import` reads them out of your shell
+startup file so you do not retype them:
+
+```bash
+aliasdeck import                       # read this device's rc file, change nothing
+aliasdeck import --from ~/.bash_profile
+aliasdeck import --write                # merge them into aliases.yaml
+```
+
+Without `--write` it only reports. The first run tells you what it found,
+what it could not translate and why, and which names already exist:
+
+```
+Read /Users/you/.zshrc
+
+Would import 3 aliases:
+  gs   git status
+  gp   git push
+  ll   ls -la
+
+1 name already used by a different command — not imported:
+  gco (line 44)
+      aliases.yaml: git checkout
+      this file:    git checkout --recurse-submodules
+
+Skipped 1 line:
+  line 61: uses the -g option, which has no AliasDeck equivalent
+
+Nothing was written. Re-run with --write to merge into /Users/you/.config/aliasdeck/aliases.yaml.
+```
+
+Three things it will not do:
+
+- **Execute your startup file.** It is parsed as text. An alias assembled at
+  run time is therefore invisible to the importer, and that is the intended
+  trade: reading a configuration file should not mean running a program.
+  This is the same rule that stops the server from sending shell code to a
+  client, applied to AliasDeck's own tooling.
+- **Overwrite an alias you already have.** A name collision is reported and
+  left alone. Running the import twice is a no-op.
+- **Drop anything silently.** Every line it declines is listed with a reason
+  and a line number. An importer that quietly loses three of your forty
+  aliases is worse than one that imports none, because you find out months
+  later.
+
+A double-quoted alias gets an extra note. The shell expands `$PWD` when the
+file is sourced; AliasDeck stores the text and expands it when the alias
+runs. For `$HOME` that is the same answer, for `$PWD` it is not, so the
+command says so rather than letting you discover it later.
 
 ## The idea
 
@@ -364,6 +417,7 @@ The detailed reasoning lives in [`docs/PROJECT.md`](docs/PROJECT.md).
 | Domain model, targeting, and validation | ✅ |
 | zsh, bash, and PowerShell renderers | ✅ |
 | Standalone and Git-hosted client configuration | ✅ |
+| Importing existing aliases from a shell startup file, without executing it | ✅ |
 | Self-hosted server, REST API, SQLite, and device enrollment | ✅ |
 | English and Spanish web UI | ✅ |
 | Alias, group, and device management from the browser, including targeting | ✅ |
