@@ -150,8 +150,6 @@ homebrew_casks:
       token: "{{ .Env.GORELEASER_PUBLISH_TOKEN }}"
     homepage: "https://github.com/angeltonio/aliasdeck"
     description: "Your commands. Every machine. Compiles neutral aliases into shell-specific syntax."
-    url:
-      verified: github.com/angeltonio/aliasdeck
     hooks:
       post:
         # These binaries are not signed or notarized, so macOS quarantines
