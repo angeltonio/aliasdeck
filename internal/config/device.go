@@ -284,7 +284,7 @@ func Write(path string, cfg DeviceFileConfig) error {
 	tmpPath := tmp.Name()
 	defer os.Remove(tmpPath)
 
-	if err := writeSyncCloseDeviceConfig(tmp, data); err != nil {
+	if err := writeSyncClose(tmp, data); err != nil {
 		return err
 	}
 
@@ -294,8 +294,16 @@ func Write(path string, cfg DeviceFileConfig) error {
 	return nil
 }
 
-func writeSyncCloseDeviceConfig(f *os.File, data []byte) error {
-	if err := f.Chmod(0o600); err != nil {
+func writeSyncClose(f *os.File, data []byte) error {
+	return writeSyncCloseMode(f, data, 0o600)
+}
+
+// writeSyncCloseMode is the shared tail of every atomic write in this
+// package: chmod before a byte of content exists, write, fsync, close.
+// The mode is a parameter because aliases.yaml keeps whatever
+// permissions the user gave it while config.yaml is always 0600.
+func writeSyncCloseMode(f *os.File, data []byte, mode os.FileMode) error {
+	if err := f.Chmod(mode); err != nil {
 		f.Close()
 		return fmt.Errorf("setting mode on %s: %w", f.Name(), err)
 	}

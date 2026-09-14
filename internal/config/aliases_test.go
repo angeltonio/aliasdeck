@@ -1,6 +1,10 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
+	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -224,4 +228,115 @@ func equalShells(got, want []domain.Shell) bool {
 		}
 	}
 	return true
+}
+
+// TestMarshalAliasesRoundTripsThroughParseAliases is what lets MarshalAliases
+// share a DTO with the parser and call that a guarantee. Sharing the struct
+// makes the two spellings identical; only this proves the two *meanings* are.
+func TestMarshalAliasesRoundTripsThroughParseAliases(t *testing.T) {
+	want := AliasesDocument{
+		Profiles: []string{"work", "home"},
+		Aliases: []domain.Alias{
+			{ID: "gs", Name: "gs", Command: "git status", Enabled: true},
+			{
+				ID:          "deploy",
+				Name:        "deploy",
+				Command:     "make deploy",
+				Description: "ship it",
+				Enabled:     false,
+				Tags:        []string{"risky"},
+				Platforms:   []domain.Platform{domain.PlatformMacOS},
+				Shells:      []domain.Shell{domain.ShellZsh},
+				ProfileIDs:  []string{"work"},
+			},
+		},
+	}
+
+	data, err := MarshalAliases(want)
+	if err != nil {
+		t.Fatalf("MarshalAliases(): %v", err)
+	}
+
+	got, err := ParseAliases(data)
+	if err != nil {
+		t.Fatalf("ParseAliases() on our own output: %v\n%s", err, data)
+	}
+
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("round trip lost something:\n got %+v\nwant %+v\n---\n%s", got, want, data)
+	}
+}
+
+// TestMarshalAliasesOmitsFieldsNobodySet keeps the file hand-editable, which
+// is the whole premise of aliases.yaml. Forty entries each carrying
+// `enabled: null`, `tags: []` and `shells: []` is a file people stop reading.
+func TestMarshalAliasesOmitsFieldsNobodySet(t *testing.T) {
+	data, err := MarshalAliases(AliasesDocument{
+		Aliases: []domain.Alias{{ID: "gs", Name: "gs", Command: "git status", Enabled: true}},
+	})
+	if err != nil {
+		t.Fatalf("MarshalAliases(): %v", err)
+	}
+
+	for _, noise := range []string{"description:", "enabled:", "tags:", "platforms:", "shells:", "profiles:"} {
+		if strings.Contains(string(data), noise) {
+			t.Errorf("output carries an unset %s\n%s", noise, data)
+		}
+	}
+	// enabled:false is the one that must survive, because omitting it means
+	// true.
+	off, err := MarshalAliases(AliasesDocument{
+		Aliases: []domain.Alias{{ID: "gs", Name: "gs", Command: "git status", Enabled: false}},
+	})
+	if err != nil {
+		t.Fatalf("MarshalAliases(): %v", err)
+	}
+	if !strings.Contains(string(off), "enabled: false") {
+		t.Errorf("a disabled alias round-trips as enabled:\n%s", off)
+	}
+}
+
+// TestWriteAliasesReplacesAtomicallyAndKeepsPermissions pins both halves of
+// the write: the temp-and-rename discipline the rest of this package uses,
+// and leaving a file the user deliberately made readable alone.
+func TestWriteAliasesReplacesAtomicallyAndKeepsPermissions(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "aliases.yaml")
+	if err := os.WriteFile(path, []byte("version: 1\naliases: []\n"), 0o644); err != nil {
+		t.Fatalf("seeding: %v", err)
+	}
+
+	err := WriteAliases(path, AliasesDocument{
+		Aliases: []domain.Alias{{ID: "gs", Name: "gs", Command: "git status", Enabled: true}},
+	})
+	if err != nil {
+		t.Fatalf("WriteAliases(): %v", err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o644 {
+		t.Errorf("mode = %v, want the 0644 the user had", info.Mode().Perm())
+	}
+
+	// No temp file may survive a successful write.
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("readdir: %v", err)
+	}
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".tmp") {
+			t.Errorf("a temp file was left behind: %s", e.Name())
+		}
+	}
+
+	doc, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading back: %v", err)
+	}
+	if !strings.Contains(string(doc), "git status") {
+		t.Errorf("content was not replaced:\n%s", doc)
+	}
 }
